@@ -327,3 +327,170 @@ fn extract_exports_entries(value: &serde_json::Value, entries: &mut Vec<String>)
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pnpm_workspace_basic() {
+        let yaml = "packages:\n  - 'packages/*'\n  - 'apps/*'\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert_eq!(patterns, vec!["packages/*", "apps/*"]);
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_double_quotes() {
+        let yaml = "packages:\n  - \"packages/*\"\n  - \"apps/*\"\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert_eq!(patterns, vec!["packages/*", "apps/*"]);
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_no_quotes() {
+        let yaml = "packages:\n  - packages/*\n  - apps/*\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert_eq!(patterns, vec!["packages/*", "apps/*"]);
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_empty() {
+        let yaml = "";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_no_packages_key() {
+        let yaml = "other:\n  - something\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_with_comments() {
+        let yaml = "packages:\n  # Comment\n  - 'packages/*'\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert_eq!(patterns, vec!["packages/*"]);
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_stops_at_next_key() {
+        let yaml = "packages:\n  - 'packages/*'\ncatalog:\n  react: ^18\n";
+        let patterns = parse_pnpm_workspace_yaml(yaml);
+        assert_eq!(patterns, vec!["packages/*"]);
+    }
+
+    #[test]
+    fn package_json_workspace_patterns_array() {
+        let pkg: PackageJson =
+            serde_json::from_str(r#"{"workspaces": ["packages/*", "apps/*"]}"#).unwrap();
+        let patterns = pkg.workspace_patterns();
+        assert_eq!(patterns, vec!["packages/*", "apps/*"]);
+    }
+
+    #[test]
+    fn package_json_workspace_patterns_object() {
+        let pkg: PackageJson =
+            serde_json::from_str(r#"{"workspaces": {"packages": ["packages/*"]}}"#).unwrap();
+        let patterns = pkg.workspace_patterns();
+        assert_eq!(patterns, vec!["packages/*"]);
+    }
+
+    #[test]
+    fn package_json_workspace_patterns_none() {
+        let pkg: PackageJson = serde_json::from_str(r#"{"name": "test"}"#).unwrap();
+        let patterns = pkg.workspace_patterns();
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn package_json_workspace_patterns_empty_array() {
+        let pkg: PackageJson = serde_json::from_str(r#"{"workspaces": []}"#).unwrap();
+        let patterns = pkg.workspace_patterns();
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn package_json_load_valid() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-pkg-json");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let pkg_path = temp_dir.join("package.json");
+        std::fs::write(&pkg_path, r#"{"name": "test", "main": "index.js"}"#).unwrap();
+
+        let pkg = PackageJson::load(&pkg_path).unwrap();
+        assert_eq!(pkg.name, Some("test".to_string()));
+        assert_eq!(pkg.main, Some("index.js".to_string()));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn package_json_load_missing_file() {
+        let result = PackageJson::load(std::path::Path::new("/nonexistent/package.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn package_json_entry_points_combined() {
+        let pkg: PackageJson = serde_json::from_str(r#"{
+            "main": "dist/index.js",
+            "module": "dist/index.mjs",
+            "types": "dist/index.d.ts",
+            "typings": "dist/types.d.ts"
+        }"#)
+        .unwrap();
+        let entries = pkg.entry_points();
+        assert_eq!(entries.len(), 4);
+        assert!(entries.contains(&"dist/index.js".to_string()));
+        assert!(entries.contains(&"dist/index.mjs".to_string()));
+        assert!(entries.contains(&"dist/index.d.ts".to_string()));
+        assert!(entries.contains(&"dist/types.d.ts".to_string()));
+    }
+
+    #[test]
+    fn package_json_exports_nested() {
+        let pkg: PackageJson = serde_json::from_str(r#"{
+            "exports": {
+                ".": {
+                    "import": "./dist/index.mjs",
+                    "require": "./dist/index.cjs"
+                },
+                "./utils": {
+                    "import": "./dist/utils.mjs"
+                }
+            }
+        }"#)
+        .unwrap();
+        let entries = pkg.entry_points();
+        assert!(entries.contains(&"./dist/index.mjs".to_string()));
+        assert!(entries.contains(&"./dist/index.cjs".to_string()));
+        assert!(entries.contains(&"./dist/utils.mjs".to_string()));
+    }
+
+    #[test]
+    fn package_json_exports_array() {
+        let pkg: PackageJson = serde_json::from_str(r#"{
+            "exports": {
+                ".": ["./dist/index.mjs", "./dist/index.cjs"]
+            }
+        }"#)
+        .unwrap();
+        let entries = pkg.entry_points();
+        assert!(entries.contains(&"./dist/index.mjs".to_string()));
+        assert!(entries.contains(&"./dist/index.cjs".to_string()));
+    }
+
+    #[test]
+    fn extract_exports_ignores_non_relative() {
+        let pkg: PackageJson = serde_json::from_str(r#"{
+            "exports": {
+                ".": "not-a-relative-path"
+            }
+        }"#)
+        .unwrap();
+        let entries = pkg.entry_points();
+        // "not-a-relative-path" doesn't start with "./" so should be excluded
+        assert!(entries.is_empty());
+    }
+}

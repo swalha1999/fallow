@@ -287,7 +287,7 @@ fn circular_import_does_not_crash() {
     let config = create_config(temp_dir.clone());
     // This should not crash or infinite loop
     let results = fallow_core::analyze(&config);
-    assert!(results.total_issues() >= 0);
+    let _ = &results; // ensure analysis completed without panic
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -506,4 +506,298 @@ fn workspace_patterns_yarn_format() {
 
     let patterns = pkg.workspace_patterns();
     assert_eq!(patterns, vec!["packages/*"]);
+}
+
+// ── Namespace imports ─────────────────────────────────────────
+
+#[test]
+fn namespace_import_makes_all_exports_used() {
+    let root = fixture_path("namespace-imports");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config);
+
+    // With import * as utils, all exports should be considered used
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    assert!(
+        !unused_export_names.contains(&"foo"),
+        "foo should be used via namespace import"
+    );
+    assert!(
+        !unused_export_names.contains(&"bar"),
+        "bar should be used via namespace import"
+    );
+    assert!(
+        !unused_export_names.contains(&"baz"),
+        "baz should be used via namespace import"
+    );
+}
+
+// ── Duplicate exports ─────────────────────────────────────────
+
+#[test]
+fn duplicate_exports_detected() {
+    let root = fixture_path("duplicate-exports");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config);
+
+    let dup_names: Vec<&str> = results
+        .duplicate_exports
+        .iter()
+        .map(|d| d.export_name.as_str())
+        .collect();
+
+    assert!(
+        dup_names.contains(&"shared"),
+        "shared should be detected as duplicate export, found: {dup_names:?}"
+    );
+}
+
+// ── Detect config toggles ─────────────────────────────────────
+
+#[test]
+fn detect_config_disables_unused_files() {
+    let root = fixture_path("detect-config");
+    let mut config = create_config(root.clone());
+    config.detect.unused_files = false;
+    let results = fallow_core::analyze(&config);
+
+    assert!(
+        results.unused_files.is_empty(),
+        "unused files should be empty when detection is disabled"
+    );
+}
+
+#[test]
+fn detect_config_disables_unused_exports() {
+    let root = fixture_path("detect-config");
+    let mut config = create_config(root.clone());
+    config.detect.unused_exports = false;
+    let results = fallow_core::analyze(&config);
+
+    assert!(
+        results.unused_exports.is_empty(),
+        "unused exports should be empty when detection is disabled"
+    );
+}
+
+#[test]
+fn detect_config_disables_unused_types() {
+    let root = fixture_path("detect-config");
+    let mut config = create_config(root.clone());
+    config.detect.unused_types = false;
+    let results = fallow_core::analyze(&config);
+
+    assert!(
+        results.unused_types.is_empty(),
+        "unused types should be empty when detection is disabled"
+    );
+}
+
+#[test]
+fn detect_config_disables_unused_dependencies() {
+    let root = fixture_path("detect-config");
+    let mut config = create_config(root.clone());
+    config.detect.unused_dependencies = false;
+    let results = fallow_core::analyze(&config);
+
+    assert!(
+        results.unused_dependencies.is_empty(),
+        "unused dependencies should be empty when detection is disabled"
+    );
+}
+
+#[test]
+fn detect_config_disables_duplicate_exports() {
+    let root = fixture_path("duplicate-exports");
+    let mut config = create_config(root.clone());
+    config.detect.duplicate_exports = false;
+    let results = fallow_core::analyze(&config);
+
+    assert!(
+        results.duplicate_exports.is_empty(),
+        "duplicate exports should be empty when detection is disabled"
+    );
+}
+
+// ── Ignore exports ─────────────────────────────────────────────
+
+#[test]
+fn ignore_exports_wildcard() {
+    let root = fixture_path("ignore-exports");
+    let config = FallowConfig {
+        root: None,
+        entry: vec![],
+        ignore: vec![],
+        detect: DetectConfig::default(),
+        frameworks: None,
+        framework: vec![],
+        workspaces: None,
+        ignore_dependencies: vec![],
+        ignore_exports: vec![fallow_config::IgnoreExportRule {
+            file: "src/utils.ts".to_string(),
+            exports: vec!["*".to_string()],
+        }],
+        output: OutputFormat::Human,
+    }
+    .resolve(root.clone(), 4, true);
+
+    let results = fallow_core::analyze(&config);
+
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    assert!(
+        !unused_export_names.contains(&"ignored"),
+        "ignored should not appear when wildcard ignore is set"
+    );
+    assert!(
+        !unused_export_names.contains(&"notIgnored"),
+        "notIgnored should also be ignored by wildcard"
+    );
+}
+
+#[test]
+fn ignore_exports_specific() {
+    let root = fixture_path("ignore-exports");
+    let config = FallowConfig {
+        root: None,
+        entry: vec![],
+        ignore: vec![],
+        detect: DetectConfig::default(),
+        frameworks: None,
+        framework: vec![],
+        workspaces: None,
+        ignore_dependencies: vec![],
+        ignore_exports: vec![fallow_config::IgnoreExportRule {
+            file: "src/utils.ts".to_string(),
+            exports: vec!["ignored".to_string()],
+        }],
+        output: OutputFormat::Human,
+    }
+    .resolve(root.clone(), 4, true);
+
+    let results = fallow_core::analyze(&config);
+
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    assert!(
+        !unused_export_names.contains(&"ignored"),
+        "ignored should not appear when specifically ignored"
+    );
+    assert!(
+        unused_export_names.contains(&"notIgnored"),
+        "notIgnored should still be reported, found: {unused_export_names:?}"
+    );
+}
+
+// ── CJS project ────────────────────────────────────────────────
+
+#[test]
+fn cjs_project_detects_orphan() {
+    let root = fixture_path("cjs-project");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config);
+
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        unused_file_names.contains(&"orphan.js".to_string()),
+        "orphan.js should be detected as unused, found: {unused_file_names:?}"
+    );
+}
+
+// ── Dynamic imports ────────────────────────────────────────────
+
+#[test]
+fn dynamic_import_makes_module_reachable() {
+    let root = fixture_path("dynamic-imports");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config);
+
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    // lazy.ts is dynamically imported, so it should be reachable
+    assert!(
+        !unused_file_names.contains(&"lazy.ts".to_string()),
+        "lazy.ts should be reachable via dynamic import, unused files: {unused_file_names:?}"
+    );
+
+    // orphan.ts should still be unused
+    assert!(
+        unused_file_names.contains(&"orphan.ts".to_string()),
+        "orphan.ts should be unused, found: {unused_file_names:?}"
+    );
+}
+
+// ── Ignore dependencies ────────────────────────────────────────
+
+#[test]
+fn ignore_dependencies_config() {
+    let root = fixture_path("basic-project");
+    let config = FallowConfig {
+        root: None,
+        entry: vec![],
+        ignore: vec![],
+        detect: DetectConfig::default(),
+        frameworks: None,
+        framework: vec![],
+        workspaces: None,
+        ignore_dependencies: vec!["unused-dep".to_string()],
+        ignore_exports: vec![],
+        output: OutputFormat::Human,
+    }
+    .resolve(root.clone(), 4, true);
+
+    let results = fallow_core::analyze(&config);
+
+    let unused_dep_names: Vec<&str> = results
+        .unused_dependencies
+        .iter()
+        .map(|d| d.package_name.as_str())
+        .collect();
+
+    assert!(
+        !unused_dep_names.contains(&"unused-dep"),
+        "unused-dep should be ignored"
+    );
+}
+
+// ── Full pipeline sanity checks ────────────────────────────────
+
+#[test]
+fn analyze_project_convenience_function() {
+    let root = fixture_path("basic-project");
+    let results = fallow_core::analyze_project(&root);
+    assert!(results.has_issues());
+}
+
+#[test]
+fn results_serializable_to_json() {
+    let root = fixture_path("basic-project");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config);
+    let json = serde_json::to_string(&results).unwrap();
+    assert!(!json.is_empty());
+    // Verify it round-trips
+    let _: serde_json::Value = serde_json::from_str(&json).unwrap();
 }

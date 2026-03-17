@@ -488,3 +488,173 @@ fn pat(pattern: &str) -> FrameworkEntryPattern {
 fn strs(values: &[&str]) -> Vec<String> {
     values.iter().map(|s| s.to_string()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_frameworks_not_empty() {
+        let builtins = builtin_frameworks();
+        assert!(!builtins.is_empty());
+    }
+
+    #[test]
+    fn builtin_frameworks_have_names() {
+        let builtins = builtin_frameworks();
+        for rule in &builtins {
+            assert!(!rule.name.is_empty(), "Framework rule should have a name");
+        }
+    }
+
+    #[test]
+    fn builtin_frameworks_known_names() {
+        let builtins = builtin_frameworks();
+        let names: Vec<&str> = builtins.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"nextjs"));
+        assert!(names.contains(&"vite"));
+        assert!(names.contains(&"vitest"));
+        assert!(names.contains(&"jest"));
+        assert!(names.contains(&"storybook"));
+        assert!(names.contains(&"remix"));
+        assert!(names.contains(&"astro"));
+        assert!(names.contains(&"nuxt"));
+        assert!(names.contains(&"angular"));
+        assert!(names.contains(&"playwright"));
+        assert!(names.contains(&"prisma"));
+        assert!(names.contains(&"eslint"));
+        assert!(names.contains(&"typescript"));
+        assert!(names.contains(&"webpack"));
+        assert!(names.contains(&"tailwind"));
+        assert!(names.contains(&"graphql-codegen"));
+        assert!(names.contains(&"react-router"));
+    }
+
+    #[test]
+    fn resolve_framework_rules_auto_detect() {
+        // When enabled is None, all builtins should be included
+        let rules = resolve_framework_rules(&None, &[]);
+        assert!(!rules.is_empty());
+        assert_eq!(rules.len(), builtin_frameworks().len());
+    }
+
+    #[test]
+    fn resolve_framework_rules_explicit_list() {
+        let enabled = Some(vec!["nextjs".to_string(), "vitest".to_string()]);
+        let rules = resolve_framework_rules(&enabled, &[]);
+        assert_eq!(rules.len(), 2);
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"nextjs"));
+        assert!(names.contains(&"vitest"));
+    }
+
+    #[test]
+    fn resolve_framework_rules_empty_explicit_list() {
+        let enabled = Some(vec![]);
+        let rules = resolve_framework_rules(&enabled, &[]);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn resolve_framework_rules_unknown_name_ignored() {
+        let enabled = Some(vec!["nonexistent-framework".to_string()]);
+        let rules = resolve_framework_rules(&enabled, &[]);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn resolve_framework_rules_with_custom() {
+        let custom = vec![FrameworkPreset {
+            name: "custom".to_string(),
+            detection: None,
+            entry_points: vec![FrameworkEntryPattern {
+                pattern: "src/custom/**/*.ts".to_string(),
+                requires_export: None,
+            }],
+            always_used: vec![],
+            used_exports: vec![],
+        }];
+        let rules = resolve_framework_rules(&Some(vec![]), &custom);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "custom");
+    }
+
+    #[test]
+    fn framework_preset_to_rule() {
+        let preset = FrameworkPreset {
+            name: "test".to_string(),
+            detection: Some(FrameworkDetection::Dependency {
+                package: "test-pkg".to_string(),
+            }),
+            entry_points: vec![FrameworkEntryPattern {
+                pattern: "src/**/*.test.ts".to_string(),
+                requires_export: None,
+            }],
+            always_used: vec!["setup.ts".to_string()],
+            used_exports: vec![FrameworkUsedExport {
+                file_pattern: "src/**/*.test.ts".to_string(),
+                exports: vec!["default".to_string()],
+            }],
+        };
+        let rule: FrameworkRule = preset.into();
+        assert_eq!(rule.name, "test");
+        assert!(rule.detection.is_some());
+        assert_eq!(rule.entry_points.len(), 1);
+        assert_eq!(rule.always_used, vec!["setup.ts"]);
+        assert_eq!(rule.used_exports.len(), 1);
+    }
+
+    #[test]
+    fn framework_detection_deserialize_dependency() {
+        let json = r#"{"type": "dependency", "package": "next"}"#;
+        let detection: FrameworkDetection = serde_json::from_str(json).unwrap();
+        assert!(matches!(detection, FrameworkDetection::Dependency { package } if package == "next"));
+    }
+
+    #[test]
+    fn framework_detection_deserialize_file_exists() {
+        let json = r#"{"type": "file_exists", "pattern": "tsconfig.json"}"#;
+        let detection: FrameworkDetection = serde_json::from_str(json).unwrap();
+        assert!(matches!(detection, FrameworkDetection::FileExists { pattern } if pattern == "tsconfig.json"));
+    }
+
+    #[test]
+    fn framework_detection_deserialize_all() {
+        let json = r#"{"type": "all", "conditions": [{"type": "dependency", "package": "a"}, {"type": "dependency", "package": "b"}]}"#;
+        let detection: FrameworkDetection = serde_json::from_str(json).unwrap();
+        assert!(matches!(detection, FrameworkDetection::All { conditions } if conditions.len() == 2));
+    }
+
+    #[test]
+    fn framework_detection_deserialize_any() {
+        let json = r#"{"type": "any", "conditions": [{"type": "dependency", "package": "a"}]}"#;
+        let detection: FrameworkDetection = serde_json::from_str(json).unwrap();
+        assert!(matches!(detection, FrameworkDetection::Any { conditions } if conditions.len() == 1));
+    }
+
+    #[test]
+    fn nextjs_has_entry_points() {
+        let builtins = builtin_frameworks();
+        let nextjs = builtins.iter().find(|r| r.name == "nextjs").unwrap();
+        assert!(!nextjs.entry_points.is_empty());
+        let patterns: Vec<&str> = nextjs.entry_points.iter().map(|e| e.pattern.as_str()).collect();
+        assert!(patterns.iter().any(|p| p.contains("app/**/page")));
+        assert!(patterns.iter().any(|p| p.contains("pages/")));
+    }
+
+    #[test]
+    fn nextjs_has_used_exports() {
+        let builtins = builtin_frameworks();
+        let nextjs = builtins.iter().find(|r| r.name == "nextjs").unwrap();
+        assert!(!nextjs.used_exports.is_empty());
+    }
+
+    #[test]
+    fn vitest_has_test_entry_points() {
+        let builtins = builtin_frameworks();
+        let vitest = builtins.iter().find(|r| r.name == "vitest").unwrap();
+        let patterns: Vec<&str> = vitest.entry_points.iter().map(|e| e.pattern.as_str()).collect();
+        assert!(patterns.iter().any(|p| p.contains("*.test.")));
+        assert!(patterns.iter().any(|p| p.contains("*.spec.")));
+    }
+}

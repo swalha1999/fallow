@@ -276,6 +276,38 @@ fallow supports npm, yarn, and pnpm workspaces out of the box — including `pnp
 ### GitHub Actions
 
 ```yaml
+name: Dead Code Check
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  fallow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: BartWaardenburg/fallow@v1
+```
+
+Configure Action inputs:
+
+```yaml
+- uses: BartWaardenburg/fallow@v1
+  with:
+    format: sarif
+    fail-on-issues: "true"
+    changed-since: main
+    args: "--quiet --unused-exports"
+```
+
+Or run the CLI directly:
+
+```yaml
 - name: Run fallow
   run: npx fallow check --format sarif > results.sarif
 
@@ -283,12 +315,6 @@ fallow supports npm, yarn, and pnpm workspaces out of the box — including `pnp
   uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: results.sarif
-```
-
-Or use the [GitHub Action](action.yml) directly:
-
-```yaml
-- uses: BartWaardenburg/fallow@main
 ```
 
 ### Baseline workflow

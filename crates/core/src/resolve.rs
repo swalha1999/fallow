@@ -166,6 +166,17 @@ fn create_resolver(config: &ResolvedConfig) -> Resolver {
             ".cjs".into(),
             ".json".into(),
         ],
+        // Support TypeScript's node16/nodenext module resolution where .ts files
+        // are imported with .js extensions (e.g., `import './api.js'` for `api.ts`).
+        extension_alias: vec![
+            (
+                ".js".into(),
+                vec![".ts".into(), ".tsx".into(), ".js".into()],
+            ),
+            (".jsx".into(), vec![".tsx".into(), ".jsx".into()]),
+            (".mjs".into(), vec![".mts".into(), ".mjs".into()]),
+            (".cjs".into(), vec![".cts".into(), ".cjs".into()]),
+        ],
         condition_names: vec![
             "import".into(),
             "require".into(),

@@ -339,10 +339,12 @@ fn find_unused_members(
 
                 // Skip React class component lifecycle methods — they are called by the
                 // React runtime, not user code, so they should never be flagged as unused.
+                // Also skip Angular lifecycle hooks (OnInit, OnDestroy, etc.).
                 if matches!(
                     member.kind,
                     MemberKind::ClassMethod | MemberKind::ClassProperty
-                ) && is_react_lifecycle_method(&member.name)
+                ) && (is_react_lifecycle_method(&member.name)
+                    || is_angular_lifecycle_method(&member.name))
                 {
                     continue;
                 }
@@ -387,10 +389,12 @@ fn find_unlisted_dependencies(graph: &ModuleGraph, pkg: &PackageJson) -> Vec<Unl
             && !is_builtin_module(package_name)
             && !is_path_alias(package_name)
         {
-            let paths: Vec<std::path::PathBuf> = file_ids
+            let mut paths: Vec<std::path::PathBuf> = file_ids
                 .iter()
                 .filter_map(|id| graph.modules.get(id.0 as usize).map(|m| m.path.clone()))
                 .collect();
+            paths.sort();
+            paths.dedup();
             unlisted.insert(package_name.clone(), paths);
         }
     }
@@ -406,7 +410,8 @@ fn find_unlisted_dependencies(graph: &ModuleGraph, pkg: &PackageJson) -> Vec<Unl
 
 /// Check if a package name looks like a TypeScript path alias rather than an npm package.
 ///
-/// Common patterns: `@/components`, `@app/utils`, `~/lib`, `#internal/module`.
+/// Common patterns: `@/components`, `@app/utils`, `~/lib`, `#internal/module`,
+/// `@Components/Button` (PascalCase tsconfig paths).
 /// These are typically defined in tsconfig.json `paths` or package.json `imports`.
 fn is_path_alias(name: &str) -> bool {
     // `#` prefix is Node.js imports maps (package.json "imports" field)
@@ -417,12 +422,18 @@ fn is_path_alias(name: &str) -> bool {
     if name.starts_with("~/") {
         return true;
     }
-    // `@/` is a very common path alias (e.g., `@/components/Foo`).
-    // Distinguish from scoped npm packages (`@scope/pkg`) by checking:
-    // - `@/` (bare alias, not a valid npm scope)
-    // - `@something/` where `something` contains path-like chars (. or starts with uppercase)
+    // `@/` is a very common path alias (e.g., `@/components/Foo`)
     if name.starts_with("@/") {
         return true;
+    }
+    // npm scoped packages MUST be lowercase (npm registry requirement).
+    // PascalCase `@Scope` or `@Scope/path` patterns are tsconfig path aliases,
+    // not npm packages. E.g., `@Components`, `@Hooks/useApi`, `@Services/auth`.
+    if name.starts_with('@') {
+        let scope = name.split('/').next().unwrap_or(name);
+        if scope.len() > 1 && scope.chars().nth(1).is_some_and(|c| c.is_ascii_uppercase()) {
+            return true;
+        }
     }
 
     false
@@ -649,6 +660,36 @@ fn is_tooling_dependency(name: &str) -> bool {
 ///
 /// These should never be flagged as unused class members because they are not
 /// invoked directly by user code.
+/// Angular lifecycle hooks called by the Angular framework.
+fn is_angular_lifecycle_method(name: &str) -> bool {
+    matches!(
+        name,
+        "ngOnInit"
+            | "ngOnDestroy"
+            | "ngOnChanges"
+            | "ngDoCheck"
+            | "ngAfterContentInit"
+            | "ngAfterContentChecked"
+            | "ngAfterViewInit"
+            | "ngAfterViewChecked"
+            | "ngAcceptInputType"
+            // Angular guard/resolver/interceptor methods
+            | "canActivate"
+            | "canDeactivate"
+            | "canActivateChild"
+            | "canMatch"
+            | "resolve"
+            | "intercept"
+            | "transform"
+            // Angular form-related methods
+            | "validate"
+            | "registerOnChange"
+            | "registerOnTouched"
+            | "writeValue"
+            | "setDisabledState"
+    )
+}
+
 fn is_react_lifecycle_method(name: &str) -> bool {
     matches!(
         name,
@@ -905,5 +946,173 @@ mod tests {
         assert!(!is_declaration_file(std::path::Path::new("component.tsx")));
         assert!(!is_declaration_file(std::path::Path::new("utils.js")));
         assert!(!is_declaration_file(std::path::Path::new("styles.d.css")));
+    }
+
+    // byte_offset_to_line_col tests
+    #[test]
+    fn byte_offset_empty_source() {
+        assert_eq!(byte_offset_to_line_col("", 0), (1, 0));
+    }
+
+    #[test]
+    fn byte_offset_single_line_start() {
+        assert_eq!(byte_offset_to_line_col("hello", 0), (1, 0));
+    }
+
+    #[test]
+    fn byte_offset_single_line_middle() {
+        assert_eq!(byte_offset_to_line_col("hello", 4), (1, 4));
+    }
+
+    #[test]
+    fn byte_offset_multiline_start_of_line2() {
+        // "line1\nline2\nline3"
+        //  01234 5 678901 2
+        // offset 6 = start of "line2"
+        let source = "line1\nline2\nline3";
+        assert_eq!(byte_offset_to_line_col(source, 6), (2, 0));
+    }
+
+    #[test]
+    fn byte_offset_multiline_middle_of_line3() {
+        // "line1\nline2\nline3"
+        //  01234 5 67890 1 23456
+        //                1 12345
+        // offset 14 = 'n' in "line3" (col 2)
+        let source = "line1\nline2\nline3";
+        assert_eq!(byte_offset_to_line_col(source, 14), (3, 2));
+    }
+
+    #[test]
+    fn byte_offset_at_newline_boundary() {
+        // "line1\nline2"
+        // offset 5 = the '\n' character itself
+        let source = "line1\nline2";
+        assert_eq!(byte_offset_to_line_col(source, 5), (1, 5));
+    }
+
+    #[test]
+    fn byte_offset_beyond_source_length() {
+        // Line count is clamped (prefix is sliced to source.len()), but the
+        // byte-offset column is passed through unclamped because the function
+        // uses the raw byte_offset for the column fallback.
+        let source = "hello";
+        assert_eq!(byte_offset_to_line_col(source, 100), (1, 100));
+    }
+
+    #[test]
+    fn byte_offset_multibyte_utf8() {
+        // Emoji is 4 bytes: "hi\n" (3 bytes) + emoji (4 bytes) + "x" (1 byte)
+        let source = "hi\n\u{1F600}x";
+        // offset 3 = start of line 2, col 0
+        assert_eq!(byte_offset_to_line_col(source, 3), (2, 0));
+        // offset 7 = 'x' (after 4-byte emoji), col 4 (byte-based)
+        assert_eq!(byte_offset_to_line_col(source, 7), (2, 4));
+    }
+
+    #[test]
+    fn byte_offset_multibyte_accented_chars() {
+        // 'e' with accent (U+00E9) is 2 bytes in UTF-8
+        let source = "caf\u{00E9}\nbar";
+        // "caf\u{00E9}" = 3 + 2 = 5 bytes, then '\n' at offset 5
+        // 'b' at offset 6 → line 2, col 0
+        assert_eq!(byte_offset_to_line_col(source, 6), (2, 0));
+        // '\u{00E9}' starts at offset 3, col 3 (byte-based)
+        assert_eq!(byte_offset_to_line_col(source, 3), (1, 3));
+    }
+
+    // is_path_alias tests
+    #[test]
+    fn path_alias_at_slash() {
+        assert!(is_path_alias("@/components"));
+    }
+
+    #[test]
+    fn path_alias_tilde() {
+        assert!(is_path_alias("~/lib"));
+    }
+
+    #[test]
+    fn path_alias_hash_imports_map() {
+        assert!(is_path_alias("#internal/module"));
+    }
+
+    #[test]
+    fn path_alias_pascal_case_scope() {
+        assert!(is_path_alias("@Components/Button"));
+    }
+
+    #[test]
+    fn not_path_alias_regular_package() {
+        assert!(!is_path_alias("react"));
+    }
+
+    #[test]
+    fn not_path_alias_scoped_npm_package() {
+        assert!(!is_path_alias("@scope/pkg"));
+    }
+
+    #[test]
+    fn not_path_alias_emotion_react() {
+        assert!(!is_path_alias("@emotion/react"));
+    }
+
+    #[test]
+    fn not_path_alias_lodash() {
+        assert!(!is_path_alias("lodash"));
+    }
+
+    #[test]
+    fn not_path_alias_lowercase_short_scope() {
+        assert!(!is_path_alias("@s/lowercase"));
+    }
+
+    // is_angular_lifecycle_method tests
+    #[test]
+    fn angular_lifecycle_core_hooks() {
+        assert!(is_angular_lifecycle_method("ngOnInit"));
+        assert!(is_angular_lifecycle_method("ngOnDestroy"));
+        assert!(is_angular_lifecycle_method("ngOnChanges"));
+        assert!(is_angular_lifecycle_method("ngAfterViewInit"));
+    }
+
+    #[test]
+    fn angular_lifecycle_check_hooks() {
+        assert!(is_angular_lifecycle_method("ngDoCheck"));
+        assert!(is_angular_lifecycle_method("ngAfterContentChecked"));
+        assert!(is_angular_lifecycle_method("ngAfterViewChecked"));
+    }
+
+    #[test]
+    fn angular_lifecycle_content_hooks() {
+        assert!(is_angular_lifecycle_method("ngAfterContentInit"));
+        assert!(is_angular_lifecycle_method("ngAcceptInputType"));
+    }
+
+    #[test]
+    fn angular_lifecycle_guard_resolver_methods() {
+        assert!(is_angular_lifecycle_method("canActivate"));
+        assert!(is_angular_lifecycle_method("canDeactivate"));
+        assert!(is_angular_lifecycle_method("canActivateChild"));
+        assert!(is_angular_lifecycle_method("canMatch"));
+        assert!(is_angular_lifecycle_method("resolve"));
+        assert!(is_angular_lifecycle_method("intercept"));
+        assert!(is_angular_lifecycle_method("transform"));
+    }
+
+    #[test]
+    fn angular_lifecycle_form_methods() {
+        assert!(is_angular_lifecycle_method("validate"));
+        assert!(is_angular_lifecycle_method("registerOnChange"));
+        assert!(is_angular_lifecycle_method("registerOnTouched"));
+        assert!(is_angular_lifecycle_method("writeValue"));
+        assert!(is_angular_lifecycle_method("setDisabledState"));
+    }
+
+    #[test]
+    fn not_angular_lifecycle_method() {
+        assert!(!is_angular_lifecycle_method("onClick"));
+        assert!(!is_angular_lifecycle_method("handleSubmit"));
+        assert!(!is_angular_lifecycle_method("render"));
     }
 }

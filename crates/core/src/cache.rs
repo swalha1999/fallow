@@ -8,7 +8,7 @@ use oxc_span::Span;
 use crate::extract::{ExportName, MemberAccess, MemberKind};
 
 /// Cache version — bump when the cache format changes.
-const CACHE_VERSION: u32 = 6;
+const CACHE_VERSION: u32 = 7;
 
 /// Maximum cache file size to deserialize (256 MB).
 const MAX_CACHE_SIZE: usize = 256 * 1024 * 1024;
@@ -44,6 +44,17 @@ pub struct CachedModule {
     pub dynamic_import_patterns: Vec<CachedDynamicImportPattern>,
     /// Whether this module uses CJS exports.
     pub has_cjs_exports: bool,
+    /// Inline suppression directives.
+    pub suppressions: Vec<CachedSuppression>,
+}
+
+/// Cached suppression directive.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct CachedSuppression {
+    /// 1-based line this suppression applies to. 0 = file-wide.
+    pub line: u32,
+    /// 0 = suppress all, 1-10 = IssueKind discriminant.
+    pub kind: u8,
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
@@ -296,6 +307,19 @@ pub fn cached_to_module(
         })
         .collect();
 
+    let suppressions = cached
+        .suppressions
+        .iter()
+        .map(|s| crate::suppress::Suppression {
+            line: s.line,
+            kind: if s.kind == 0 {
+                None
+            } else {
+                crate::suppress::IssueKind::from_discriminant(s.kind)
+            },
+        })
+        .collect();
+
     ModuleInfo {
         file_id,
         exports,
@@ -308,6 +332,7 @@ pub fn cached_to_module(
         whole_object_uses: cached.whole_object_uses.clone(),
         has_cjs_exports: cached.has_cjs_exports,
         content_hash: cached.content_hash,
+        suppressions,
     }
 }
 
@@ -414,6 +439,14 @@ pub fn module_to_cached(module: &crate::extract::ModuleInfo) -> CachedModule {
             })
             .collect(),
         has_cjs_exports: module.has_cjs_exports,
+        suppressions: module
+            .suppressions
+            .iter()
+            .map(|s| CachedSuppression {
+                line: s.line,
+                kind: s.kind.map_or(0, |k| k.to_discriminant()),
+            })
+            .collect(),
     }
 }
 
@@ -450,6 +483,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         store.insert(Path::new("test.ts"), module);
         assert_eq!(store.len(), 1);
@@ -471,6 +505,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         store.insert(Path::new("test.ts"), module);
         assert!(store.get(Path::new("test.ts"), 99).is_none());
@@ -496,6 +531,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         let m2 = CachedModule {
             content_hash: 2,
@@ -508,6 +544,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         store.insert(Path::new("test.ts"), m1);
         store.insert(Path::new("test.ts"), m2);
@@ -536,6 +573,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 123,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -572,6 +610,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 456,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -623,6 +662,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 789,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -665,6 +705,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 0,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -704,6 +745,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: true,
             content_hash: 0,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -759,6 +801,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 0,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);
@@ -806,6 +849,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         store.insert(Path::new("test.ts"), module);
         store.save(&dir).unwrap();
@@ -834,6 +878,7 @@ mod tests {
             whole_object_uses: vec![],
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
+            suppressions: vec![],
         };
         store.insert(Path::new("test.ts"), module);
         store.save(&dir).unwrap();
@@ -879,6 +924,7 @@ mod tests {
             dynamic_import_patterns: vec![],
             has_cjs_exports: false,
             content_hash: 0,
+            suppressions: vec![],
         };
 
         let cached = module_to_cached(&module);

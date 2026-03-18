@@ -47,6 +47,24 @@ impl Plugin for PostCssPlugin {
             result.referenced_dependencies.push(dep);
         }
 
+        // plugins as object keys: { plugins: { autoprefixer: {}, tailwindcss: {} } }
+        let plugin_keys =
+            config_parser::extract_config_object_keys(source, config_path, &["plugins"]);
+        for key in &plugin_keys {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(key));
+        }
+
+        // plugins as require() calls: { plugins: [require('autoprefixer')] }
+        let require_deps =
+            config_parser::extract_config_require_strings(source, config_path, "plugins");
+        for dep in &require_deps {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(dep));
+        }
+
         result
     }
 }

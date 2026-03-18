@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use colored::Colorize;
-use fallow_config::{OutputFormat, ResolvedConfig};
+use fallow_config::{OutputFormat, ResolvedConfig, RulesConfig, Severity};
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::{AnalysisResults, UnusedDependency, UnusedExport, UnusedMember};
 
@@ -27,7 +27,7 @@ pub fn print_results(
 ) -> ExitCode {
     match config.output {
         OutputFormat::Human => {
-            print_human(results, &config.root, elapsed, quiet);
+            print_human(results, &config.root, &config.rules, elapsed, quiet);
             ExitCode::SUCCESS
         }
         OutputFormat::Json => print_json(results, elapsed),
@@ -35,11 +35,17 @@ pub fn print_results(
             print_compact(results, &config.root);
             ExitCode::SUCCESS
         }
-        OutputFormat::Sarif => print_sarif(results, &config.root),
+        OutputFormat::Sarif => print_sarif(results, &config.root, &config.rules),
     }
 }
 
-fn print_human(results: &AnalysisResults, root: &Path, elapsed: Duration, quiet: bool) {
+fn print_human(
+    results: &AnalysisResults,
+    root: &Path,
+    rules: &RulesConfig,
+    elapsed: Duration,
+    quiet: bool,
+) {
     if !quiet {
         eprintln!();
     }
@@ -75,90 +81,83 @@ fn print_human(results: &AnalysisResults, root: &Path, elapsed: Duration, quiet:
         }
     };
 
-    // Warning-level: unused files
-    print_human_section(&results.unused_files, "Unused files", Level::Warn, |file| {
-        vec![format!("  {}", relative_path(&file.path, root).display())]
-    });
+    print_human_section(
+        &results.unused_files,
+        "Unused files",
+        severity_to_level(rules.unused_files),
+        |file| vec![format!("  {}", relative_path(&file.path, root).display())],
+    );
 
-    // Info-level: unused exports (grouped by file)
     print_human_grouped_section(
         &results.unused_exports,
         "Unused exports",
-        Level::Info,
+        severity_to_level(rules.unused_exports),
         root,
         |e| e.path.as_path(),
         format_export,
     );
 
-    // Info-level: unused types (grouped by file)
     print_human_grouped_section(
         &results.unused_types,
         "Unused type exports",
-        Level::Info,
+        severity_to_level(rules.unused_types),
         root,
         |e| e.path.as_path(),
         format_export,
     );
 
-    // Warning-level: unused dependencies
     print_human_section(
         &results.unused_dependencies,
         "Unused dependencies",
-        Level::Warn,
+        severity_to_level(rules.unused_dependencies),
         |dep| vec![format!("  {}", format_dep(dep))],
     );
 
-    // Warning-level: unused devDependencies
     print_human_section(
         &results.unused_dev_dependencies,
         "Unused devDependencies",
-        Level::Warn,
+        severity_to_level(rules.unused_dev_dependencies),
         |dep| vec![format!("  {}", format_dep(dep))],
     );
 
-    // Info-level: unused enum members (grouped by file)
     print_human_grouped_section(
         &results.unused_enum_members,
         "Unused enum members",
-        Level::Info,
+        severity_to_level(rules.unused_enum_members),
         root,
         |m| m.path.as_path(),
         format_member,
     );
 
-    // Info-level: unused class members (grouped by file)
     print_human_grouped_section(
         &results.unused_class_members,
         "Unused class members",
-        Level::Info,
+        severity_to_level(rules.unused_class_members),
         root,
         |m| m.path.as_path(),
         format_member,
     );
 
-    // Error-level: unresolved imports (grouped by file)
     print_human_grouped_section(
         &results.unresolved_imports,
         "Unresolved imports",
-        Level::Error,
+        severity_to_level(rules.unresolved_imports),
         root,
         |i| i.path.as_path(),
         |i| format!("{} {}", format!(":{}", i.line).dimmed(), i.specifier.bold()),
     );
 
-    // Warning-level: unlisted dependencies
     print_human_section(
         &results.unlisted_dependencies,
         "Unlisted dependencies",
-        Level::Warn,
+        severity_to_level(rules.unlisted_dependencies),
         |dep| vec![format!("  {}", dep.package_name.bold())],
     );
 
-    // Info-level: duplicate exports
     print_human_section(
         &results.duplicate_exports,
         "Duplicate exports",
-        Level::Info,
+        severity_to_level(rules.duplicate_exports),
         |dup| {
             let locations: Vec<String> = dup
                 .locations
@@ -240,6 +239,15 @@ enum Level {
     Error,
 }
 
+fn severity_to_level(s: Severity) -> Level {
+    match s {
+        Severity::Error => Level::Error,
+        Severity::Warn => Level::Warn,
+        // Off issues are filtered before reporting; fall back to Info.
+        Severity::Off => Level::Info,
+    }
+}
+
 fn print_section_header(title: &str, count: usize, level: Level) {
     let label = format!("{title} ({count})");
     match level {
@@ -303,8 +311,8 @@ fn normalize_uri(path_str: &str) -> String {
     path_str.replace('\\', "/")
 }
 
-fn print_sarif(results: &AnalysisResults, root: &Path) -> ExitCode {
-    let sarif = build_sarif(results, root);
+fn print_sarif(results: &AnalysisResults, root: &Path, rules: &RulesConfig) -> ExitCode {
+    let sarif = build_sarif(results, root, rules);
     match serde_json::to_string_pretty(&sarif) {
         Ok(json) => {
             println!("{json}");
@@ -472,13 +480,24 @@ struct SarifFields {
     properties: Option<serde_json::Value>,
 }
 
-pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json::Value {
+fn severity_to_sarif_level(s: Severity) -> &'static str {
+    match s {
+        Severity::Error => "error",
+        Severity::Warn | Severity::Off => "warning",
+    }
+}
+
+pub(crate) fn build_sarif(
+    results: &AnalysisResults,
+    root: &Path,
+    rules: &RulesConfig,
+) -> serde_json::Value {
     let mut sarif_results = Vec::new();
 
     push_sarif_results(&mut sarif_results, &results.unused_files, |file| {
         SarifFields {
             rule_id: "fallow/unused-file",
-            level: "warning",
+            level: severity_to_sarif_level(rules.unused_files),
             message: "File is not reachable from any entry point".to_string(),
             uri: relative_uri(&file.path, root),
             region: None,
@@ -486,43 +505,58 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
         }
     });
 
-    let sarif_export =
-        |export: &UnusedExport, rule_id: &'static str, kind: &str, re_kind: &str| -> SarifFields {
-            let label = if export.is_re_export { re_kind } else { kind };
-            SarifFields {
-                rule_id,
-                level: "warning",
-                message: format!(
-                    "{} '{}' is never imported by other modules",
-                    label, export.export_name
-                ),
-                uri: relative_uri(&export.path, root),
-                region: Some((export.line, export.col + 1)),
-                properties: if export.is_re_export {
-                    Some(serde_json::json!({ "is_re_export": true }))
-                } else {
-                    None
-                },
-            }
-        };
+    let sarif_export = |export: &UnusedExport,
+                        rule_id: &'static str,
+                        level: &'static str,
+                        kind: &str,
+                        re_kind: &str|
+     -> SarifFields {
+        let label = if export.is_re_export { re_kind } else { kind };
+        SarifFields {
+            rule_id,
+            level,
+            message: format!(
+                "{} '{}' is never imported by other modules",
+                label, export.export_name
+            ),
+            uri: relative_uri(&export.path, root),
+            region: Some((export.line, export.col + 1)),
+            properties: if export.is_re_export {
+                Some(serde_json::json!({ "is_re_export": true }))
+            } else {
+                None
+            },
+        }
+    };
 
     push_sarif_results(&mut sarif_results, &results.unused_exports, |export| {
-        sarif_export(export, "fallow/unused-export", "Export", "Re-export")
+        sarif_export(
+            export,
+            "fallow/unused-export",
+            severity_to_sarif_level(rules.unused_exports),
+            "Export",
+            "Re-export",
+        )
     });
 
     push_sarif_results(&mut sarif_results, &results.unused_types, |export| {
         sarif_export(
             export,
             "fallow/unused-type",
+            severity_to_sarif_level(rules.unused_types),
             "Type export",
             "Type re-export",
         )
     });
 
-    let sarif_dep = |dep: &UnusedDependency, rule_id: &'static str, section: &str| -> SarifFields {
+    let sarif_dep = |dep: &UnusedDependency,
+                     rule_id: &'static str,
+                     level: &'static str,
+                     section: &str|
+     -> SarifFields {
         SarifFields {
             rule_id,
-            level: "warning",
+            level,
             message: format!(
                 "Package '{}' is in {} but never imported",
                 dep.package_name, section
@@ -534,19 +568,35 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
     };
 
     push_sarif_results(&mut sarif_results, &results.unused_dependencies, |dep| {
-        sarif_dep(dep, "fallow/unused-dependency", "dependencies")
+        sarif_dep(
+            dep,
+            "fallow/unused-dependency",
+            severity_to_sarif_level(rules.unused_dependencies),
+            "dependencies",
+        )
     });
 
     push_sarif_results(
         &mut sarif_results,
         &results.unused_dev_dependencies,
-        |dep| sarif_dep(dep, "fallow/unused-dev-dependency", "devDependencies"),
+        |dep| {
+            sarif_dep(
+                dep,
+                "fallow/unused-dev-dependency",
+                severity_to_sarif_level(rules.unused_dev_dependencies),
+                "devDependencies",
+            )
+        },
     );
 
-    let sarif_member = |member: &UnusedMember, rule_id: &'static str, kind: &str| -> SarifFields {
+    let sarif_member = |member: &UnusedMember,
+                        rule_id: &'static str,
+                        level: &'static str,
+                        kind: &str|
+     -> SarifFields {
         SarifFields {
             rule_id,
-            level: "warning",
+            level,
             message: format!(
                 "{} member '{}.{}' is never referenced",
                 kind, member.parent_name, member.member_name
@@ -558,19 +608,31 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
     };
 
     push_sarif_results(&mut sarif_results, &results.unused_enum_members, |member| {
-        sarif_member(member, "fallow/unused-enum-member", "Enum")
+        sarif_member(
+            member,
+            "fallow/unused-enum-member",
+            severity_to_sarif_level(rules.unused_enum_members),
+            "Enum",
+        )
     });
 
     push_sarif_results(
         &mut sarif_results,
         &results.unused_class_members,
-        |member| sarif_member(member, "fallow/unused-class-member", "Class"),
+        |member| {
+            sarif_member(
+                member,
+                "fallow/unused-class-member",
+                severity_to_sarif_level(rules.unused_class_members),
+                "Class",
+            )
+        },
     );
 
     push_sarif_results(&mut sarif_results, &results.unresolved_imports, |import| {
         SarifFields {
             rule_id: "fallow/unresolved-import",
-            level: "error",
+            level: severity_to_sarif_level(rules.unresolved_imports),
             message: format!("Import '{}' could not be resolved", import.specifier),
             uri: relative_uri(&import.path, root),
             region: Some((import.line, import.col + 1)),
@@ -581,7 +643,7 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
     push_sarif_results(&mut sarif_results, &results.unlisted_dependencies, |dep| {
         SarifFields {
             rule_id: "fallow/unlisted-dependency",
-            level: "error",
+            level: severity_to_sarif_level(rules.unlisted_dependencies),
             message: format!(
                 "Package '{}' is imported but not listed in package.json",
                 dep.package_name
@@ -597,7 +659,7 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
         for loc_path in &dup.locations {
             sarif_results.push(sarif_result(
                 "fallow/duplicate-export",
-                "warning",
+                severity_to_sarif_level(rules.duplicate_exports),
                 &format!("Export '{}' appears in multiple modules", dup.export_name),
                 &relative_uri(loc_path, root),
                 None,
@@ -618,52 +680,52 @@ pub(crate) fn build_sarif(results: &AnalysisResults, root: &Path) -> serde_json:
                         {
                             "id": "fallow/unused-file",
                             "shortDescription": { "text": "File is not reachable from any entry point" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_files) }
                         },
                         {
                             "id": "fallow/unused-export",
                             "shortDescription": { "text": "Export is never imported" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_exports) }
                         },
                         {
                             "id": "fallow/unused-type",
                             "shortDescription": { "text": "Type export is never imported" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_types) }
                         },
                         {
                             "id": "fallow/unused-dependency",
                             "shortDescription": { "text": "Dependency listed but never imported" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_dependencies) }
                         },
                         {
                             "id": "fallow/unused-dev-dependency",
                             "shortDescription": { "text": "Dev dependency listed but never imported" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_dev_dependencies) }
                         },
                         {
                             "id": "fallow/unused-enum-member",
                             "shortDescription": { "text": "Enum member is never referenced" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_enum_members) }
                         },
                         {
                             "id": "fallow/unused-class-member",
                             "shortDescription": { "text": "Class member is never referenced" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unused_class_members) }
                         },
                         {
                             "id": "fallow/unresolved-import",
                             "shortDescription": { "text": "Import could not be resolved" },
-                            "defaultConfiguration": { "level": "error" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unresolved_imports) }
                         },
                         {
                             "id": "fallow/unlisted-dependency",
                             "shortDescription": { "text": "Dependency used but not in package.json" },
-                            "defaultConfiguration": { "level": "error" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.unlisted_dependencies) }
                         },
                         {
                             "id": "fallow/duplicate-export",
                             "shortDescription": { "text": "Export name appears in multiple modules" },
-                            "defaultConfiguration": { "level": "warning" }
+                            "defaultConfiguration": { "level": severity_to_sarif_level(rules.duplicate_exports) }
                         }
                     ]
                 }
@@ -1001,7 +1063,7 @@ mod tests {
     fn sarif_has_required_top_level_fields() {
         let root = PathBuf::from("/project");
         let results = AnalysisResults::default();
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         assert_eq!(
             sarif["$schema"],
@@ -1015,7 +1077,7 @@ mod tests {
     fn sarif_has_tool_driver_info() {
         let root = PathBuf::from("/project");
         let results = AnalysisResults::default();
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let driver = &sarif["runs"][0]["tool"]["driver"];
         assert_eq!(driver["name"], "fallow");
@@ -1030,7 +1092,7 @@ mod tests {
     fn sarif_declares_all_ten_rules() {
         let root = PathBuf::from("/project");
         let results = AnalysisResults::default();
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
@@ -1054,7 +1116,7 @@ mod tests {
     fn sarif_empty_results_no_results_entries() {
         let root = PathBuf::from("/project");
         let results = AnalysisResults::default();
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let sarif_results = sarif["runs"][0]["results"]
             .as_array()
@@ -1070,13 +1132,14 @@ mod tests {
             path: root.join("src/dead.ts"),
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
 
         let entry = &entries[0];
         assert_eq!(entry["ruleId"], "fallow/unused-file");
-        assert_eq!(entry["level"], "warning");
+        // Default severity is "error" per RulesConfig::default()
+        assert_eq!(entry["level"], "error");
         assert_eq!(
             entry["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
             "src/dead.ts"
@@ -1097,7 +1160,7 @@ mod tests {
             is_re_export: false,
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entry = &sarif["runs"][0]["results"][0];
         assert_eq!(entry["ruleId"], "fallow/unused-export");
 
@@ -1118,7 +1181,7 @@ mod tests {
             col: 0,
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entry = &sarif["runs"][0]["results"][0];
         assert_eq!(entry["ruleId"], "fallow/unresolved-import");
         assert_eq!(entry["level"], "error");
@@ -1133,7 +1196,7 @@ mod tests {
             imported_from: vec![],
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entry = &sarif["runs"][0]["results"][0];
         assert_eq!(entry["ruleId"], "fallow/unlisted-dependency");
         assert_eq!(entry["level"], "error");
@@ -1158,7 +1221,7 @@ mod tests {
             path: root.join("package.json"),
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
         for entry in entries {
             assert_eq!(
@@ -1177,7 +1240,7 @@ mod tests {
             locations: vec![root.join("src/a.ts"), root.join("src/b.ts")],
         });
 
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
         // One SARIF result per location, not one per DuplicateExport
         assert_eq!(entries.len(), 2);
@@ -1197,7 +1260,7 @@ mod tests {
     fn sarif_all_issue_types_produce_results() {
         let root = PathBuf::from("/project");
         let results = sample_results(&root);
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
         // 10 issues but duplicate_exports has 2 locations => 11 SARIF results
@@ -1223,7 +1286,7 @@ mod tests {
     fn sarif_serializes_to_valid_json() {
         let root = PathBuf::from("/project");
         let results = sample_results(&root);
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let json_str = serde_json::to_string_pretty(&sarif).expect("SARIF should serialize");
         let reparsed: serde_json::Value =
@@ -1235,7 +1298,7 @@ mod tests {
     fn sarif_file_write_produces_valid_sarif() {
         let root = PathBuf::from("/project");
         let results = sample_results(&root);
-        let sarif = build_sarif(&results, &root);
+        let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let json_str = serde_json::to_string_pretty(&sarif).expect("SARIF should serialize");
 
         let dir = std::env::temp_dir().join("fallow-test-sarif-file");

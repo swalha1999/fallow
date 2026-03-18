@@ -82,6 +82,55 @@ pub fn extract_config_shallow_strings(source: &str, path: &Path, key: &str) -> V
     .unwrap_or_default()
 }
 
+/// Public wrapper for `find_config_object` for plugins that need manual AST walking.
+pub fn find_config_object_pub<'a>(program: &'a Program) -> Option<&'a ObjectExpression<'a>> {
+    find_config_object(program)
+}
+
+/// Extract keys of an object property at a nested path.
+///
+/// Useful for PostCSS config: `{ plugins: { autoprefixer: {}, tailwindcss: {} } }`
+/// → returns `["autoprefixer", "tailwindcss"]`.
+pub fn extract_config_object_keys(source: &str, path: &Path, prop_path: &[&str]) -> Vec<String> {
+    extract_from_source(source, path, |program| {
+        let obj = find_config_object(program)?;
+        get_nested_object_keys(obj, prop_path)
+    })
+    .unwrap_or_default()
+}
+
+/// Extract a value that may be a single string, a string array, or an object with string values.
+///
+/// Useful for Webpack `entry`, Rollup `input`, etc. that accept multiple formats:
+/// - `entry: "./src/index.js"` → `["./src/index.js"]`
+/// - `entry: ["./src/a.js", "./src/b.js"]` → `["./src/a.js", "./src/b.js"]`
+/// - `entry: { main: "./src/main.js" }` → `["./src/main.js"]`
+pub fn extract_config_string_or_array(
+    source: &str,
+    path: &Path,
+    prop_path: &[&str],
+) -> Vec<String> {
+    extract_from_source(source, path, |program| {
+        let obj = find_config_object(program)?;
+        get_nested_string_or_array(obj, prop_path)
+    })
+    .unwrap_or_default()
+}
+
+/// Extract `require('...')` call argument strings from a property's value.
+///
+/// Handles direct require calls and arrays containing require calls or tuples:
+/// - `plugins: [require('autoprefixer')]`
+/// - `plugins: [require('postcss-import'), [require('postcss-preset-env'), { ... }]]`
+pub fn extract_config_require_strings(source: &str, path: &Path, key: &str) -> Vec<String> {
+    extract_from_source(source, path, |program| {
+        let obj = find_config_object(program)?;
+        let prop = find_property(obj, key)?;
+        Some(collect_require_sources(&prop.value))
+    })
+    .unwrap_or_default()
+}
+
 // ── Internal helpers ──────────────────────────────────────────────
 
 /// Parse source and run an extraction function on the AST.
@@ -138,11 +187,19 @@ fn find_config_object<'a>(program: &'a Program) -> Option<&'a ObjectExpression<'
     }
 
     // JSON files: the program body might be a single expression statement
+    // Also handles JSON wrapped in parens: `({ ... })` (used for tsconfig.json parsing)
     if program.body.len() == 1
         && let Statement::ExpressionStatement(expr_stmt) = &program.body[0]
-        && let Expression::ObjectExpression(obj) = &expr_stmt.expression
     {
-        return Some(obj);
+        match &expr_stmt.expression {
+            Expression::ObjectExpression(obj) => return Some(obj),
+            Expression::ParenthesizedExpression(paren) => {
+                if let Expression::ObjectExpression(obj) = &paren.expression {
+                    return Some(obj);
+                }
+            }
+            _ => {}
+        }
     }
 
     None
@@ -356,6 +413,146 @@ fn collect_all_string_values(expr: &Expression, values: &mut Vec<String>) {
     }
 }
 
+/// Convert a PropertyKey to a String.
+fn property_key_to_string(key: &PropertyKey) -> Option<String> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+        PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+        _ => None,
+    }
+}
+
+/// Extract keys of an object at a nested property path.
+fn get_nested_object_keys(obj: &ObjectExpression, path: &[&str]) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return None;
+    }
+    let prop = find_property(obj, path[0])?;
+    if path.len() == 1 {
+        if let Expression::ObjectExpression(nested) = &prop.value {
+            let keys = nested
+                .properties
+                .iter()
+                .filter_map(|p| {
+                    if let ObjectPropertyKind::ObjectProperty(p) = p {
+                        property_key_to_string(&p.key)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            return Some(keys);
+        }
+        return None;
+    }
+    if let Expression::ObjectExpression(nested) = &prop.value {
+        get_nested_object_keys(nested, &path[1..])
+    } else {
+        None
+    }
+}
+
+/// Navigate a nested path and extract a string, string array, or object string values.
+fn get_nested_string_or_array(obj: &ObjectExpression, path: &[&str]) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return None;
+    }
+    if path.len() == 1 {
+        let prop = find_property(obj, path[0])?;
+        return Some(expression_to_string_or_array(&prop.value));
+    }
+    let prop = find_property(obj, path[0])?;
+    if let Expression::ObjectExpression(nested) = &prop.value {
+        get_nested_string_or_array(nested, &path[1..])
+    } else {
+        None
+    }
+}
+
+/// Convert an expression to a Vec<String>, handling string, array, and object-with-string-values.
+fn expression_to_string_or_array(expr: &Expression) -> Vec<String> {
+    match expr {
+        Expression::StringLiteral(s) => vec![s.value.to_string()],
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+            .quasis
+            .first()
+            .map(|q| vec![q.value.raw.to_string()])
+            .unwrap_or_default(),
+        Expression::ArrayExpression(arr) => arr
+            .elements
+            .iter()
+            .filter_map(|el| el.as_expression().and_then(expression_to_string))
+            .collect(),
+        Expression::ObjectExpression(obj) => obj
+            .properties
+            .iter()
+            .filter_map(|p| {
+                if let ObjectPropertyKind::ObjectProperty(p) = p {
+                    expression_to_string(&p.value)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Collect `require('...')` argument strings from an expression.
+fn collect_require_sources(expr: &Expression) -> Vec<String> {
+    let mut sources = Vec::new();
+    match expr {
+        Expression::CallExpression(call) if is_require_call(call) => {
+            if let Some(s) = get_require_source(call) {
+                sources.push(s);
+            }
+        }
+        Expression::ArrayExpression(arr) => {
+            for el in &arr.elements {
+                if let Some(inner) = el.as_expression() {
+                    match inner {
+                        Expression::CallExpression(call) if is_require_call(call) => {
+                            if let Some(s) = get_require_source(call) {
+                                sources.push(s);
+                            }
+                        }
+                        // Tuple: [require('pkg'), options]
+                        Expression::ArrayExpression(sub_arr) => {
+                            if let Some(first) = sub_arr.elements.first()
+                                && let Some(Expression::CallExpression(call)) =
+                                    first.as_expression()
+                                && is_require_call(call)
+                                && let Some(s) = get_require_source(call)
+                            {
+                                sources.push(s);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    sources
+}
+
+/// Check if a call expression is `require(...)`.
+fn is_require_call(call: &CallExpression) -> bool {
+    matches!(&call.callee, Expression::Identifier(id) if id.name == "require")
+}
+
+/// Get the first string argument of a require() call.
+fn get_require_source(call: &CallExpression) -> Option<String> {
+    call.arguments.first().and_then(|arg| {
+        if let Argument::StringLiteral(s) = arg {
+            Some(s.value.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,5 +654,173 @@ mod tests {
         let source = "";
         let result = extract_config_string(source, &js_path(), &["key"]);
         assert_eq!(result, None);
+    }
+
+    // ── extract_config_object_keys tests ────────────────────────────
+
+    #[test]
+    fn object_keys_postcss_plugins() {
+        let source = r#"
+            module.exports = {
+                plugins: {
+                    autoprefixer: {},
+                    tailwindcss: {},
+                    'postcss-import': {}
+                }
+            };
+        "#;
+        let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
+        assert_eq!(keys, vec!["autoprefixer", "tailwindcss", "postcss-import"]);
+    }
+
+    #[test]
+    fn object_keys_nested_path() {
+        let source = r#"
+            export default {
+                build: {
+                    plugins: {
+                        minify: {},
+                        compress: {}
+                    }
+                }
+            };
+        "#;
+        let keys = extract_config_object_keys(source, &js_path(), &["build", "plugins"]);
+        assert_eq!(keys, vec!["minify", "compress"]);
+    }
+
+    #[test]
+    fn object_keys_empty_object() {
+        let source = r#"export default { plugins: {} };"#;
+        let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn object_keys_non_object_returns_empty() {
+        let source = r#"export default { plugins: ["a", "b"] };"#;
+        let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
+        assert!(keys.is_empty());
+    }
+
+    // ── extract_config_string_or_array tests ────────────────────────
+
+    #[test]
+    fn string_or_array_single_string() {
+        let source = r#"export default { entry: "./src/index.js" };"#;
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert_eq!(result, vec!["./src/index.js"]);
+    }
+
+    #[test]
+    fn string_or_array_array() {
+        let source = r#"export default { entry: ["./src/a.js", "./src/b.js"] };"#;
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert_eq!(result, vec!["./src/a.js", "./src/b.js"]);
+    }
+
+    #[test]
+    fn string_or_array_object_values() {
+        let source =
+            r#"export default { entry: { main: "./src/main.js", vendor: "./src/vendor.js" } };"#;
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert_eq!(result, vec!["./src/main.js", "./src/vendor.js"]);
+    }
+
+    #[test]
+    fn string_or_array_nested_path() {
+        let source = r#"
+            export default {
+                build: {
+                    rollupOptions: {
+                        input: ["./index.html", "./about.html"]
+                    }
+                }
+            };
+        "#;
+        let result = extract_config_string_or_array(
+            source,
+            &js_path(),
+            &["build", "rollupOptions", "input"],
+        );
+        assert_eq!(result, vec!["./index.html", "./about.html"]);
+    }
+
+    #[test]
+    fn string_or_array_template_literal() {
+        let source = r#"export default { entry: `./src/index.js` };"#;
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert_eq!(result, vec!["./src/index.js"]);
+    }
+
+    // ── extract_config_require_strings tests ────────────────────────
+
+    #[test]
+    fn require_strings_array() {
+        let source = r#"
+            module.exports = {
+                plugins: [
+                    require('autoprefixer'),
+                    require('postcss-import')
+                ]
+            };
+        "#;
+        let deps = extract_config_require_strings(source, &js_path(), "plugins");
+        assert_eq!(deps, vec!["autoprefixer", "postcss-import"]);
+    }
+
+    #[test]
+    fn require_strings_with_tuples() {
+        let source = r#"
+            module.exports = {
+                plugins: [
+                    require('autoprefixer'),
+                    [require('postcss-preset-env'), { stage: 3 }]
+                ]
+            };
+        "#;
+        let deps = extract_config_require_strings(source, &js_path(), "plugins");
+        assert_eq!(deps, vec!["autoprefixer", "postcss-preset-env"]);
+    }
+
+    #[test]
+    fn require_strings_empty_array() {
+        let source = r#"module.exports = { plugins: [] };"#;
+        let deps = extract_config_require_strings(source, &js_path(), "plugins");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn require_strings_no_require_calls() {
+        let source = r#"module.exports = { plugins: ["a", "b"] };"#;
+        let deps = extract_config_require_strings(source, &js_path(), "plugins");
+        assert!(deps.is_empty());
+    }
+
+    // ── JSON wrapped in parens (for tsconfig.json parsing) ──────────
+
+    #[test]
+    fn json_wrapped_in_parens_string() {
+        let source = r#"({"extends": "@tsconfig/node18/tsconfig.json"})"#;
+        let val = extract_config_string(source, &js_path(), &["extends"]);
+        assert_eq!(val, Some("@tsconfig/node18/tsconfig.json".to_string()));
+    }
+
+    #[test]
+    fn json_wrapped_in_parens_nested_array() {
+        let source =
+            r#"({"compilerOptions": {"types": ["node", "jest"]}, "include": ["src/**/*"]})"#;
+        let types = extract_config_string_array(source, &js_path(), &["compilerOptions", "types"]);
+        assert_eq!(types, vec!["node", "jest"]);
+
+        let include = extract_config_string_array(source, &js_path(), &["include"]);
+        assert_eq!(include, vec!["src/**/*"]);
+    }
+
+    #[test]
+    fn json_wrapped_in_parens_object_keys() {
+        let source = r#"({"plugins": {"autoprefixer": {}, "tailwindcss": {}}})"#;
+        let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
+        assert_eq!(keys, vec!["autoprefixer", "tailwindcss"]);
     }
 }

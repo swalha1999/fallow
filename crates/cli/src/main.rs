@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use fallow_config::{FallowConfig, OutputFormat};
+use fallow_config::{FallowConfig, OutputFormat, RulesConfig, Severity};
 
 mod baseline;
 mod fix;
@@ -260,6 +260,62 @@ impl IssueFilters {
     }
 }
 
+// ── Rules helpers ────────────────────────────────────────────────
+
+/// Remove issues whose severity is `Off` from the results.
+fn apply_rules(results: &mut fallow_core::results::AnalysisResults, rules: &RulesConfig) {
+    if rules.unused_files == Severity::Off {
+        results.unused_files.clear();
+    }
+    if rules.unused_exports == Severity::Off {
+        results.unused_exports.clear();
+    }
+    if rules.unused_types == Severity::Off {
+        results.unused_types.clear();
+    }
+    if rules.unused_dependencies == Severity::Off {
+        results.unused_dependencies.clear();
+    }
+    if rules.unused_dev_dependencies == Severity::Off {
+        results.unused_dev_dependencies.clear();
+    }
+    if rules.unused_enum_members == Severity::Off {
+        results.unused_enum_members.clear();
+    }
+    if rules.unused_class_members == Severity::Off {
+        results.unused_class_members.clear();
+    }
+    if rules.unresolved_imports == Severity::Off {
+        results.unresolved_imports.clear();
+    }
+    if rules.unlisted_dependencies == Severity::Off {
+        results.unlisted_dependencies.clear();
+    }
+    if rules.duplicate_exports == Severity::Off {
+        results.duplicate_exports.clear();
+    }
+}
+
+/// Check whether any issue type with `Severity::Error` has remaining issues.
+fn has_error_severity_issues(
+    results: &fallow_core::results::AnalysisResults,
+    rules: &RulesConfig,
+) -> bool {
+    (rules.unused_files == Severity::Error && !results.unused_files.is_empty())
+        || (rules.unused_exports == Severity::Error && !results.unused_exports.is_empty())
+        || (rules.unused_types == Severity::Error && !results.unused_types.is_empty())
+        || (rules.unused_dependencies == Severity::Error && !results.unused_dependencies.is_empty())
+        || (rules.unused_dev_dependencies == Severity::Error
+            && !results.unused_dev_dependencies.is_empty())
+        || (rules.unused_enum_members == Severity::Error && !results.unused_enum_members.is_empty())
+        || (rules.unused_class_members == Severity::Error
+            && !results.unused_class_members.is_empty())
+        || (rules.unresolved_imports == Severity::Error && !results.unresolved_imports.is_empty())
+        || (rules.unlisted_dependencies == Severity::Error
+            && !results.unlisted_dependencies.is_empty())
+        || (rules.duplicate_exports == Severity::Error && !results.duplicate_exports.is_empty())
+}
+
 // ── Input validation ─────────────────────────────────────────────
 
 fn validate_git_ref(s: &str) -> Result<&str, String> {
@@ -499,8 +555,11 @@ fn run_check(
             .retain(|i| changed.contains(&i.path));
     }
 
-    // Apply issue type filters
+    // Apply issue type filters (CLI --unused-files etc.)
     filters.apply(&mut results);
+
+    // Apply rules: remove issues with Severity::Off
+    apply_rules(&mut results, &config.rules);
 
     // Save baseline if requested
     if let Some(baseline_path) = save_baseline {
@@ -527,7 +586,7 @@ fn run_check(
 
     // Write SARIF to file if requested (independent of --format)
     if let Some(sarif_path) = sarif_file {
-        let sarif = report::build_sarif(&results, &config.root);
+        let sarif = report::build_sarif(&results, &config.root, &config.rules);
         match serde_json::to_string_pretty(&sarif) {
             Ok(json) => {
                 // Ensure parent directories exist
@@ -555,12 +614,50 @@ fn run_check(
         }
     }
 
+    // When --fail-on-issues is set, promote all Warn to Error for this run
+    let effective_rules = if fail_on_issues {
+        let mut r = config.rules.clone();
+        if r.unused_files == Severity::Warn {
+            r.unused_files = Severity::Error;
+        }
+        if r.unused_exports == Severity::Warn {
+            r.unused_exports = Severity::Error;
+        }
+        if r.unused_types == Severity::Warn {
+            r.unused_types = Severity::Error;
+        }
+        if r.unused_dependencies == Severity::Warn {
+            r.unused_dependencies = Severity::Error;
+        }
+        if r.unused_dev_dependencies == Severity::Warn {
+            r.unused_dev_dependencies = Severity::Error;
+        }
+        if r.unused_enum_members == Severity::Warn {
+            r.unused_enum_members = Severity::Error;
+        }
+        if r.unused_class_members == Severity::Warn {
+            r.unused_class_members = Severity::Error;
+        }
+        if r.unresolved_imports == Severity::Warn {
+            r.unresolved_imports = Severity::Error;
+        }
+        if r.unlisted_dependencies == Severity::Warn {
+            r.unlisted_dependencies = Severity::Error;
+        }
+        if r.duplicate_exports == Severity::Warn {
+            r.duplicate_exports = Severity::Error;
+        }
+        r
+    } else {
+        config.rules.clone()
+    };
+
     let report_code = report::print_results(&results, &config, elapsed, quiet);
     if report_code != ExitCode::SUCCESS {
         return report_code;
     }
 
-    if fail_on_issues && results.has_issues() {
+    if has_error_severity_issues(&results, &effective_rules) {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
@@ -807,6 +904,14 @@ unused_exports = true
 unused_dependencies = true
 unused_dev_dependencies = true
 unused_types = true
+
+# Per-issue-type severity: "error" (fail CI), "warn" (report only), "off" (ignore)
+# All default to "error" when omitted.
+# [rules]
+# unused_files = "error"
+# unused_exports = "warn"
+# unused_types = "off"
+# unresolved_imports = "error"
 "#;
 
     if let Err(e) = std::fs::write(&config_path, default_config) {
@@ -1057,25 +1162,32 @@ fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
                 "id": "unused-file",
                 "description": "File is not reachable from any entry point",
                 "filter_flag": "--unused-files",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-file unused-file"
             },
             {
                 "id": "unused-export",
                 "description": "Export is never imported by other modules",
                 "filter_flag": "--unused-exports",
-                "fixable": true
+                "fixable": true,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-next-line unused-export"
             },
             {
                 "id": "unused-type",
                 "description": "Type export is never imported by other modules",
                 "filter_flag": "--unused-types",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-next-line unused-type"
             },
             {
                 "id": "unused-dependency",
                 "description": "Package in dependencies is never imported",
                 "filter_flag": "--unused-deps",
                 "fixable": true,
+                "suppressible": false,
                 "note": "--unused-deps controls both unused-dependency and unused-dev-dependency"
             },
             {
@@ -1083,45 +1195,61 @@ fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
                 "description": "Package in devDependencies is never imported",
                 "filter_flag": "--unused-deps",
                 "fixable": true,
+                "suppressible": false,
                 "note": "--unused-deps controls both unused-dependency and unused-dev-dependency"
             },
             {
                 "id": "unused-enum-member",
                 "description": "Enum member is never referenced",
                 "filter_flag": "--unused-enum-members",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-next-line unused-enum-member"
             },
             {
                 "id": "unused-class-member",
                 "description": "Class member is never referenced",
                 "filter_flag": "--unused-class-members",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-next-line unused-class-member"
             },
             {
                 "id": "unresolved-import",
                 "description": "Import specifier could not be resolved to a file",
                 "filter_flag": "--unresolved-imports",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-next-line unresolved-import"
             },
             {
                 "id": "unlisted-dependency",
                 "description": "Package is imported but not in package.json",
                 "filter_flag": "--unlisted-deps",
-                "fixable": false
+                "fixable": false,
+                "suppressible": false
             },
             {
                 "id": "duplicate-export",
                 "description": "Same export name appears in multiple modules",
                 "filter_flag": "--duplicate-exports",
-                "fixable": false
+                "fixable": false,
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-file duplicate-export"
             }
         ],
+        "suppression_comments": {
+            "next_line": "// fallow-ignore-next-line [issue-type]",
+            "file": "// fallow-ignore-file [issue-type]",
+            "note": "Omit [issue-type] to suppress all issue types. Unknown tokens are silently ignored."
+        },
         "output_formats": ["human", "json", "sarif", "compact"],
         "exit_codes": {
-            "0": "Success (or issues found without --fail-on-issues)",
-            "1": "Issues found (with --fail-on-issues)",
+            "0": "Success (no error-severity issues found)",
+            "1": "Error-severity issues found (per rules config, or --fail-on-issues promotes warn→error)",
             "2": "Error (invalid config, invalid input, etc.)"
-        }
+        },
+        "severity_levels": ["error", "warn", "off"]
     })
 }
 
@@ -1208,6 +1336,7 @@ fn load_config(
             ignore_exports: vec![],
             output,
             duplicates: fallow_config::DuplicatesConfig::default(),
+            rules: fallow_config::RulesConfig::default(),
         }
         .resolve(root.to_path_buf(), threads, no_cache),
     })

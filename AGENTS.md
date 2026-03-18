@@ -21,9 +21,11 @@ Fallow detects unused files, exports, dependencies, types, enum members, class m
 
 | Code | Meaning |
 |------|---------|
-| 0    | Success (no issues, or issues found but `--fail-on-issues` was not set) |
-| 1    | Issues found (only when `--fail-on-issues` is passed) |
+| 0    | Success (no error-severity issues found) |
+| 1    | Error-severity issues found (per `[rules]` config, or `--fail-on-issues` promotes `warn` → `error`) |
 | 2    | Error (invalid config, parse failure, etc.) |
+
+**Note:** With the rules system, exit code 1 is triggered by any issue type configured as `"error"` in `[rules]`. Without a `[rules]` section, all issue types default to `"error"` severity.
 
 ## Commands
 
@@ -140,9 +142,39 @@ fallow schema
 
 Fallow reads `fallow.toml` from the project root. Run `fallow init` to generate one. Framework presets (Next.js, Vite, Jest, Storybook, etc.) are auto-detected -- no configuration required for most projects.
 
+### Rules (per-issue-type severity)
+
+```toml
+[rules]
+unused_files = "error"       # fail CI (exit 1)
+unused_exports = "warn"      # report but don't fail
+unused_types = "off"         # ignore entirely
+```
+
+- `error` (default) -- report and exit 1
+- `warn` -- report but exit 0
+- `off` -- skip detection entirely
+- `--fail-on-issues` promotes all `warn` to `error`
+
+### Inline suppression
+
+Source-level suppression for false positives:
+
+```
+// fallow-ignore-next-line
+// fallow-ignore-next-line unused-export
+// fallow-ignore-file
+// fallow-ignore-file unused-export
+```
+
+Issue type tokens: `unused-file`, `unused-export`, `unused-type`, `unused-dependency`, `unused-dev-dependency`, `unused-enum-member`, `unused-class-member`, `unresolved-import`, `unlisted-dependency`, `duplicate-export`.
+
+Unknown tokens are silently ignored (the comment has no effect). When an agent adds a suppression comment, always use the exact tokens listed above.
+
 ## Invariants
 
 - Fallow uses syntactic analysis only (no TypeScript compiler). It partially resolves dynamic imports with static prefixes (template literals, string concatenation, import.meta.glob, require.context) but fully dynamic paths like `import(variable)` are not resolved.
 - Re-export chains through barrel files are resolved. An export re-exported from `index.ts` is not falsely flagged if consumed downstream.
 - Workspace support (npm/yarn/pnpm) is automatic when `workspaces` is defined in the root `package.json` or `pnpm-workspace.yaml` exists.
+- Inline suppression comments are parsed during extraction and cached alongside module data. They are applied during analysis, before results reach the reporting layer.
 - Analysis is deterministic: same input always produces the same output.

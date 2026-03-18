@@ -57,6 +57,34 @@ impl Plugin for VitePlugin {
             result.referenced_dependencies.push(dep);
         }
 
+        // build.rollupOptions.input → entry points (string, array, or object)
+        let rollup_input = config_parser::extract_config_string_or_array(
+            source,
+            config_path,
+            &["build", "rollupOptions", "input"],
+        );
+        result.entry_patterns.extend(rollup_input);
+
+        // build.lib.entry → entry points (string or array)
+        let lib_entry = config_parser::extract_config_string_or_array(
+            source,
+            config_path,
+            &["build", "lib", "entry"],
+        );
+        result.entry_patterns.extend(lib_entry);
+
+        // optimizeDeps.include → referenced dependencies
+        let optimize_include = config_parser::extract_config_string_array(
+            source,
+            config_path,
+            &["optimizeDeps", "include"],
+        );
+        for dep in &optimize_include {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(dep));
+        }
+
         result
     }
 }

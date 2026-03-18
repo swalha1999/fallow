@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use fallow_config::{DetectConfig, FallowConfig, OutputFormat};
+use fallow_config::{DetectConfig, FallowConfig, OutputFormat, RulesConfig};
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -24,6 +24,7 @@ fn create_config(root: PathBuf) -> fallow_config::ResolvedConfig {
         ignore_exports: vec![],
         output: OutputFormat::Human,
         duplicates: fallow_config::DuplicatesConfig::default(),
+        rules: RulesConfig::default(),
     }
     .resolve(root, 4, true)
 }
@@ -477,6 +478,7 @@ fn cache_roundtrip() {
         whole_object_uses: vec![],
         dynamic_import_patterns: vec![],
         has_cjs_exports: false,
+        suppressions: vec![],
     };
 
     store.insert(std::path::Path::new("test.ts"), cached);
@@ -654,6 +656,7 @@ fn ignore_exports_wildcard() {
         }],
         output: OutputFormat::Human,
         duplicates: fallow_config::DuplicatesConfig::default(),
+        rules: RulesConfig::default(),
     }
     .resolve(root.clone(), 4, true);
 
@@ -691,6 +694,7 @@ fn ignore_exports_specific() {
         }],
         output: OutputFormat::Human,
         duplicates: fallow_config::DuplicatesConfig::default(),
+        rules: RulesConfig::default(),
     }
     .resolve(root.clone(), 4, true);
 
@@ -774,6 +778,7 @@ fn ignore_dependencies_config() {
         ignore_exports: vec![],
         output: OutputFormat::Human,
         duplicates: fallow_config::DuplicatesConfig::default(),
+        rules: RulesConfig::default(),
     }
     .resolve(root.clone(), 4, true);
 

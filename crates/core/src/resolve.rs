@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
+use dashmap::DashMap;
 use fallow_config::ResolvedConfig;
 use oxc_resolver::{ResolveOptions, Resolver};
 use rayon::prelude::*;
@@ -9,28 +9,28 @@ use rayon::prelude::*;
 use crate::discover::{DiscoveredFile, FileId};
 use crate::extract::{ImportInfo, ModuleInfo, ReExportInfo};
 
-/// Thread-safe cache for bare specifier resolutions.
+/// Thread-safe cache for bare specifier resolutions using lock-free concurrent reads.
 /// Bare specifiers (like `react`, `lodash/merge`) resolve to the same target
 /// regardless of which file imports them (modulo nested node_modules, which is rare).
+/// Uses DashMap (sharded read-write locks) instead of Mutex<HashMap> to eliminate
+/// contention under rayon's work-stealing on large projects.
 struct BareSpecifierCache {
-    cache: Mutex<HashMap<String, ResolveResult>>,
+    cache: DashMap<String, ResolveResult>,
 }
 
 impl BareSpecifierCache {
     fn new() -> Self {
         Self {
-            cache: Mutex::new(HashMap::new()),
+            cache: DashMap::new(),
         }
     }
 
     fn get(&self, specifier: &str) -> Option<ResolveResult> {
-        self.cache.lock().ok()?.get(specifier).cloned()
+        self.cache.get(specifier).map(|entry| entry.clone())
     }
 
     fn insert(&self, specifier: String, result: ResolveResult) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(specifier, result);
-        }
+        self.cache.insert(specifier, result);
     }
 }
 
@@ -396,10 +396,8 @@ fn resolve_specifier(
 
     // Fast path for bare specifiers: check cache first to avoid repeated resolver work
     let is_bare = is_bare_specifier(specifier);
-    if is_bare {
-        if let Some(cached) = bare_cache.get(specifier) {
-            return cached;
-        }
+    if is_bare && let Some(cached) = bare_cache.get(specifier) {
+        return cached;
     }
 
     let dir = from_file.parent().unwrap_or(from_file);

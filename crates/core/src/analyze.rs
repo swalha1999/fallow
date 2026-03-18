@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use fallow_config::{PackageJson, ResolvedConfig};
 
-use crate::extract::MemberKind;
+use crate::discover::FileId;
+use crate::extract::{MemberKind, ModuleInfo};
 use crate::graph::ModuleGraph;
 use crate::resolve::ResolvedModule;
 use crate::results::*;
+use crate::suppress::{self, IssueKind, Suppression};
 
 /// Convert a byte offset in source text to a 1-based line and 0-based column (byte offset from
 /// start of the line). Uses byte counting to stay consistent with Oxc's byte-offset spans.
@@ -37,7 +39,7 @@ pub fn find_dead_code_with_resolved(
     resolved_modules: &[ResolvedModule],
     plugin_result: Option<&crate::plugins::AggregatedPluginResult>,
 ) -> AnalysisResults {
-    find_dead_code_full(graph, config, resolved_modules, plugin_result, &[])
+    find_dead_code_full(graph, config, resolved_modules, plugin_result, &[], &[])
 }
 
 /// Find all dead code, with optional resolved module data, plugin context, and workspace info.
@@ -47,17 +49,26 @@ pub fn find_dead_code_full(
     resolved_modules: &[ResolvedModule],
     plugin_result: Option<&crate::plugins::AggregatedPluginResult>,
     workspaces: &[fallow_config::WorkspaceInfo],
+    modules: &[ModuleInfo],
 ) -> AnalysisResults {
     let _span = tracing::info_span!("find_dead_code").entered();
+
+    // Build suppression index: FileId -> suppressions
+    let suppressions_by_file: HashMap<FileId, &[Suppression]> = modules
+        .iter()
+        .filter(|m| !m.suppressions.is_empty())
+        .map(|m| (m.file_id, m.suppressions.as_slice()))
+        .collect();
 
     let mut results = AnalysisResults::default();
 
     if config.detect.unused_files {
-        results.unused_files = find_unused_files(graph);
+        results.unused_files = find_unused_files(graph, &suppressions_by_file);
     }
 
     if config.detect.unused_exports || config.detect.unused_types {
-        let (exports, types) = find_unused_exports(graph, config, plugin_result);
+        let (exports, types) =
+            find_unused_exports(graph, config, plugin_result, &suppressions_by_file);
         if config.detect.unused_exports {
             results.unused_exports = exports;
         }
@@ -67,7 +78,8 @@ pub fn find_dead_code_full(
     }
 
     if config.detect.unused_enum_members || config.detect.unused_class_members {
-        let (enum_members, class_members) = find_unused_members(graph, config, resolved_modules);
+        let (enum_members, class_members) =
+            find_unused_members(graph, config, resolved_modules, &suppressions_by_file);
         if config.detect.unused_enum_members {
             results.unused_enum_members = enum_members;
         }
@@ -97,11 +109,12 @@ pub fn find_dead_code_full(
     }
 
     if config.detect.unresolved_imports && !resolved_modules.is_empty() {
-        results.unresolved_imports = find_unresolved_imports(resolved_modules, config);
+        results.unresolved_imports =
+            find_unresolved_imports(resolved_modules, config, &suppressions_by_file);
     }
 
     if config.detect.duplicate_exports {
-        results.duplicate_exports = find_duplicate_exports(graph, config);
+        results.duplicate_exports = find_duplicate_exports(graph, config, &suppressions_by_file);
     }
 
     results
@@ -119,7 +132,10 @@ pub fn find_dead_code_full(
 /// Barrel files (index.ts that only re-export) are excluded when their re-export
 /// sources are reachable — they serve an organizational purpose even if consumers
 /// import directly from the source files rather than through the barrel.
-fn find_unused_files(graph: &ModuleGraph) -> Vec<UnusedFile> {
+fn find_unused_files(
+    graph: &ModuleGraph,
+    suppressions_by_file: &HashMap<FileId, &[Suppression]>,
+) -> Vec<UnusedFile> {
     graph
         .modules
         .iter()
@@ -127,6 +143,11 @@ fn find_unused_files(graph: &ModuleGraph) -> Vec<UnusedFile> {
         .filter(|m| !is_declaration_file(&m.path))
         .filter(|m| !is_config_file(&m.path))
         .filter(|m| !is_barrel_with_reachable_sources(m, graph))
+        .filter(|m| {
+            !suppressions_by_file
+                .get(&m.file_id)
+                .is_some_and(|supps| suppress::is_file_suppressed(supps, IssueKind::UnusedFile))
+        })
         .map(|m| UnusedFile {
             path: m.path.clone(),
         })
@@ -263,6 +284,7 @@ fn find_unused_exports(
     graph: &ModuleGraph,
     config: &ResolvedConfig,
     plugin_result: Option<&crate::plugins::AggregatedPluginResult>,
+    suppressions_by_file: &HashMap<FileId, &[Suppression]>,
 ) -> (Vec<UnusedExport>, Vec<UnusedExport>) {
     let mut unused_exports = Vec::new();
     let mut unused_types = Vec::new();
@@ -398,6 +420,18 @@ fn find_unused_exports(
                 // Barrel re-exports are synthesized in graph.rs with Span::new(0, 0) as a sentinel.
                 let is_re_export = export.span.start == 0 && export.span.end == 0;
 
+                // Check inline suppression
+                let issue_kind = if export.is_type_only {
+                    IssueKind::UnusedType
+                } else {
+                    IssueKind::UnusedExport
+                };
+                if let Some(supps) = suppressions_by_file.get(&module.file_id)
+                    && suppress::is_suppressed(supps, line, issue_kind)
+                {
+                    continue;
+                }
+
                 let unused = UnusedExport {
                     path: module.path.clone(),
                     export_name: export_str,
@@ -447,6 +481,11 @@ fn find_unused_dependencies(
         .map(|pr| pr.tooling_dependencies.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
+    // Collect packages used as binaries in package.json scripts
+    let script_used: HashSet<&str> = plugin_result
+        .map(|pr| pr.script_used_packages.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
     // Collect workspace package names — these are internal deps, not npm packages
     let workspace_names: HashSet<&str> = workspaces.iter().map(|ws| ws.name.as_str()).collect();
 
@@ -460,6 +499,7 @@ fn find_unused_dependencies(
         .production_dependency_names()
         .into_iter()
         .filter(|dep| !used_packages.contains(dep.as_str()))
+        .filter(|dep| !script_used.contains(dep.as_str()))
         .filter(|dep| !is_implicit_dependency(dep))
         .filter(|dep| !plugin_referenced.contains(dep.as_str()))
         .filter(|dep| !config.ignore_dependencies.iter().any(|d| d == dep))
@@ -475,6 +515,7 @@ fn find_unused_dependencies(
         .dev_dependency_names()
         .into_iter()
         .filter(|dep| !used_packages.contains(dep.as_str()))
+        .filter(|dep| !script_used.contains(dep.as_str()))
         .filter(|dep| !is_tooling_dependency(dep))
         .filter(|dep| !plugin_tooling.contains(dep.as_str()))
         .filter(|dep| !plugin_referenced.contains(dep.as_str()))
@@ -531,6 +572,9 @@ fn find_unused_dependencies(
             if is_implicit_dependency(&dep) {
                 continue;
             }
+            if script_used.contains(dep.as_str()) {
+                continue;
+            }
             if plugin_referenced.contains(dep.as_str()) {
                 continue;
             }
@@ -556,6 +600,9 @@ fn find_unused_dependencies(
                 continue;
             }
             if is_tooling_dependency(&dep) {
+                continue;
+            }
+            if script_used.contains(dep.as_str()) {
                 continue;
             }
             if plugin_tooling.contains(dep.as_str()) {
@@ -592,6 +639,7 @@ fn find_unused_members(
     graph: &ModuleGraph,
     _config: &ResolvedConfig,
     resolved_modules: &[ResolvedModule],
+    suppressions_by_file: &HashMap<FileId, &[Suppression]>,
 ) -> (Vec<UnusedMember>, Vec<UnusedMember>) {
     let mut unused_enum_members = Vec::new();
     let mut unused_class_members = Vec::new();
@@ -712,6 +760,19 @@ fn find_unused_members(
 
                 let source = source_content.get_or_insert_with(|| read_source(&module.path));
                 let (line, col) = byte_offset_to_line_col(source, member.span.start);
+
+                // Check inline suppression
+                let issue_kind = match member.kind {
+                    MemberKind::EnumMember => IssueKind::UnusedEnumMember,
+                    MemberKind::ClassMethod | MemberKind::ClassProperty => {
+                        IssueKind::UnusedClassMember
+                    }
+                };
+                if let Some(supps) = suppressions_by_file.get(&module.file_id)
+                    && suppress::is_suppressed(supps, line, issue_kind)
+                {
+                    continue;
+                }
 
                 let unused = UnusedMember {
                     path: module.path.clone(),
@@ -846,6 +907,7 @@ fn is_path_alias(name: &str) -> bool {
 fn find_unresolved_imports(
     resolved_modules: &[ResolvedModule],
     _config: &ResolvedConfig,
+    suppressions_by_file: &HashMap<FileId, &[Suppression]>,
 ) -> Vec<UnresolvedImport> {
     let mut unresolved = Vec::new();
 
@@ -857,6 +919,13 @@ fn find_unresolved_imports(
             if let crate::resolve::ResolveResult::Unresolvable(spec) = &import.target {
                 let source = source_content.get_or_insert_with(|| read_source(&module.path));
                 let (line, col) = byte_offset_to_line_col(source, import.info.span.start);
+
+                // Check inline suppression
+                if let Some(supps) = suppressions_by_file.get(&module.file_id)
+                    && suppress::is_suppressed(supps, line, IssueKind::UnresolvedImport)
+                {
+                    continue;
+                }
 
                 unresolved.push(UnresolvedImport {
                     path: module.path.clone(),
@@ -876,7 +945,11 @@ fn find_unresolved_imports(
 /// Barrel re-exports (files that only re-export from other modules via `export { X } from './source'`)
 /// are excluded — having an index.ts re-export the same name as the source module is the normal
 /// barrel file pattern, not a true duplicate.
-fn find_duplicate_exports(graph: &ModuleGraph, config: &ResolvedConfig) -> Vec<DuplicateExport> {
+fn find_duplicate_exports(
+    graph: &ModuleGraph,
+    config: &ResolvedConfig,
+    suppressions_by_file: &HashMap<FileId, &[Suppression]>,
+) -> Vec<DuplicateExport> {
     // Build a set of re-export relationships: (re-exporting module idx) -> set of (source module idx)
     let mut re_export_sources: HashMap<usize, HashSet<usize>> = HashMap::new();
     for (idx, module) in graph.modules.iter().enumerate() {
@@ -892,6 +965,14 @@ fn find_duplicate_exports(graph: &ModuleGraph, config: &ResolvedConfig) -> Vec<D
 
     for (idx, module) in graph.modules.iter().enumerate() {
         if !module.is_reachable || module.is_entry_point {
+            continue;
+        }
+
+        // Skip files with file-wide duplicate-export suppression
+        if suppressions_by_file
+            .get(&module.file_id)
+            .is_some_and(|supps| suppress::is_file_suppressed(supps, IssueKind::DuplicateExport))
+        {
             continue;
         }
 

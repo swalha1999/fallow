@@ -78,13 +78,257 @@ impl Plugin for EslintPlugin {
     fn resolve_config(&self, config_path: &Path, source: &str, _root: &Path) -> PluginResult {
         let mut result = PluginResult::default();
 
+        // For JSON configs, wrap in parens so Oxc can parse them
+        let is_json = config_path.extension().is_some_and(|ext| ext == "json");
+        let (parse_source, parse_path_buf);
+        let parse_path: &Path;
+        if is_json {
+            parse_source = format!("({source})");
+            parse_path_buf = config_path.with_extension("js");
+            parse_path = &parse_path_buf;
+        } else {
+            parse_source = source.to_string();
+            parse_path_buf = config_path.to_path_buf();
+            parse_path = &parse_path_buf;
+        };
+
         // Extract import sources as referenced dependencies (eslint plugins, configs)
-        let imports = config_parser::extract_imports(source, config_path);
+        let imports = config_parser::extract_imports(&parse_source, parse_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
             result.referenced_dependencies.push(dep);
         }
 
+        // Legacy .eslintrc: extract plugins by short name
+        // e.g. plugins: ["react"] → eslint-plugin-react
+        let plugins =
+            config_parser::extract_config_shallow_strings(&parse_source, parse_path, "plugins");
+        for plugin in &plugins {
+            if let Some(dep) = resolve_eslint_plugin_name(plugin) {
+                result.referenced_dependencies.push(dep);
+            }
+        }
+
+        // Legacy .eslintrc: extract extends
+        // e.g. extends: ["airbnb", "plugin:react/recommended"]
+        let extends =
+            config_parser::extract_config_shallow_strings(&parse_source, parse_path, "extends");
+        for ext in &extends {
+            if let Some(dep) = resolve_eslint_extends_name(ext) {
+                result.referenced_dependencies.push(dep);
+            }
+        }
+
+        // Legacy .eslintrc: extract parser
+        // e.g. parser: "@typescript-eslint/parser"
+        if let Some(parser) =
+            config_parser::extract_config_string(&parse_source, parse_path, &["parser"])
+        {
+            let dep = crate::resolve::extract_package_name(&parser);
+            result.referenced_dependencies.push(dep);
+        }
+
+        // Flat config: extract plugin names from plugins object keys
+        // e.g. plugins: { react: reactPlugin, "@typescript-eslint": tseslint }
+        let plugin_keys =
+            config_parser::extract_config_object_keys(&parse_source, parse_path, &["plugins"]);
+        for key in &plugin_keys {
+            if let Some(dep) = resolve_eslint_plugin_name(key) {
+                result.referenced_dependencies.push(dep);
+            }
+        }
+
         result
+    }
+}
+
+/// Resolve ESLint plugin short name to full package name.
+///
+/// - `"react"` → `"eslint-plugin-react"`
+/// - `"@typescript-eslint"` → `"@typescript-eslint/eslint-plugin"`
+/// - `"eslint-plugin-react"` → `"eslint-plugin-react"` (already full)
+fn resolve_eslint_plugin_name(name: &str) -> Option<String> {
+    if name.starts_with("eslint-plugin-") || name.contains("/eslint-plugin") {
+        Some(name.to_string())
+    } else if let Some(scope) = name.strip_prefix('@') {
+        if scope.contains('/') {
+            // Already scoped with subpath, push as-is
+            Some(name.to_string())
+        } else {
+            // "@typescript-eslint" → "@typescript-eslint/eslint-plugin"
+            Some(format!("{name}/eslint-plugin"))
+        }
+    } else {
+        Some(format!("eslint-plugin-{name}"))
+    }
+}
+
+/// Resolve ESLint extends name to a package dependency.
+///
+/// - `"airbnb"` → `"eslint-config-airbnb"`
+/// - `"plugin:react/recommended"` → `"eslint-plugin-react"`
+/// - `"eslint:recommended"` → `None` (built-in)
+fn resolve_eslint_extends_name(name: &str) -> Option<String> {
+    if name.starts_with("eslint:") {
+        // Built-in ESLint config
+        None
+    } else if let Some(rest) = name.strip_prefix("plugin:") {
+        // "plugin:react/recommended" → extract plugin name
+        let plugin_name = rest.split('/').next()?;
+        resolve_eslint_plugin_name(plugin_name)
+    } else if name.starts_with("eslint-config-") || name.contains("/eslint-config") {
+        Some(name.to_string())
+    } else if name.starts_with('@') {
+        // Scoped package, push as-is
+        Some(name.to_string())
+    } else {
+        Some(format!("eslint-config-{name}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ESLint plugin name resolution ───────────────────────────────
+
+    #[test]
+    fn plugin_short_name() {
+        assert_eq!(
+            resolve_eslint_plugin_name("react"),
+            Some("eslint-plugin-react".to_string())
+        );
+    }
+
+    #[test]
+    fn plugin_scoped_short_name() {
+        assert_eq!(
+            resolve_eslint_plugin_name("@typescript-eslint"),
+            Some("@typescript-eslint/eslint-plugin".to_string())
+        );
+    }
+
+    #[test]
+    fn plugin_already_full_name() {
+        assert_eq!(
+            resolve_eslint_plugin_name("eslint-plugin-react"),
+            Some("eslint-plugin-react".to_string())
+        );
+    }
+
+    #[test]
+    fn plugin_scoped_with_subpath() {
+        assert_eq!(
+            resolve_eslint_plugin_name("@scope/some-plugin"),
+            Some("@scope/some-plugin".to_string())
+        );
+    }
+
+    // ── ESLint extends name resolution ──────────────────────────────
+
+    #[test]
+    fn extends_short_name() {
+        assert_eq!(
+            resolve_eslint_extends_name("airbnb"),
+            Some("eslint-config-airbnb".to_string())
+        );
+    }
+
+    #[test]
+    fn extends_plugin_rule() {
+        assert_eq!(
+            resolve_eslint_extends_name("plugin:react/recommended"),
+            Some("eslint-plugin-react".to_string())
+        );
+    }
+
+    #[test]
+    fn extends_plugin_scoped() {
+        assert_eq!(
+            resolve_eslint_extends_name("plugin:@typescript-eslint/recommended"),
+            Some("@typescript-eslint/eslint-plugin".to_string())
+        );
+    }
+
+    #[test]
+    fn extends_builtin() {
+        assert_eq!(resolve_eslint_extends_name("eslint:recommended"), None);
+    }
+
+    #[test]
+    fn extends_already_full_config_name() {
+        assert_eq!(
+            resolve_eslint_extends_name("eslint-config-prettier"),
+            Some("eslint-config-prettier".to_string())
+        );
+    }
+
+    #[test]
+    fn extends_scoped_package() {
+        assert_eq!(
+            resolve_eslint_extends_name("@vue/eslint-config-typescript"),
+            Some("@vue/eslint-config-typescript".to_string())
+        );
+    }
+
+    // ── ESLint resolve_config integration ───────────────────────────
+
+    #[test]
+    fn resolve_config_legacy_eslintrc() {
+        let source = r#"
+            module.exports = {
+                parser: "@typescript-eslint/parser",
+                plugins: ["react", "@typescript-eslint"],
+                extends: ["airbnb", "plugin:react/recommended", "eslint:recommended"]
+            };
+        "#;
+        let plugin = EslintPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new(".eslintrc.js"),
+            source,
+            std::path::Path::new("/project"),
+        );
+
+        let deps = &result.referenced_dependencies;
+        assert!(deps.contains(&"@typescript-eslint/parser".to_string()));
+        assert!(deps.contains(&"eslint-plugin-react".to_string()));
+        assert!(deps.contains(&"@typescript-eslint/eslint-plugin".to_string()));
+        assert!(deps.contains(&"eslint-config-airbnb".to_string()));
+        // eslint:recommended should NOT be in deps
+        assert!(!deps.iter().any(|d| d.contains("eslint:recommended")));
+    }
+
+    #[test]
+    fn resolve_config_json_eslintrc() {
+        let source = r#"{"plugins": ["react"], "extends": ["airbnb"]}"#;
+        let plugin = EslintPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new(".eslintrc.json"),
+            source,
+            std::path::Path::new("/project"),
+        );
+
+        let deps = &result.referenced_dependencies;
+        assert!(deps.contains(&"eslint-plugin-react".to_string()));
+        assert!(deps.contains(&"eslint-config-airbnb".to_string()));
+    }
+
+    #[test]
+    fn resolve_config_flat_config_imports() {
+        let source = r#"
+            import react from 'eslint-plugin-react';
+            import tseslint from 'typescript-eslint';
+            export default [{}];
+        "#;
+        let plugin = EslintPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new("eslint.config.js"),
+            source,
+            std::path::Path::new("/project"),
+        );
+
+        let deps = &result.referenced_dependencies;
+        assert!(deps.contains(&"eslint-plugin-react".to_string()));
+        assert!(deps.contains(&"typescript-eslint".to_string()));
     }
 }

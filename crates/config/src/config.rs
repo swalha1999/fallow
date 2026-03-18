@@ -45,6 +45,10 @@ pub struct FallowConfig {
     /// Duplication detection settings.
     #[serde(default)]
     pub duplicates: DuplicatesConfig,
+
+    /// Per-issue-type severity rules.
+    #[serde(default)]
+    pub rules: RulesConfig,
 }
 
 /// Configuration for code duplication detection.
@@ -247,6 +251,7 @@ pub struct ResolvedConfig {
     pub ignore_dependencies: Vec<String>,
     pub ignore_export_rules: Vec<IgnoreExportRule>,
     pub duplicates: DuplicatesConfig,
+    pub rules: RulesConfig,
 }
 
 impl FallowConfig {
@@ -328,6 +333,10 @@ impl FallowConfig {
 
         let framework_rules = crate::framework::resolve_framework_rules(&self.framework);
 
+        // Merge detect booleans into rules: detect=false forces Severity::Off
+        let mut rules = self.rules;
+        rules.merge_detect(&self.detect);
+
         ResolvedConfig {
             root,
             entry_patterns: self.entry,
@@ -341,12 +350,136 @@ impl FallowConfig {
             ignore_dependencies: self.ignore_dependencies,
             ignore_export_rules: self.ignore_exports,
             duplicates: self.duplicates,
+            rules,
         }
     }
 }
 
 const fn default_true() -> bool {
     true
+}
+
+/// Severity level for rules.
+///
+/// Controls whether an issue type causes CI failure (`error`), is reported
+/// without failing (`warn`), or is suppressed entirely (`off`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// Report and fail CI (non-zero exit code).
+    #[default]
+    Error,
+    /// Report but don't fail CI.
+    Warn,
+    /// Don't detect or report.
+    Off,
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Error => write!(f, "error"),
+            Self::Warn => write!(f, "warn"),
+            Self::Off => write!(f, "off"),
+        }
+    }
+}
+
+impl std::str::FromStr for Severity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "error" => Ok(Self::Error),
+            "warn" | "warning" => Ok(Self::Warn),
+            "off" | "none" => Ok(Self::Off),
+            other => Err(format!(
+                "unknown severity: '{other}' (expected error, warn, or off)"
+            )),
+        }
+    }
+}
+
+/// Per-issue-type severity configuration.
+///
+/// Controls which issue types cause CI failure, are reported as warnings,
+/// or are suppressed entirely. All fields default to `Severity::Error`
+/// for backwards compatibility.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RulesConfig {
+    #[serde(default)]
+    pub unused_files: Severity,
+    #[serde(default)]
+    pub unused_exports: Severity,
+    #[serde(default)]
+    pub unused_types: Severity,
+    #[serde(default)]
+    pub unused_dependencies: Severity,
+    #[serde(default)]
+    pub unused_dev_dependencies: Severity,
+    #[serde(default)]
+    pub unused_enum_members: Severity,
+    #[serde(default)]
+    pub unused_class_members: Severity,
+    #[serde(default)]
+    pub unresolved_imports: Severity,
+    #[serde(default)]
+    pub unlisted_dependencies: Severity,
+    #[serde(default)]
+    pub duplicate_exports: Severity,
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        Self {
+            unused_files: Severity::Error,
+            unused_exports: Severity::Error,
+            unused_types: Severity::Error,
+            unused_dependencies: Severity::Error,
+            unused_dev_dependencies: Severity::Error,
+            unused_enum_members: Severity::Error,
+            unused_class_members: Severity::Error,
+            unresolved_imports: Severity::Error,
+            unlisted_dependencies: Severity::Error,
+            duplicate_exports: Severity::Error,
+        }
+    }
+}
+
+impl RulesConfig {
+    /// Merge `DetectConfig` booleans: if `detect.X = false`, force `rules.X = Off`.
+    pub fn merge_detect(&mut self, detect: &DetectConfig) {
+        if !detect.unused_files {
+            self.unused_files = Severity::Off;
+        }
+        if !detect.unused_exports {
+            self.unused_exports = Severity::Off;
+        }
+        if !detect.unused_types {
+            self.unused_types = Severity::Off;
+        }
+        if !detect.unused_dependencies {
+            self.unused_dependencies = Severity::Off;
+        }
+        if !detect.unused_dev_dependencies {
+            self.unused_dev_dependencies = Severity::Off;
+        }
+        if !detect.unused_enum_members {
+            self.unused_enum_members = Severity::Off;
+        }
+        if !detect.unused_class_members {
+            self.unused_class_members = Severity::Off;
+        }
+        if !detect.unresolved_imports {
+            self.unresolved_imports = Severity::Off;
+        }
+        if !detect.unlisted_dependencies {
+            self.unlisted_dependencies = Severity::Off;
+        }
+        if !detect.duplicate_exports {
+            self.duplicate_exports = Severity::Off;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +574,7 @@ ignore_dependencies = ["autoprefixer", "postcss"]
             ignore_exports: vec![],
             output: OutputFormat::Human,
             duplicates: DuplicatesConfig::default(),
+            rules: RulesConfig::default(),
         };
         let resolved = config.resolve(PathBuf::from("/tmp/test"), 4, true);
 
@@ -466,6 +600,7 @@ ignore_dependencies = ["autoprefixer", "postcss"]
             ignore_exports: vec![],
             output: OutputFormat::Json,
             duplicates: DuplicatesConfig::default(),
+            rules: RulesConfig::default(),
         };
         let resolved = config.resolve(PathBuf::from("/tmp/test"), 4, false);
 
@@ -487,6 +622,7 @@ ignore_dependencies = ["autoprefixer", "postcss"]
             ignore_exports: vec![],
             output: OutputFormat::Human,
             duplicates: DuplicatesConfig::default(),
+            rules: RulesConfig::default(),
         };
         let resolved = config.resolve(PathBuf::from("/tmp/project"), 4, true);
         assert_eq!(resolved.cache_dir, PathBuf::from("/tmp/project/.fallow"));
@@ -582,6 +718,87 @@ ignore_dependencies = ["autoprefixer", "postcss"]
         assert!(pkg.production_dependency_names().is_empty());
         assert!(pkg.dev_dependency_names().is_empty());
         assert!(pkg.entry_points().is_empty());
+    }
+
+    #[test]
+    fn rules_default_all_error() {
+        let rules = RulesConfig::default();
+        assert_eq!(rules.unused_files, Severity::Error);
+        assert_eq!(rules.unused_exports, Severity::Error);
+        assert_eq!(rules.unused_types, Severity::Error);
+        assert_eq!(rules.unused_dependencies, Severity::Error);
+        assert_eq!(rules.unused_dev_dependencies, Severity::Error);
+        assert_eq!(rules.unused_enum_members, Severity::Error);
+        assert_eq!(rules.unused_class_members, Severity::Error);
+        assert_eq!(rules.unresolved_imports, Severity::Error);
+        assert_eq!(rules.unlisted_dependencies, Severity::Error);
+        assert_eq!(rules.duplicate_exports, Severity::Error);
+    }
+
+    #[test]
+    fn rules_deserialize_mixed_severities() {
+        let toml_str = r#"
+[rules]
+unused_files = "error"
+unused_exports = "warn"
+unused_types = "off"
+"#;
+        let config: FallowConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.rules.unused_files, Severity::Error);
+        assert_eq!(config.rules.unused_exports, Severity::Warn);
+        assert_eq!(config.rules.unused_types, Severity::Off);
+        // Unset fields default to error
+        assert_eq!(config.rules.unresolved_imports, Severity::Error);
+    }
+
+    #[test]
+    fn detect_false_forces_severity_off() {
+        let toml_str = r#"
+[detect]
+unused_files = false
+
+[rules]
+unused_files = "error"
+"#;
+        let config: FallowConfig = toml::from_str(toml_str).unwrap();
+        let resolved = config.resolve(PathBuf::from("/tmp/test"), 4, true);
+        // detect=false overrides rules=error → off
+        assert_eq!(resolved.rules.unused_files, Severity::Off);
+    }
+
+    #[test]
+    fn rules_off_independent_of_detect() {
+        let toml_str = r#"
+[detect]
+unused_files = true
+
+[rules]
+unused_files = "off"
+"#;
+        let config: FallowConfig = toml::from_str(toml_str).unwrap();
+        let resolved = config.resolve(PathBuf::from("/tmp/test"), 4, true);
+        // detect=true but rules=off → off (rules win when detect is true)
+        assert_eq!(resolved.rules.unused_files, Severity::Off);
+    }
+
+    #[test]
+    fn severity_from_str() {
+        assert_eq!("error".parse::<Severity>().unwrap(), Severity::Error);
+        assert_eq!("warn".parse::<Severity>().unwrap(), Severity::Warn);
+        assert_eq!("warning".parse::<Severity>().unwrap(), Severity::Warn);
+        assert_eq!("off".parse::<Severity>().unwrap(), Severity::Off);
+        assert_eq!("none".parse::<Severity>().unwrap(), Severity::Off);
+        assert!("invalid".parse::<Severity>().is_err());
+    }
+
+    #[test]
+    fn config_without_rules_defaults_to_error() {
+        let toml_str = r#"
+entry = ["src/main.ts"]
+"#;
+        let config: FallowConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.rules.unused_files, Severity::Error);
+        assert_eq!(config.rules.unused_exports, Severity::Error);
     }
 
     #[test]

@@ -57,6 +57,19 @@ impl Plugin for RollupPlugin {
             result.referenced_dependencies.push(dep);
         }
 
+        // input → entry points (string, array, or object)
+        let inputs = config_parser::extract_config_string_or_array(source, config_path, &["input"]);
+        result.entry_patterns.extend(inputs);
+
+        // external → referenced dependencies (string array)
+        let external =
+            config_parser::extract_config_shallow_strings(source, config_path, "external");
+        for ext in &external {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(ext));
+        }
+
         result
     }
 }

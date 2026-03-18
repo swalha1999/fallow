@@ -64,6 +64,22 @@ impl Plugin for WebpackPlugin {
             result.referenced_dependencies.push(dep);
         }
 
+        // entry → entry points (string, array, or object with string values)
+        // e.g. entry: "./src/index.js"
+        // e.g. entry: { main: "./src/main.js", vendor: "./src/vendor.js" }
+        let entries =
+            config_parser::extract_config_string_or_array(source, config_path, &["entry"]);
+        result.entry_patterns.extend(entries);
+
+        // require() calls for loaders/plugins in CJS configs
+        let require_deps =
+            config_parser::extract_config_require_strings(source, config_path, "plugins");
+        for dep in &require_deps {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(dep));
+        }
+
         result
     }
 }

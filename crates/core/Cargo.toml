@@ -21,6 +21,9 @@ oxc_syntax = { workspace = true }
 # Parallelism
 rayon = { workspace = true }
 
+# Concurrent data structures
+dashmap = { workspace = true }
+
 # File system
 ignore = { workspace = true }
 globset = { workspace = true }

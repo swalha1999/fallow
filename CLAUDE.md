@@ -10,7 +10,7 @@ Fallow finds unused files, exports, dependencies, types, enum members, class mem
 crates/
   config/   — Configuration types, custom framework presets, package.json parsing, workspace discovery
   core/     — Analysis engine: discovery, parsing, resolution, graph, plugins, caching, progress
-  cli/      — CLI binary (check, watch, fix, init, list commands)
+  cli/      — CLI binary (check, dupes, watch, fix, init, list, schema commands)
   lsp/      — LSP server with diagnostics, code actions
 npm/
   fallow/   — npm wrapper package with optionalDependencies pattern
@@ -20,15 +20,17 @@ tests/
 
 ## Architecture
 
-Pipeline: Config → File Discovery → Parallel Parsing (rayon + oxc_parser) → Module Resolution (oxc_resolver) → Graph Construction → Re-export Chain Resolution → Dead Code Detection → Reporting
+Pipeline: Config → File Discovery → Parallel Parsing (rayon + oxc_parser) → Script Analysis → Module Resolution (oxc_resolver) → Graph Construction → Re-export Chain Resolution → Dead Code Detection → Reporting
 
 Key modules in fallow-core:
 - `discover.rs` — File walking + entry point detection (also workspace-aware)
 - `extract.rs` — AST visitor extracting imports, exports, re-exports, members, whole-object uses, dynamic import patterns; SFC (Vue/Svelte) script extraction
-- `resolve.rs` — oxc_resolver-based import resolution + glob-based dynamic import pattern resolution
+- `resolve.rs` — oxc_resolver-based import resolution + glob-based dynamic import pattern resolution + DashMap-backed bare specifier cache for lock-free parallel lookups
 - `graph.rs` — Module graph with re-export chain propagation
-- `analyze.rs` — Dead code detection (10 issue types)
-- `plugins/` — Plugin system: `Plugin` trait, registry, AST-based config parsing (40 built-in plugins)
+- `analyze.rs` — Dead code detection (10 issue types) with inline suppression filtering
+- `scripts.rs` — Shell command parser for package.json scripts: extracts binary names (mapped to package names for dependency usage detection), `--config` args (entry points), and file path args; handles env wrappers, package manager runners, node runners
+- `suppress.rs` — Inline suppression comment parsing (`fallow-ignore-next-line`, `fallow-ignore-file`)
+- `plugins/` — Plugin system: `Plugin` trait, registry (40 built-in plugins, ~20 with AST-based config parsing); `config_parser.rs` provides Oxc-based helpers for extracting imports, string arrays, object keys, require() sources, and string-or-array values from JS/TS/JSON config files
 - `cache.rs` — Incremental bincode cache with xxh3 hashing
 - `progress.rs` — indicatif progress bars
 - `errors.rs` — Error types
@@ -55,6 +57,8 @@ cargo run -- fix --dry-run      # Auto-fix preview
 5. Re-export chain resolution through barrel files
 6. Vue/Svelte SFC parsing (regex-based `<script>` block extraction, `lang="ts"` detection)
 7. Dynamic import pattern resolution (template literals, string concat, import.meta.glob, require.context → glob matching against discovered files)
+8. Inline suppression comments (`// fallow-ignore-next-line [issue-type]`, `// fallow-ignore-file [issue-type]`)
+9. Script binary analysis (package.json scripts → binary names mapped to packages, `--config` args as entry points, env wrapper/package manager runner handling)
 
 ## Framework support (40 plugins)
 
@@ -75,20 +79,48 @@ cargo run -- fix --dry-run      # Auto-fix preview
 
 ## CLI features
 
-- `check` — analyze with --format (human/json/sarif/compact), --changed-since, --baseline, --save-baseline, issue type filters (--unused-files, --unused-exports, etc.)
+- `check` — analyze with --format (human/json/sarif/compact), --changed-since, --baseline, --save-baseline, --fail-on-issues, issue type filters (--unused-files, --unused-exports, etc.)
 - `watch` — file watcher with debounced re-analysis
 - `fix` — auto-remove unused exports and deps (--dry-run, --format json for structured output)
-- `init` — create fallow.toml
+- `init` — create fallow.toml (includes commented `[rules]` section)
 - `list` — show active plugins, entry points, files (--format json for structured output)
 - `schema` — dump CLI interface as machine-readable JSON for agent introspection
 
 See `AGENTS.md` for AI agent integration guide.
 
+## Rules system
+
+Per-issue-type severity in `fallow.toml` for incremental CI adoption:
+
+```toml
+[rules]
+unused_files = "error"       # fail CI (exit 1)
+unused_exports = "warn"      # report but don't fail
+unused_types = "off"         # ignore entirely
+unresolved_imports = "error"
+```
+
+- `error` — report and fail CI (non-zero exit code)
+- `warn` — report but exit 0
+- `off` — don't detect or report
+- All default to `error` when omitted (backwards compatible)
+- `[detect] unused_X = false` still works and forces `Severity::Off`
+- `--fail-on-issues` promotes all `warn` to `error` for that run
+- Human output colors reflect severity; SARIF levels are dynamic
+
+## Inline suppression comments
+
+- `// fallow-ignore-next-line` — suppress any issue on the next line
+- `// fallow-ignore-next-line unused-export` — suppress specific issue type
+- `// fallow-ignore-file` — suppress all issues in a file
+- `// fallow-ignore-file unused-export` — suppress specific issue type file-wide
+
 ## Key design decisions
 
 - **No TypeScript compiler dependency**: Syntactic analysis only via Oxc. This is the speed advantage.
-- **Plugin system**: Single source of truth for framework support. Rust trait-based plugins with AST-based config parsing (no JavaScript evaluation). Static patterns for common cases, dynamic Oxc parsing for tool configs. 40 built-in plugins covering ~99% of the JS/TS ecosystem.
+- **Plugin system**: Single source of truth for framework support. Rust trait-based plugins with static patterns for common cases and optional AST-based config parsing via Oxc for ~20 plugins (no JavaScript evaluation), 15 with rich config extraction (entry points, dependencies, setup files from config objects). 40 built-in plugins covering the most popular JS/TS frameworks.
 - **Flat edge storage**: Contiguous `Vec<Edge>` with range indices for cache-friendly traversal.
+- **Lock-free parallel resolution**: Bare specifier cache uses `DashMap` (sharded concurrent map) for contention-free reads under rayon work-stealing.
 - **Re-export chain resolution**: Iterative propagation through barrel files with cycle detection.
 - **Workspace support**: npm/yarn/pnpm workspaces, pnpm-workspace.yaml.
 

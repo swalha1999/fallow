@@ -179,10 +179,10 @@ fn apply_default_fallback(
     let mut entries = Vec::new();
     for file in files {
         // Use strip_prefix instead of canonicalize for workspace filtering
-        if let Some(ws_root) = ws_filter {
-            if file.path.strip_prefix(ws_root).is_err() {
-                continue;
-            }
+        if let Some(ws_root) = ws_filter
+            && file.path.strip_prefix(ws_root).is_err()
+        {
+            continue;
         }
         let relative = file.path.strip_prefix(root).unwrap_or(&file.path);
         let relative_str = relative.to_string_lossy();

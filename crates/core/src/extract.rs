@@ -12,6 +12,7 @@ use rayon::prelude::*;
 
 use crate::cache::CacheStore;
 use crate::discover::{DiscoveredFile, FileId};
+use crate::suppress::Suppression;
 
 /// Extracted module information from a single file.
 #[derive(Debug, Clone)]
@@ -29,6 +30,8 @@ pub struct ModuleInfo {
     pub whole_object_uses: Vec<String>,
     pub has_cjs_exports: bool,
     pub content_hash: u64,
+    /// Inline suppression directives parsed from comments.
+    pub suppressions: Vec<Suppression>,
 }
 
 /// A dynamic import with a pattern that can be partially resolved (e.g., template literals).
@@ -281,6 +284,10 @@ pub(crate) fn is_sfc_file(path: &Path) -> bool {
 fn parse_sfc_to_module(file_id: FileId, source: &str, content_hash: u64) -> ModuleInfo {
     let scripts = extract_sfc_scripts(source);
 
+    // For SFC files, use string scanning for suppression comments since script block
+    // byte offsets don't correspond to the original file positions.
+    let suppressions = crate::suppress::parse_suppressions_from_source(source);
+
     let mut combined = ModuleInfo {
         file_id,
         exports: Vec::new(),
@@ -293,6 +300,7 @@ fn parse_sfc_to_module(file_id: FileId, source: &str, content_hash: u64) -> Modu
         whole_object_uses: Vec::new(),
         has_cjs_exports: false,
         content_hash,
+        suppressions,
     };
 
     for script in &scripts {
@@ -339,6 +347,9 @@ fn parse_source_to_module(
     let allocator = Allocator::default();
     let parser_return = Parser::new(&allocator, source, source_type).parse();
 
+    // Parse suppression comments
+    let suppressions = crate::suppress::parse_suppressions(&parser_return.program.comments, source);
+
     // Extract imports/exports even if there are parse errors
     let mut extractor = ModuleInfoExtractor::new();
     extractor.visit_program(&parser_return.program);
@@ -377,6 +388,7 @@ fn parse_source_to_module(
         whole_object_uses: extractor.whole_object_uses,
         has_cjs_exports: extractor.has_cjs_exports,
         content_hash,
+        suppressions,
     }
 }
 

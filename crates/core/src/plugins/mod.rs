@@ -236,6 +236,8 @@ pub struct AggregatedPluginResult {
     pub setup_files: Vec<PathBuf>,
     /// Tooling dependencies (should not be flagged as unused devDeps).
     pub tooling_dependencies: Vec<String>,
+    /// Package names discovered as used in package.json scripts (binary invocations).
+    pub script_used_packages: std::collections::HashSet<String>,
     /// Names of active plugins.
     pub active_plugins: Vec<String>,
 }

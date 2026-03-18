@@ -593,6 +593,7 @@ fn bench_cache_round_trip(c: &mut Criterion) {
         dynamic_import_patterns: vec![],
         has_cjs_exports: false,
         content_hash: 0xDEAD_BEEF_CAFE_1234,
+        suppressions: vec![],
     };
 
     c.bench_function("cache_round_trip", |b| {

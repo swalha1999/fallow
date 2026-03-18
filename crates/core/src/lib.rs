@@ -9,6 +9,8 @@ pub mod plugins;
 pub mod progress;
 pub mod resolve;
 pub mod results;
+pub mod scripts;
+pub mod suppress;
 
 use std::path::Path;
 use std::time::Instant;
@@ -44,8 +46,47 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, FallowError> 
 
     // Stage 1.5: Run plugin system — parse config files, discover dynamic entries
     let t = Instant::now();
-    let plugin_result = run_plugins(config, &files, &workspaces);
+    let mut plugin_result = run_plugins(config, &files, &workspaces);
     let plugins_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Stage 1.6: Analyze package.json scripts for binary usage and config file refs
+    let t = Instant::now();
+    let pkg_path = config.root.join("package.json");
+    if let Ok(pkg) = PackageJson::load(&pkg_path)
+        && let Some(ref pkg_scripts) = pkg.scripts
+    {
+        let script_analysis = scripts::analyze_scripts(pkg_scripts, &config.root);
+        plugin_result.script_used_packages = script_analysis.used_packages;
+
+        // Add config files from scripts as entry points (resolved later)
+        for config_file in &script_analysis.config_files {
+            plugin_result.entry_patterns.push(config_file.clone());
+        }
+    }
+    // Also analyze workspace package.json scripts
+    for ws in &workspaces {
+        let ws_pkg_path = ws.root.join("package.json");
+        if let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path)
+            && let Some(ref ws_scripts) = ws_pkg.scripts
+        {
+            let ws_analysis = scripts::analyze_scripts(ws_scripts, &ws.root);
+            plugin_result
+                .script_used_packages
+                .extend(ws_analysis.used_packages);
+
+            let ws_prefix = ws
+                .root
+                .strip_prefix(&config.root)
+                .unwrap_or(&ws.root)
+                .to_string_lossy();
+            for config_file in &ws_analysis.config_files {
+                plugin_result
+                    .entry_patterns
+                    .push(format!("{ws_prefix}/{config_file}"));
+            }
+        }
+    }
+    let scripts_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Stage 2: Parse all files in parallel and extract imports/exports
     let t = Instant::now();
@@ -96,8 +137,14 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, FallowError> 
 
     // Stage 6: Analyze for dead code (with plugin context and workspace info)
     let t = Instant::now();
-    let result =
-        analyze::find_dead_code_full(&graph, config, &resolved, Some(&plugin_result), &workspaces);
+    let result = analyze::find_dead_code_full(
+        &graph,
+        config,
+        &resolved,
+        Some(&plugin_result),
+        &workspaces,
+        &modules,
+    );
     let analyze_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     let total_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
@@ -107,6 +154,7 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, FallowError> 
          │  discover files:   {:>8.1}ms  ({} files)\n\
          │  workspaces:       {:>8.1}ms\n\
          │  plugins:          {:>8.1}ms\n\
+         │  script analysis:  {:>8.1}ms\n\
          │  parse/extract:    {:>8.1}ms  ({} modules)\n\
          │  cache update:     {:>8.1}ms\n\
          │  entry points:     {:>8.1}ms  ({} entries)\n\
@@ -120,6 +168,7 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, FallowError> 
         files.len(),
         workspaces_ms,
         plugins_ms,
+        scripts_ms,
         parse_ms,
         modules.len(),
         cache_ms,
@@ -226,6 +275,7 @@ pub(crate) fn default_config(root: &Path) -> ResolvedConfig {
             ignore_exports: vec![],
             output: fallow_config::OutputFormat::Human,
             duplicates: fallow_config::DuplicatesConfig::default(),
+            rules: fallow_config::RulesConfig::default(),
         }
         .resolve(root.to_path_buf(), num_cpus(), false),
     }

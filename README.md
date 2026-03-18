@@ -14,7 +14,7 @@
 
 ---
 
-Finds unused files, exports, dependencies, and types — plus duplicated code blocks across your entire codebase. Dead code and duplication increase bundle sizes, slow CI, and make codebases harder to navigate. fallow finds both in seconds, not minutes. 12-35x faster than [knip](https://knip.dev) for dead code analysis, 10-500x faster than [jscpd](https://github.com/kucherenko/jscpd) for duplication detection, with no Node.js runtime dependency.
+Finds unused files, exports, dependencies, and types — plus duplicated code blocks across your entire codebase. Dead code and duplication increase bundle sizes, slow CI, and make codebases harder to navigate. fallow finds both in seconds, not minutes. 25-40x faster than [knip](https://knip.dev) for dead code analysis, 4-75x faster than [jscpd](https://github.com/kucherenko/jscpd) for duplication detection, with no Node.js runtime dependency.
 
 ```bash
 npx fallow check    # Dead code analysis
@@ -46,8 +46,8 @@ cargo install fallow-cli     # Or via cargo
 - **Unused files** — not reachable from any entry point
 - **Unused exports** — exported symbols never imported elsewhere
 - **Unused types** — type aliases and interfaces never referenced
-- **Unused dependencies** — packages in `dependencies` never imported
-- **Unused devDependencies** — packages in `devDependencies` never imported
+- **Unused dependencies** — packages in `dependencies` never imported or used as script binaries
+- **Unused devDependencies** — packages in `devDependencies` never imported or used as script binaries
 - **Unused enum members** — enum values never referenced
 - **Unused class members** — class methods and properties never referenced
 - **Unresolved imports** — import specifiers that cannot be resolved
@@ -56,7 +56,7 @@ cargo install fallow-cli     # Or via cargo
 
 ## Code duplication
 
-`fallow dupes` finds copy-pasted code blocks across your entire codebase — one tool for both dead code and duplication, no separate jscpd/CPD setup needed. 10-500x faster than jscpd on real-world projects.
+`fallow dupes` finds copy-pasted code blocks across your entire codebase — one tool for both dead code and duplication, no separate jscpd/CPD setup needed. 4-75x faster than jscpd on real-world projects.
 
 ```bash
 fallow dupes                    # Default: mild mode
@@ -111,10 +111,10 @@ node bench-dupes.mjs          # Run duplication benchmarks
 
 | | fallow | knip |
 |:--|:-------|:-----|
-| Speed (real-world) | **12-35x faster** | Baseline |
+| Speed (real-world) | **25-40x faster** | Baseline |
 | Dead code detection | 10 issue types | Comparable |
 | Duplication detection | Built-in | Not included |
-| Framework plugins | 40 (AST-based config parsing) | 140+ (pattern-based) |
+| Framework plugins | 40 (20 with config parsing) | 140+ (runtime config loading) |
 | Runtime dependency | None (standalone binary) | Node.js |
 | Config format | TOML | JSON |
 
@@ -124,7 +124,7 @@ knip is a good tool with broader framework coverage. fallow covers the most popu
 
 | | fallow | jscpd |
 |:--|:-------|:------|
-| Speed (real-world) | **10-500x faster** | Baseline |
+| Speed (real-world) | **4-75x faster** | Baseline |
 | Detection modes | 4 (strict, mild, weak, semantic) | 1 (token-based) |
 | Algorithm | Suffix array with LCP | Rabin-Karp rolling hash |
 | Dead code integration | Built-in (`fallow check`) | Not included |
@@ -148,13 +148,20 @@ unused_exports = true
 unused_dependencies = true
 unused_types = true
 duplicate_exports = true
+
+# Per-issue-type severity: "error" (fail CI), "warn" (report only), "off" (ignore)
+[rules]
+unused_files = "error"
+unused_exports = "warn"
+unused_types = "off"
+unresolved_imports = "error"
 ```
 
-See the [full configuration reference](https://github.com/fallow-rs/fallow/wiki/Configuration) for all options, including `[dupes]` settings, `[[ignore_exports]]` rules, and custom framework presets.
+See the [full configuration reference](https://github.com/fallow-rs/fallow/wiki/Configuration) for all options, including `[rules]` severity levels, `[duplicates]` settings, `[[ignore_exports]]` rules, and custom framework presets.
 
 ## Framework support
 
-Built-in support for Next.js, Vite, Vitest, Jest, Storybook, Remix, Astro, Nuxt, Angular, Playwright, Cypress, Prisma, ESLint, TypeScript, Webpack, Tailwind CSS, React Router, React Native, Expo, Sentry, Drizzle, Knex, and MSW. If your framework isn't listed, you can add a [custom preset](https://github.com/fallow-rs/fallow/wiki/Custom-Presets) in `fallow.toml`.
+40 built-in plugins covering frameworks (Next.js, Nuxt, Remix, Astro, Angular, React Router, React Native, Expo, NestJS, Docusaurus), bundlers (Vite, Webpack, Rollup, Tsup), testing (Vitest, Jest, Playwright, Cypress, Mocha, Ava, Storybook), linting (ESLint, Biome, Stylelint, Commitlint), transpilation (TypeScript, Babel), CSS (Tailwind, PostCSS), databases (Prisma, Drizzle, Knex), monorepos (Turborepo, Nx, Changesets), CI/CD (semantic-release), deployment (Wrangler, Sentry), and more (GraphQL Codegen, MSW). If your framework isn't listed, you can add a [custom preset](https://github.com/fallow-rs/fallow/wiki/Custom-Presets) in `fallow.toml`.
 
 ## CI integration
 
@@ -168,19 +175,46 @@ Built-in support for Next.js, Vite, Vitest, Jest, Storybook, Remix, Astro, Nuxt,
 - run: npx fallow check --format sarif > results.sarif
 ```
 
-Supports `--changed-since main` for PR-only analysis, `--baseline` for failing only on new issues, and `--format json` for machine-readable output. See the [CI guide](https://github.com/fallow-rs/fallow/wiki/CI-Integration) for full workflow examples.
+Supports `--changed-since main` for PR-only analysis, `--baseline` for failing only on new issues, `--format json` for machine-readable output, and per-issue-type severity rules (`error`/`warn`/`off`) for incremental adoption. See the [CI guide](https://github.com/fallow-rs/fallow/wiki/CI-Integration) for full workflow examples.
 
 ## Additional features
 
+- **Rules system** — per-issue-type severity (`error`/`warn`/`off`) for incremental CI adoption
+- **Inline suppression** — `// fallow-ignore-next-line` and `// fallow-ignore-file` comments to suppress individual findings
 - **Watch mode** — `fallow watch` re-analyzes on file changes
 - **Auto-fix** — `fallow fix` removes unused exports and dependencies (`--dry-run` to preview)
 - **LSP server** — real-time diagnostics and "remove unused export" code actions in your editor
 - **Workspace support** — npm, yarn, and pnpm workspaces (including `pnpm-workspace.yaml`)
+- **Script binary analysis** — parses `package.json` scripts to detect CLI tool usage, reducing false positives in unused dependency detection
 - **Dynamic import resolution** — partial resolution of template literals, `import.meta.glob`, and `require.context`
+
+## Inline suppression comments
+
+Suppress specific findings directly in source code — useful for false positives or intentional exceptions:
+
+```ts
+// fallow-ignore-next-line
+export const keepThis = 1;
+
+// fallow-ignore-next-line unused-export
+export const keepThisToo = 2;
+
+// fallow-ignore-file unused-export
+// Suppresses all unused-export findings in this file
+```
+
+| Comment | Effect |
+|:--------|:-------|
+| `// fallow-ignore-next-line` | Suppress all issues on the next line |
+| `// fallow-ignore-next-line unused-export` | Suppress a specific issue type on the next line |
+| `// fallow-ignore-file` | Suppress all issues in the file |
+| `// fallow-ignore-file unused-export` | Suppress a specific issue type for the file |
+
+Issue type tokens: `unused-file`, `unused-export`, `unused-type`, `unused-dependency`, `unused-dev-dependency`, `unused-enum-member`, `unused-class-member`, `unresolved-import`, `unlisted-dependency`, `duplicate-export`.
 
 ## Limitations
 
-fallow uses syntactic analysis only — no type information. This is what makes it fast, but it means type-level dead code is out of scope, and some edge cases (Svelte `export let` props, Vue/Svelte template-only imports) may produce false positives. See [`ignore_exports`](https://github.com/fallow-rs/fallow/wiki/Configuration#ignoring-specific-exports) to suppress these.
+fallow uses syntactic analysis only — no type information. This is what makes it fast, but it means type-level dead code is out of scope, and some edge cases (Svelte `export let` props, Vue/Svelte template-only imports) may produce false positives. Use [inline suppression comments](#inline-suppression-comments) or [`ignore_exports`](https://github.com/fallow-rs/fallow/wiki/Configuration#ignoring-specific-exports) to suppress these.
 
 ## Learn more
 

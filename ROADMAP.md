@@ -111,10 +111,10 @@ Add the most-requested plugins based on GitHub issues, not a waterfall list. Lik
 ### 2.5 Compilers for Non-JS File Types
 
 Extend import extraction to `.astro`, `.mdx`, and improve existing `.vue`/`.svelte` SFC support:
-- `.astro` components (extract frontmatter imports)
-- `.mdx` files (extract import statements)
-- `.css`/`.scss` with Tailwind (extract `@apply` class references)
-- Audit existing Vue/Svelte regex extraction against edge cases (multiple `<script>` blocks, `<script setup>`, `lang="tsx"`) and upgrade to a proper parser if the regex approach proves insufficient on real projects
+- `.astro` components (extract frontmatter imports) ✅
+- `.mdx` files (extract import statements) ✅
+- `.css`/`.scss` with Tailwind (extract `@apply` class references) ✅
+- Audit existing Vue/Svelte regex extraction against edge cases (multiple `<script>` blocks, `<script setup>`, `lang="tsx"`) and upgrade to a proper parser if the regex approach proves insufficient on real projects ✅
 
 ### 2.6 Duplication: Semantic Mode Improvements
 
@@ -154,7 +154,7 @@ Extend import extraction to `.astro`, `.mdx`, and improve existing `.vue`/`.svel
 - [x] `--trace <file:export>` — why is this export considered used/unused?
 - [x] `--trace-file <path>` — all edges for a file
 - [x] `--trace-dependency <name>` — where is this dep used?
-- [ ] `fallow dupes --trace <file:line>` — show all clones of the block at this location
+- [x] `fallow dupes --trace <file:line>` — show all clones of the block at this location
 - [x] `--performance` — timing breakdown per phase
 
 ---

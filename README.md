@@ -65,6 +65,7 @@ fallow dupes --skip-local       # Only cross-directory duplicates
 fallow dupes --threshold 5      # Fail CI if duplication exceeds 5%
 fallow dupes --save-baseline    # Save current duplication as baseline
 fallow dupes --baseline         # Fail only on new duplication vs baseline
+fallow dupes --trace src/utils.ts:42  # Show all clones of code at this location
 ```
 
 | Mode | What it catches |
@@ -208,6 +209,7 @@ Supports `--changed-since main` for PR-only analysis, `--baseline` for failing o
 - **Workspace support** — npm, yarn, and pnpm workspaces (including `pnpm-workspace.yaml`)
 - **Script binary analysis** — parses `package.json` scripts to detect CLI tool usage, reducing false positives in unused dependency detection
 - **Dynamic import resolution** — partial resolution of template literals, `import.meta.glob`, and `require.context`
+- **Non-JS file support** — Vue/Svelte SFC (`<script>` block extraction), Astro (frontmatter), MDX (import/export statements), CSS/SCSS (`@import`, `@use`, `@forward`, `@apply`/`@tailwind` as Tailwind dependency usage)
 - **Production mode** — `--production` excludes test/story/dev files, only considers start/build scripts, and reports type-only dependencies that could be devDependencies
 
 ## Inline suppression comments

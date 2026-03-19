@@ -24,7 +24,7 @@ impl AnalysisProgress {
         let pb = self.multi.add(ProgressBar::new_spinner());
         pb.set_style(
             ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                .unwrap()
+                .expect("valid progress template")
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
         );
         pb.set_message(message.to_string());
@@ -43,7 +43,7 @@ impl AnalysisProgress {
             ProgressStyle::with_template(
                 "{spinner:.cyan} {msg} [{bar:30.cyan/dim}] {pos}/{len} ({eta})",
             )
-            .unwrap()
+            .expect("valid progress template")
             .progress_chars("━━╸━"),
         );
         pb.set_message(message.to_string());

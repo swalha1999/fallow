@@ -42,8 +42,8 @@ impl ProjectState {
     }
 
     /// Look up a file by its `FileId`.
-    pub fn file_by_id(&self, id: FileId) -> &DiscoveredFile {
-        &self.files[id.0 as usize]
+    pub fn file_by_id(&self, id: FileId) -> Option<&DiscoveredFile> {
+        self.files.get(id.0 as usize)
     }
 
     /// Look up a `FileId` by absolute path.
@@ -53,7 +53,7 @@ impl ProjectState {
 
     /// Find which workspace a file belongs to, if any.
     pub fn workspace_for_file(&self, id: FileId) -> Option<&WorkspaceInfo> {
-        let path = &self.files[id.0 as usize].path;
+        let path = &self.files.get(id.0 as usize)?.path;
         self.workspaces.iter().find(|ws| path.starts_with(&ws.root))
     }
 

@@ -90,10 +90,11 @@ pub fn find_dead_code_full(
 
     // Build merged dependency set from root + all workspace package.json files
     let pkg_path = config.root.join("package.json");
-    if let Ok(pkg) = PackageJson::load(&pkg_path) {
+    let pkg = PackageJson::load(&pkg_path).ok();
+    if let Some(ref pkg) = pkg {
         if config.detect.unused_dependencies || config.detect.unused_dev_dependencies {
             let (deps, dev_deps) =
-                find_unused_dependencies(graph, &pkg, config, plugin_result, workspaces);
+                find_unused_dependencies(graph, pkg, config, plugin_result, workspaces);
             if config.detect.unused_dependencies {
                 results.unused_dependencies = deps;
             }
@@ -104,7 +105,7 @@ pub fn find_dead_code_full(
 
         if config.detect.unlisted_dependencies {
             results.unlisted_dependencies =
-                find_unlisted_dependencies(graph, &pkg, config, workspaces);
+                find_unlisted_dependencies(graph, pkg, config, workspaces);
         }
     }
 
@@ -118,12 +119,11 @@ pub fn find_dead_code_full(
     }
 
     // In production mode, detect dependencies that are only used via type-only imports
-    if config.production {
-        let pkg_path = config.root.join("package.json");
-        if let Ok(pkg) = PackageJson::load(&pkg_path) {
-            results.type_only_dependencies =
-                find_type_only_dependencies(graph, &pkg, config, workspaces);
-        }
+    if config.production
+        && let Some(ref pkg) = pkg
+    {
+        results.type_only_dependencies =
+            find_type_only_dependencies(graph, pkg, config, workspaces);
     }
 
     // Collect export usage counts for Code Lens (LSP feature)
@@ -578,25 +578,16 @@ fn find_unused_dependencies(
 
         // Check workspace production dependencies
         for dep in ws_pkg.production_dependency_names() {
-            if root_flagged.contains(&dep) {
-                continue; // Already flagged from root
-            }
-            if is_implicit_dependency(&dep) {
-                continue;
-            }
-            if script_used.contains(dep.as_str()) {
-                continue;
-            }
-            if plugin_referenced.contains(dep.as_str()) {
-                continue;
-            }
-            if config.ignore_dependencies.iter().any(|d| d == &dep) {
-                continue;
-            }
-            if workspace_names.contains(dep.as_str()) {
-                continue;
-            }
-            if is_used_in_workspace(&dep) {
+            if should_skip_dependency(
+                &dep,
+                &root_flagged,
+                &script_used,
+                &plugin_referenced,
+                &config.ignore_dependencies,
+                &workspace_names,
+                is_used_in_workspace,
+            ) || is_implicit_dependency(&dep)
+            {
                 continue;
             }
             unused_deps.push(UnusedDependency {
@@ -608,28 +599,17 @@ fn find_unused_dependencies(
 
         // Check workspace dev dependencies
         for dep in ws_pkg.dev_dependency_names() {
-            if root_flagged.contains(&dep) {
-                continue;
-            }
-            if is_tooling_dependency(&dep) {
-                continue;
-            }
-            if script_used.contains(dep.as_str()) {
-                continue;
-            }
-            if plugin_tooling.contains(dep.as_str()) {
-                continue;
-            }
-            if plugin_referenced.contains(dep.as_str()) {
-                continue;
-            }
-            if config.ignore_dependencies.iter().any(|d| d == &dep) {
-                continue;
-            }
-            if workspace_names.contains(dep.as_str()) {
-                continue;
-            }
-            if is_used_in_workspace(&dep) {
+            if should_skip_dependency(
+                &dep,
+                &root_flagged,
+                &script_used,
+                &plugin_referenced,
+                &config.ignore_dependencies,
+                &workspace_names,
+                is_used_in_workspace,
+            ) || is_tooling_dependency(&dep)
+                || plugin_tooling.contains(dep.as_str())
+            {
                 continue;
             }
             unused_dev_deps.push(UnusedDependency {
@@ -641,6 +621,28 @@ fn find_unused_dependencies(
     }
 
     (unused_deps, unused_dev_deps)
+}
+
+/// Check if a dependency should be skipped during unused dependency analysis.
+///
+/// Shared guard conditions for both production and dev dependency loops:
+/// already flagged from root, used in scripts, referenced by plugins, in ignore list,
+/// is a workspace package, or used by files in the workspace.
+fn should_skip_dependency(
+    dep: &str,
+    root_flagged: &HashSet<String>,
+    script_used: &HashSet<&str>,
+    plugin_referenced: &HashSet<&str>,
+    ignore_deps: &[String],
+    workspace_names: &HashSet<&str>,
+    is_used_in_workspace: impl Fn(&str) -> bool,
+) -> bool {
+    root_flagged.contains(dep)
+        || script_used.contains(dep)
+        || plugin_referenced.contains(dep)
+        || ignore_deps.iter().any(|d| d == dep)
+        || workspace_names.contains(dep)
+        || is_used_in_workspace(dep)
 }
 
 /// Find unused enum and class members in exported symbols.
@@ -656,9 +658,9 @@ fn find_unused_members(
     let mut unused_enum_members = Vec::new();
     let mut unused_class_members = Vec::new();
 
-    // Build a set of (export_name, member_name) pairs that are accessed across all modules.
+    // Map export_name -> set of member_names that are accessed across all modules.
     // We map local import names back to the original imported names.
-    let mut accessed_members: HashSet<(String, String)> = HashSet::new();
+    let mut accessed_members: HashMap<String, HashSet<String>> = HashMap::new();
 
     // Also build a per-file set of `this.member` accesses. These indicate internal usage
     // within a class body — class members accessed via `this.foo` are used internally
@@ -700,7 +702,10 @@ fn find_unused_members(
                 .get(access.object.as_str())
                 .copied()
                 .unwrap_or(access.object.as_str());
-            accessed_members.insert((export_name.to_string(), access.member.clone()));
+            accessed_members
+                .entry(export_name.to_string())
+                .or_default()
+                .insert(access.member.clone());
         }
 
         // Map whole-object uses from local names to imported names
@@ -744,7 +749,10 @@ fn find_unused_members(
 
             for member in &export.members {
                 // Check if this member is accessed anywhere via external import
-                if accessed_members.contains(&(export_name.clone(), member.name.clone())) {
+                if accessed_members
+                    .get(&export_name)
+                    .is_some_and(|s| s.contains(&member.name))
+                {
                     continue;
                 }
 

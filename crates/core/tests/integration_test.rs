@@ -952,13 +952,14 @@ fn project_state_workspace_queries() {
 
     // All app files should be under the app workspace root
     for fid in &app_files {
-        let file = project.file_by_id(*fid);
-        assert!(
-            file.path.starts_with(&app_ws.root),
-            "File {:?} should be under app workspace root {:?}",
-            file.path,
-            app_ws.root
-        );
+        if let Some(file) = project.file_by_id(*fid) {
+            assert!(
+                file.path.starts_with(&app_ws.root),
+                "File {:?} should be under app workspace root {:?}",
+                file.path,
+                app_ws.root
+            );
+        }
     }
 }
 

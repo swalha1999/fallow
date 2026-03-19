@@ -106,7 +106,6 @@ struct Edge {
 #[derive(Debug)]
 struct ImportedSymbol {
     imported_name: ImportedName,
-    #[allow(dead_code)]
     local_name: String,
     /// Byte span of the import statement in the source file.
     import_span: oxc_span::Span,

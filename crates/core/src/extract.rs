@@ -508,20 +508,7 @@ fn parse_sfc_to_module(file_id: FileId, source: &str, content_hash: u64) -> Modu
         let parser_return = Parser::new(&allocator, &script.body, source_type).parse();
         let mut extractor = ModuleInfoExtractor::new();
         extractor.visit_program(&parser_return.program);
-
-        combined.imports.extend(extractor.imports);
-        combined.exports.extend(extractor.exports);
-        combined.re_exports.extend(extractor.re_exports);
-        combined.dynamic_imports.extend(extractor.dynamic_imports);
-        combined
-            .dynamic_import_patterns
-            .extend(extractor.dynamic_import_patterns);
-        combined.require_calls.extend(extractor.require_calls);
-        combined.member_accesses.extend(extractor.member_accesses);
-        combined
-            .whole_object_uses
-            .extend(extractor.whole_object_uses);
-        combined.has_cjs_exports |= extractor.has_cjs_exports;
+        extractor.merge_into(&mut combined);
     }
 
     combined
@@ -531,40 +518,16 @@ fn parse_sfc_to_module(file_id: FileId, source: &str, content_hash: u64) -> Modu
 fn parse_astro_to_module(file_id: FileId, source: &str, content_hash: u64) -> ModuleInfo {
     let suppressions = crate::suppress::parse_suppressions_from_source(source);
 
-    let mut info = ModuleInfo {
-        file_id,
-        exports: Vec::new(),
-        imports: Vec::new(),
-        re_exports: Vec::new(),
-        dynamic_imports: Vec::new(),
-        dynamic_import_patterns: Vec::new(),
-        require_calls: Vec::new(),
-        member_accesses: Vec::new(),
-        whole_object_uses: Vec::new(),
-        has_cjs_exports: false,
-        content_hash,
-        suppressions,
-    };
-
     if let Some(script) = extract_astro_frontmatter(source) {
         let source_type = SourceType::ts();
         let allocator = Allocator::default();
         let parser_return = Parser::new(&allocator, &script.body, source_type).parse();
         let mut extractor = ModuleInfoExtractor::new();
         extractor.visit_program(&parser_return.program);
-
-        info.imports = extractor.imports;
-        info.exports = extractor.exports;
-        info.re_exports = extractor.re_exports;
-        info.dynamic_imports = extractor.dynamic_imports;
-        info.dynamic_import_patterns = extractor.dynamic_import_patterns;
-        info.require_calls = extractor.require_calls;
-        info.member_accesses = extractor.member_accesses;
-        info.whole_object_uses = extractor.whole_object_uses;
-        info.has_cjs_exports = extractor.has_cjs_exports;
+        return extractor.into_module_info(file_id, content_hash, suppressions);
     }
 
-    info
+    ModuleInfoExtractor::new().into_module_info(file_id, content_hash, suppressions)
 }
 
 /// Parse an MDX file by extracting import/export statements.
@@ -572,40 +535,16 @@ fn parse_mdx_to_module(file_id: FileId, source: &str, content_hash: u64) -> Modu
     let suppressions = crate::suppress::parse_suppressions_from_source(source);
     let statements = extract_mdx_statements(source);
 
-    let mut info = ModuleInfo {
-        file_id,
-        exports: Vec::new(),
-        imports: Vec::new(),
-        re_exports: Vec::new(),
-        dynamic_imports: Vec::new(),
-        dynamic_import_patterns: Vec::new(),
-        require_calls: Vec::new(),
-        member_accesses: Vec::new(),
-        whole_object_uses: Vec::new(),
-        has_cjs_exports: false,
-        content_hash,
-        suppressions,
-    };
-
     if !statements.is_empty() {
         let source_type = SourceType::jsx();
         let allocator = Allocator::default();
         let parser_return = Parser::new(&allocator, &statements, source_type).parse();
         let mut extractor = ModuleInfoExtractor::new();
         extractor.visit_program(&parser_return.program);
-
-        info.imports = extractor.imports;
-        info.exports = extractor.exports;
-        info.re_exports = extractor.re_exports;
-        info.dynamic_imports = extractor.dynamic_imports;
-        info.dynamic_import_patterns = extractor.dynamic_import_patterns;
-        info.require_calls = extractor.require_calls;
-        info.member_accesses = extractor.member_accesses;
-        info.whole_object_uses = extractor.whole_object_uses;
-        info.has_cjs_exports = extractor.has_cjs_exports;
+        return extractor.into_module_info(file_id, content_hash, suppressions);
     }
 
-    info
+    ModuleInfoExtractor::new().into_module_info(file_id, content_hash, suppressions)
 }
 
 /// Returns true if a CSS import source is a remote URL or data URI that should be skipped.
@@ -789,20 +728,7 @@ fn parse_source_to_module(
         }
     }
 
-    ModuleInfo {
-        file_id,
-        exports: extractor.exports,
-        imports: extractor.imports,
-        re_exports: extractor.re_exports,
-        dynamic_imports: extractor.dynamic_imports,
-        dynamic_import_patterns: extractor.dynamic_import_patterns,
-        require_calls: extractor.require_calls,
-        member_accesses: extractor.member_accesses,
-        whole_object_uses: extractor.whole_object_uses,
-        has_cjs_exports: extractor.has_cjs_exports,
-        content_hash,
-        suppressions,
-    }
+    extractor.into_module_info(file_id, content_hash, suppressions)
 }
 
 /// Parse from in-memory content (for LSP).
@@ -899,6 +825,43 @@ impl ModuleInfoExtractor {
             handled_require_spans: Vec::new(),
             handled_import_spans: Vec::new(),
         }
+    }
+
+    /// Convert this extractor into a `ModuleInfo`, consuming its fields.
+    fn into_module_info(
+        self,
+        file_id: FileId,
+        content_hash: u64,
+        suppressions: Vec<Suppression>,
+    ) -> ModuleInfo {
+        ModuleInfo {
+            file_id,
+            exports: self.exports,
+            imports: self.imports,
+            re_exports: self.re_exports,
+            dynamic_imports: self.dynamic_imports,
+            dynamic_import_patterns: self.dynamic_import_patterns,
+            require_calls: self.require_calls,
+            member_accesses: self.member_accesses,
+            whole_object_uses: self.whole_object_uses,
+            has_cjs_exports: self.has_cjs_exports,
+            content_hash,
+            suppressions,
+        }
+    }
+
+    /// Merge this extractor's fields into an existing `ModuleInfo`.
+    fn merge_into(self, info: &mut ModuleInfo) {
+        info.imports.extend(self.imports);
+        info.exports.extend(self.exports);
+        info.re_exports.extend(self.re_exports);
+        info.dynamic_imports.extend(self.dynamic_imports);
+        info.dynamic_import_patterns
+            .extend(self.dynamic_import_patterns);
+        info.require_calls.extend(self.require_calls);
+        info.member_accesses.extend(self.member_accesses);
+        info.whole_object_uses.extend(self.whole_object_uses);
+        info.has_cjs_exports |= self.has_cjs_exports;
     }
 
     fn extract_declaration_exports(&mut self, decl: &Declaration<'_>, is_type_only: bool) {

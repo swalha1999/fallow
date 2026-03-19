@@ -35,21 +35,19 @@ struct ScriptCommand {
 }
 
 /// Known binary-name → package-name mappings where they diverge.
-fn binary_to_package_map() -> HashMap<&'static str, &'static str> {
-    HashMap::from([
-        ("tsc", "typescript"),
-        ("tsserver", "typescript"),
-        ("ng", "@angular/cli"),
-        ("nuxi", "nuxt"),
-        ("run-s", "npm-run-all"),
-        ("run-p", "npm-run-all"),
-        ("run-s2", "npm-run-all2"),
-        ("run-p2", "npm-run-all2"),
-        ("sb", "storybook"),
-        ("biome", "@biomejs/biome"),
-        ("oxlint", "oxlint"),
-    ])
-}
+static BINARY_TO_PACKAGE: &[(&str, &str)] = &[
+    ("tsc", "typescript"),
+    ("tsserver", "typescript"),
+    ("ng", "@angular/cli"),
+    ("nuxi", "nuxt"),
+    ("run-s", "npm-run-all"),
+    ("run-p", "npm-run-all"),
+    ("run-s2", "npm-run-all2"),
+    ("run-p2", "npm-run-all2"),
+    ("sb", "storybook"),
+    ("biome", "@biomejs/biome"),
+    ("oxlint", "oxlint"),
+];
 
 /// Environment variable wrapper commands to strip before the actual binary.
 const ENV_WRAPPERS: &[&str] = &["cross-env", "dotenv", "env"];
@@ -464,8 +462,7 @@ fn is_builtin_command(cmd: &str) -> bool {
 /// 3. Fall back: binary name = package name
 pub fn resolve_binary_to_package(binary: &str, root: &Path) -> String {
     // 1. Known divergences
-    let map = binary_to_package_map();
-    if let Some(&pkg) = map.get(binary) {
+    if let Some(&(_, pkg)) = BINARY_TO_PACKAGE.iter().find(|(bin, _)| *bin == binary) {
         return pkg.to_string();
     }
 

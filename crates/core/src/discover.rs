@@ -177,10 +177,15 @@ fn resolve_entry_path(
     // We check this BEFORE the exists() check because even if the dist file exists,
     // fallow ignores dist/ by default, so we need the source file instead.
     if let Some(source_path) = try_output_to_source_path(base, entry) {
-        return Some(EntryPoint {
-            path: source_path,
-            source,
-        });
+        // Security: ensure the mapped source path stays within the project root
+        if let Ok(canonical_source) = source_path.canonicalize()
+            && canonical_source.starts_with(canonical_root)
+        {
+            return Some(EntryPoint {
+                path: source_path,
+                source,
+            });
+        }
     }
 
     if resolved.exists() {

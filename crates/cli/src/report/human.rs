@@ -5,9 +5,9 @@ use colored::Colorize;
 use fallow_config::{OutputFormat, RulesConfig};
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::{AnalysisResults, UnusedDependency, UnusedExport, UnusedMember};
-use fallow_core::trace::{CloneTrace, ExportTrace, FileTrace, DependencyTrace, PipelineTimings};
+use fallow_core::trace::{CloneTrace, DependencyTrace, ExportTrace, FileTrace, PipelineTimings};
 
-use super::{relative_path, severity_to_level, Level};
+use super::{Level, relative_path, severity_to_level};
 
 pub(super) fn print_human(
     results: &AnalysisResults,

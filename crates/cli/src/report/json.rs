@@ -46,10 +46,7 @@ fn build_json(
     Ok(output)
 }
 
-pub(super) fn print_duplication_json(
-    report: &DuplicationReport,
-    elapsed: Duration,
-) -> ExitCode {
+pub(super) fn print_duplication_json(report: &DuplicationReport, elapsed: Duration) -> ExitCode {
     let mut output = match serde_json::to_value(report) {
         Ok(v) => v,
         Err(e) => {

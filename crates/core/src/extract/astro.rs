@@ -6,9 +6,9 @@ use oxc_ast_visit::Visit;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
+use super::ModuleInfo;
 use super::sfc::SfcScript;
 use super::visitor::ModuleInfoExtractor;
-use super::ModuleInfo;
 use crate::discover::FileId;
 
 /// Regex to extract Astro frontmatter (content between `---` delimiters at file start).

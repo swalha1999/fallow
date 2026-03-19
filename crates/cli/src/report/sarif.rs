@@ -5,7 +5,7 @@ use fallow_config::{RulesConfig, Severity};
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::{AnalysisResults, UnusedDependency, UnusedExport, UnusedMember};
 
-use super::{relative_uri};
+use super::relative_uri;
 
 /// Intermediate fields extracted from an issue for SARIF result construction.
 struct SarifFields {
@@ -322,11 +322,7 @@ pub(crate) fn build_sarif(
     })
 }
 
-pub(super) fn print_sarif(
-    results: &AnalysisResults,
-    root: &Path,
-    rules: &RulesConfig,
-) -> ExitCode {
+pub(super) fn print_sarif(results: &AnalysisResults, root: &Path, rules: &RulesConfig) -> ExitCode {
     let sarif = build_sarif(results, root, rules);
     match serde_json::to_string_pretty(&sarif) {
         Ok(json) => {

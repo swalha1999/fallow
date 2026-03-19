@@ -5,8 +5,8 @@ use oxc_ast_visit::Visit;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
-use super::visitor::ModuleInfoExtractor;
 use super::ModuleInfo;
+use super::visitor::ModuleInfoExtractor;
 use crate::discover::FileId;
 
 /// Extract import/export statements from MDX content.

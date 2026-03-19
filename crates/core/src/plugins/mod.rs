@@ -208,6 +208,9 @@ macro_rules! define_plugin {
 }
 
 pub mod config_parser;
+mod tooling;
+
+pub use tooling::is_known_tooling_dependency;
 
 mod angular;
 mod astro;
@@ -731,127 +734,4 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new(vec![])
     }
-}
-
-// ── General tooling dependency detection ────────────────────────────
-//
-// Known dev dependencies that are tooling (used by CLI/config, not imported in
-// application code). These complement the per-plugin `tooling_dependencies()`
-// lists with dependencies that aren't tied to any single plugin.
-
-/// Prefixes of package names that are always dev tooling.
-const GENERAL_TOOLING_PREFIXES: &[&str] = &[
-    "@types/",
-    "eslint",
-    "@typescript-eslint",
-    "husky",
-    "lint-staged",
-    "commitlint",
-    "@commitlint",
-    "stylelint",
-    "postcss",
-    "autoprefixer",
-    "tailwindcss",
-    "@tailwindcss",
-    "@vitest/",
-    "@jest/",
-    "@testing-library/",
-    "@playwright/",
-    "@storybook/",
-    "storybook",
-    "@babel/",
-    "babel-",
-    "@react-native-community/cli",
-    "@react-native/",
-    "secretlint",
-    "@secretlint/",
-    "oxlint",
-    "@semantic-release/",
-    "semantic-release",
-    "@release-it/",
-    "@lerna-lite/",
-    "@changesets/",
-    "@graphql-codegen/",
-    "@rollup/",
-    "@biomejs/",
-];
-
-/// Exact package names that are always dev tooling.
-const GENERAL_TOOLING_EXACT: &[&str] = &[
-    "typescript",
-    "prettier",
-    "turbo",
-    "concurrently",
-    "cross-env",
-    "rimraf",
-    "npm-run-all",
-    "npm-run-all2",
-    "nodemon",
-    "ts-node",
-    "tsx",
-    "knip",
-    "fallow",
-    "jest",
-    "vitest",
-    "happy-dom",
-    "jsdom",
-    "vite",
-    "sass",
-    "sass-embedded",
-    "webpack",
-    "webpack-cli",
-    "webpack-dev-server",
-    "esbuild",
-    "rollup",
-    "swc",
-    "@swc/core",
-    "@swc/jest",
-    "terser",
-    "cssnano",
-    "sharp",
-    "release-it",
-    "lerna",
-    "dotenv-cli",
-    "dotenv-flow",
-    "oxfmt",
-    "jscpd",
-    "npm-check-updates",
-    "markdownlint-cli",
-    "npm-package-json-lint",
-    "synp",
-    "flow-bin",
-    "i18next-parser",
-    "i18next-conv",
-    "webpack-bundle-analyzer",
-    "vite-plugin-svgr",
-    "vite-plugin-eslint",
-    "@vitejs/plugin-vue",
-    "@vitejs/plugin-react",
-    "next-sitemap",
-    "tsup",
-    "unbuild",
-    "typedoc",
-    "nx",
-    "@manypkg/cli",
-    "vue-tsc",
-    "@vue/tsconfig",
-    "@tsconfig/node20",
-    "@tsconfig/react-native",
-    "@typescript/native-preview",
-    "tw-animate-css",
-    "@ianvs/prettier-plugin-sort-imports",
-    "prettier-plugin-tailwindcss",
-    "prettier-plugin-organize-imports",
-    "@vitejs/plugin-react-swc",
-    "@vitejs/plugin-legacy",
-];
-
-/// Check whether a package is a known tooling/dev dependency by name.
-///
-/// This is the single source of truth for general tooling detection.
-/// Per-plugin tooling dependencies are declared via `Plugin::tooling_dependencies()`
-/// and aggregated separately in `AggregatedPluginResult`.
-pub fn is_known_tooling_dependency(name: &str) -> bool {
-    GENERAL_TOOLING_PREFIXES.iter().any(|p| name.starts_with(p))
-        || GENERAL_TOOLING_EXACT.contains(&name)
 }

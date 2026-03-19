@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
-use fallow_config::ResolvedConfig;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast_visit::Visit;
@@ -183,7 +182,6 @@ pub struct ParseResult {
 /// Uses the cache to skip reparsing files whose content hasn't changed.
 pub fn parse_all_files(
     files: &[DiscoveredFile],
-    _config: &ResolvedConfig,
     cache: Option<&CacheStore>,
 ) -> ParseResult {
     use std::sync::atomic::{AtomicUsize, Ordering};

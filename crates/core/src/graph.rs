@@ -140,12 +140,6 @@ impl ModuleGraph {
         let module_by_id: HashMap<FileId, &ResolvedModule> =
             resolved_modules.iter().map(|m| (m.file_id, m)).collect();
 
-        let mut all_edges = Vec::new();
-        let mut modules = Vec::with_capacity(module_count);
-        let mut package_usage: HashMap<String, Vec<FileId>> = HashMap::new();
-        let mut type_only_package_usage: HashMap<String, Vec<FileId>> = HashMap::new();
-        let mut reverse_deps = vec![Vec::new(); total_capacity];
-
         // Build entry point set — use path_to_id map instead of O(n) scan per entry
         let entry_point_ids: HashSet<FileId> = entry_points
             .iter()
@@ -161,7 +155,43 @@ impl ModuleGraph {
             })
             .collect();
 
-        // Track which modules have namespace imports (precomputed)
+        // Phase 1: Build flat edge storage, module nodes, and package usage from resolved modules
+        let mut graph = Self::populate_edges(
+            files,
+            &module_by_id,
+            &entry_point_ids,
+            module_count,
+            total_capacity,
+        );
+
+        // Phase 2: Record which files reference which exports (namespace + CSS module narrowing)
+        graph.populate_references(&module_by_id, &entry_point_ids);
+
+        // Phase 3: BFS from entry points to mark reachable modules
+        graph.mark_reachable(total_capacity);
+
+        // Phase 4: Propagate references through re-export chains
+        graph.resolve_re_export_chains();
+
+        graph
+    }
+
+    /// Build flat edge storage from resolved modules.
+    ///
+    /// Creates `ModuleNode` entries, flat `Edge` storage, reverse dependency
+    /// indices, package usage maps, and the namespace-imported bitset.
+    fn populate_edges(
+        files: &[DiscoveredFile],
+        module_by_id: &HashMap<FileId, &ResolvedModule>,
+        entry_point_ids: &HashSet<FileId>,
+        module_count: usize,
+        total_capacity: usize,
+    ) -> Self {
+        let mut all_edges = Vec::new();
+        let mut modules = Vec::with_capacity(module_count);
+        let mut package_usage: HashMap<String, Vec<FileId>> = HashMap::new();
+        let mut type_only_package_usage: HashMap<String, Vec<FileId>> = HashMap::new();
+        let mut reverse_deps = vec![Vec::new(); total_capacity];
         let mut namespace_imported = FixedBitSet::with_capacity(total_capacity);
 
         for file in files {
@@ -377,30 +407,57 @@ impl ModuleGraph {
             });
         }
 
-        // Populate export references from edges — O(edges) not O(edges × modules)
-        for edge in &all_edges {
-            let source_id = edge.source;
-            let Some(target_module) = modules.get_mut(edge.target.0 as usize) else {
+        Self {
+            modules,
+            edges: all_edges,
+            package_usage,
+            type_only_package_usage,
+            entry_points: entry_point_ids.clone(),
+            reverse_deps,
+            namespace_imported,
+        }
+    }
+
+    /// Record which files reference which exports from edges.
+    ///
+    /// Walks every edge and attaches `SymbolReference` entries to the target
+    /// module's exports. Includes namespace import narrowing (member access
+    /// tracking) and CSS Module default-import narrowing.
+    fn populate_references(
+        &mut self,
+        module_by_id: &HashMap<FileId, &ResolvedModule>,
+        entry_point_ids: &HashSet<FileId>,
+    ) {
+        for edge_idx in 0..self.edges.len() {
+            let source_id = self.edges[edge_idx].source;
+            let target_idx = self.edges[edge_idx].target.0 as usize;
+            if target_idx >= self.modules.len() {
                 continue;
-            };
-            for sym in &edge.symbols {
-                let ref_kind = match &sym.imported_name {
+            }
+            for sym_idx in 0..self.edges[edge_idx].symbols.len() {
+                let sym_imported_name = self.edges[edge_idx].symbols[sym_idx].imported_name.clone();
+                let sym_local_name = self.edges[edge_idx].symbols[sym_idx].local_name.clone();
+                let sym_import_span = self.edges[edge_idx].symbols[sym_idx].import_span;
+
+                let ref_kind = match &sym_imported_name {
                     ImportedName::Named(_) => ReferenceKind::NamedImport,
                     ImportedName::Default => ReferenceKind::DefaultImport,
                     ImportedName::Namespace => ReferenceKind::NamespaceImport,
                     ImportedName::SideEffect => ReferenceKind::SideEffectImport,
                 };
 
+                let target_module = &mut self.modules[target_idx];
+
                 // Match to specific export
                 if let Some(export) = target_module
                     .exports
                     .iter_mut()
-                    .find(|e| export_matches(&e.name, &sym.imported_name))
+                    .find(|e| export_matches(&e.name, &sym_imported_name))
                 {
                     export.references.push(SymbolReference {
                         from_file: source_id,
                         kind: ref_kind,
-                        import_span: sym.import_span,
+                        import_span: sym_import_span,
                     });
                 }
 
@@ -408,10 +465,10 @@ impl ModuleGraph {
                 // `import * as ns from './x'; ns.foo; ns.bar` → only mark foo, bar as used.
                 // If the namespace variable is re-exported (`export { ns }`) or no member
                 // accesses are found, conservatively mark ALL exports as used.
-                if matches!(sym.imported_name, ImportedName::Namespace)
-                    && !sym.local_name.is_empty()
+                if matches!(sym_imported_name, ImportedName::Namespace)
+                    && !sym_local_name.is_empty()
                 {
-                    let local_name = &sym.local_name;
+                    let local_name = &sym_local_name;
                     let source_mod = module_by_id.get(&source_id);
                     let accessed_members: Vec<String> = source_mod
                         .map(|m| {
@@ -445,18 +502,18 @@ impl ModuleGraph {
                         && (accessed_members.is_empty() || is_re_exported_from_non_entry)
                     {
                         // Can't narrow — mark all exports as referenced (conservative)
-                        for export in &mut target_module.exports {
+                        for export in &mut self.modules[target_idx].exports {
                             if export.references.iter().all(|r| r.from_file != source_id) {
                                 export.references.push(SymbolReference {
                                     from_file: source_id,
                                     kind: ReferenceKind::NamespaceImport,
-                                    import_span: sym.import_span,
+                                    import_span: sym_import_span,
                                 });
                             }
                         }
                     } else {
                         // Narrow: only mark accessed members as referenced
-                        for export in &mut target_module.exports {
+                        for export in &mut self.modules[target_idx].exports {
                             let name_str = export.name.to_string();
                             if accessed_members.contains(&name_str)
                                 && export.references.iter().all(|r| r.from_file != source_id)
@@ -464,19 +521,19 @@ impl ModuleGraph {
                                 export.references.push(SymbolReference {
                                     from_file: source_id,
                                     kind: ReferenceKind::NamespaceImport,
-                                    import_span: sym.import_span,
+                                    import_span: sym_import_span,
                                 });
                             }
                         }
                     }
-                } else if matches!(sym.imported_name, ImportedName::Namespace) {
+                } else if matches!(sym_imported_name, ImportedName::Namespace) {
                     // No local name available — mark all (conservative)
-                    for export in &mut target_module.exports {
+                    for export in &mut self.modules[target_idx].exports {
                         if export.references.iter().all(|r| r.from_file != source_id) {
                             export.references.push(SymbolReference {
                                 from_file: source_id,
                                 kind: ReferenceKind::NamespaceImport,
-                                import_span: sym.import_span,
+                                import_span: sym_import_span,
                             });
                         }
                     }
@@ -486,11 +543,11 @@ impl ModuleGraph {
                 // Member accesses like `styles.primary` should mark the `primary` named
                 // export as referenced, since CSS module default imports act as namespace
                 // objects where each property corresponds to a class name (named export).
-                if matches!(sym.imported_name, ImportedName::Default)
-                    && !sym.local_name.is_empty()
-                    && is_css_module_path(&target_module.path)
+                if matches!(sym_imported_name, ImportedName::Default)
+                    && !sym_local_name.is_empty()
+                    && is_css_module_path(&self.modules[target_idx].path)
                 {
-                    let local_name = &sym.local_name;
+                    let local_name = &sym_local_name;
                     let source_mod = module_by_id.get(&source_id);
                     let is_whole_object = source_mod
                         .map(|m| m.whole_object_uses.iter().any(|n| n == local_name))
@@ -505,17 +562,17 @@ impl ModuleGraph {
                         })
                         .unwrap_or_default();
                     if is_whole_object || accessed_members.is_empty() {
-                        for export in &mut target_module.exports {
+                        for export in &mut self.modules[target_idx].exports {
                             if export.references.iter().all(|r| r.from_file != source_id) {
                                 export.references.push(SymbolReference {
                                     from_file: source_id,
                                     kind: ReferenceKind::DefaultImport,
-                                    import_span: sym.import_span,
+                                    import_span: sym_import_span,
                                 });
                             }
                         }
                     } else {
-                        for export in &mut target_module.exports {
+                        for export in &mut self.modules[target_idx].exports {
                             let name_str = export.name.to_string();
                             if accessed_members.contains(&name_str)
                                 && export.references.iter().all(|r| r.from_file != source_id)
@@ -523,7 +580,7 @@ impl ModuleGraph {
                                 export.references.push(SymbolReference {
                                     from_file: source_id,
                                     kind: ReferenceKind::DefaultImport,
-                                    import_span: sym.import_span,
+                                    import_span: sym_import_span,
                                 });
                             }
                         }
@@ -531,12 +588,14 @@ impl ModuleGraph {
                 }
             }
         }
+    }
 
-        // Mark reachable modules via BFS from entry points
+    /// Mark modules reachable from entry points via BFS.
+    fn mark_reachable(&mut self, total_capacity: usize) {
         let mut visited = FixedBitSet::with_capacity(total_capacity);
         let mut queue = VecDeque::new();
 
-        for &ep_id in &entry_point_ids {
+        for &ep_id in &self.entry_points {
             if (ep_id.0 as usize) < total_capacity {
                 visited.insert(ep_id.0 as usize);
                 queue.push_back(ep_id);
@@ -544,11 +603,11 @@ impl ModuleGraph {
         }
 
         while let Some(file_id) = queue.pop_front() {
-            if (file_id.0 as usize) >= modules.len() {
+            if (file_id.0 as usize) >= self.modules.len() {
                 continue;
             }
-            let module = &modules[file_id.0 as usize];
-            for edge in &all_edges[module.edge_range.clone()] {
+            let module = &self.modules[file_id.0 as usize];
+            for edge in &self.edges[module.edge_range.clone()] {
                 let target_idx = edge.target.0 as usize;
                 if target_idx < total_capacity && !visited.contains(target_idx) {
                     visited.insert(target_idx);
@@ -557,24 +616,9 @@ impl ModuleGraph {
             }
         }
 
-        for (idx, module) in modules.iter_mut().enumerate() {
+        for (idx, module) in self.modules.iter_mut().enumerate() {
             module.is_reachable = visited.contains(idx);
         }
-
-        let mut graph = Self {
-            modules,
-            edges: all_edges,
-            package_usage,
-            type_only_package_usage,
-            entry_points: entry_point_ids,
-            reverse_deps,
-            namespace_imported,
-        };
-
-        // Propagate references through re-export chains
-        graph.resolve_re_export_chains();
-
-        graph
     }
 
     /// Resolve re-export chains: when module A re-exports from B,

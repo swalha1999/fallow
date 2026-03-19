@@ -2187,7 +2187,7 @@ fn incremental_no_cache_all_misses() {
     // First run without any existing cache: all files should be cache misses
     let root = fixture_path("basic-project");
     let files = fallow_core::discover::discover_files(&create_config(root.clone()));
-    let parse_result = fallow_core::extract::parse_all_files(&files, &create_config(root), None);
+    let parse_result = fallow_core::extract::parse_all_files(&files, None);
 
     assert_eq!(parse_result.cache_hits, 0);
     assert_eq!(parse_result.cache_misses, parse_result.modules.len());
@@ -2202,7 +2202,7 @@ fn incremental_with_cache_all_hits() {
     let files = fallow_core::discover::discover_files(&config);
 
     // First parse: build cache
-    let first = fallow_core::extract::parse_all_files(&files, &config, None);
+    let first = fallow_core::extract::parse_all_files(&files, None);
     let mut cache_store = fallow_core::cache::CacheStore::new();
     for module in &first.modules {
         if let Some(file) = files.get(module.file_id.0 as usize) {
@@ -2211,7 +2211,7 @@ fn incremental_with_cache_all_hits() {
     }
 
     // Second parse: should hit cache for every file
-    let second = fallow_core::extract::parse_all_files(&files, &config, Some(&cache_store));
+    let second = fallow_core::extract::parse_all_files(&files, Some(&cache_store));
     assert_eq!(second.cache_hits, first.modules.len());
     assert_eq!(second.cache_misses, 0);
     assert_eq!(second.modules.len(), first.modules.len());
@@ -2225,7 +2225,7 @@ fn incremental_results_identical() {
     let files = fallow_core::discover::discover_files(&config);
 
     // First parse
-    let first = fallow_core::extract::parse_all_files(&files, &config, None);
+    let first = fallow_core::extract::parse_all_files(&files, None);
     let mut cache_store = fallow_core::cache::CacheStore::new();
     for module in &first.modules {
         if let Some(file) = files.get(module.file_id.0 as usize) {
@@ -2234,7 +2234,7 @@ fn incremental_results_identical() {
     }
 
     // Second parse (from cache)
-    let second = fallow_core::extract::parse_all_files(&files, &config, Some(&cache_store));
+    let second = fallow_core::extract::parse_all_files(&files, Some(&cache_store));
 
     // Verify all module data matches
     assert_eq!(first.modules.len(), second.modules.len());

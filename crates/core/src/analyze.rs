@@ -523,7 +523,7 @@ fn find_unused_dependencies(
         .into_iter()
         .filter(|dep| !used_packages.contains(dep.as_str()))
         .filter(|dep| !script_used.contains(dep.as_str()))
-        .filter(|dep| !is_tooling_dependency(dep))
+        .filter(|dep| !crate::plugins::is_known_tooling_dependency(dep))
         .filter(|dep| !plugin_tooling.contains(dep.as_str()))
         .filter(|dep| !plugin_referenced.contains(dep.as_str()))
         .filter(|dep| !ignore_deps.contains(dep.as_str()))
@@ -598,7 +598,7 @@ fn find_unused_dependencies(
                 &ignore_deps,
                 &workspace_names,
                 is_used_in_workspace,
-            ) || is_tooling_dependency(&dep)
+            ) || crate::plugins::is_known_tooling_dependency(&dep)
                 || plugin_tooling.contains(dep.as_str())
             {
                 continue;
@@ -1257,133 +1257,6 @@ fn is_implicit_dependency(name: &str) -> bool {
     implicit_deps.contains(&name)
 }
 
-/// Dev dependencies that are tooling (used by CLI, not imported in code).
-fn is_tooling_dependency(name: &str) -> bool {
-    let tooling_prefixes = [
-        "@types/",
-        "eslint",
-        "@typescript-eslint",
-        "husky",
-        "lint-staged",
-        "commitlint",
-        "@commitlint",
-        "stylelint",
-        "postcss",
-        "autoprefixer",
-        "tailwindcss",
-        "@tailwindcss",
-        "@vitest/",
-        "@jest/",
-        "@testing-library/",
-        "@playwright/",
-        "@storybook/",
-        "storybook",
-        "@babel/",
-        "babel-",
-        "@react-native-community/cli",
-        "@react-native/",
-        "secretlint",
-        "@secretlint/",
-        "oxlint",
-        // Release & publishing tooling
-        "@semantic-release/",
-        "semantic-release",
-        "@release-it/",
-        "@lerna-lite/",
-        "@changesets/",
-        // Build tool plugins (used in config)
-        "@graphql-codegen/",
-        "@rollup/",
-        // Biome tooling
-        "@biomejs/",
-    ];
-
-    let exact_matches = [
-        "typescript",
-        "prettier",
-        "turbo",
-        "concurrently",
-        "cross-env",
-        "rimraf",
-        "npm-run-all",
-        "npm-run-all2",
-        "nodemon",
-        "ts-node",
-        "tsx",
-        "knip",
-        "fallow",
-        "jest",
-        "vitest",
-        "happy-dom",
-        "jsdom",
-        "vite",
-        "sass",
-        "sass-embedded",
-        "webpack",
-        "webpack-cli",
-        "webpack-dev-server",
-        "esbuild",
-        "rollup",
-        "swc",
-        "@swc/core",
-        "@swc/jest",
-        "terser",
-        "cssnano",
-        "sharp",
-        // Release & publishing
-        "release-it",
-        "lerna",
-        // Dotenv CLI tools
-        "dotenv-cli",
-        "dotenv-flow",
-        // Code quality & analysis
-        "oxfmt",
-        "jscpd",
-        "npm-check-updates",
-        "markdownlint-cli",
-        "npm-package-json-lint",
-        "synp",
-        "flow-bin",
-        // i18n tooling
-        "i18next-parser",
-        "i18next-conv",
-        // Bundle analysis & build tooling
-        "webpack-bundle-analyzer",
-        // Vite plugins (used in config, not imported)
-        "vite-plugin-svgr",
-        "vite-plugin-eslint",
-        "@vitejs/plugin-vue",
-        "@vitejs/plugin-react",
-        // Site generation / SEO
-        "next-sitemap",
-        // Build tools (used by CLI, not imported in code)
-        "tsup",
-        "unbuild",
-        "typedoc",
-        // Monorepo tools
-        "nx",
-        "@manypkg/cli",
-        // Vue tooling
-        "vue-tsc",
-        "@vue/tsconfig",
-        "@tsconfig/node20",
-        "@tsconfig/react-native",
-        // TypeScript experimental
-        "@typescript/native-preview",
-        // CSS-only deps (not imported in JS)
-        "tw-animate-css",
-        // Formatting
-        "@ianvs/prettier-plugin-sort-imports",
-        "prettier-plugin-tailwindcss",
-        "prettier-plugin-organize-imports",
-        // Additional build tooling
-        "@vitejs/plugin-react-swc",
-        "@vitejs/plugin-legacy",
-    ];
-
-    tooling_prefixes.iter().any(|p| name.starts_with(p)) || exact_matches.contains(&name)
-}
-
 /// Angular lifecycle hooks and framework-invoked methods.
 ///
 /// These should never be flagged as unused class members because they are
@@ -1621,62 +1494,62 @@ mod tests {
     // is_tooling_dependency tests
     #[test]
     fn tooling_dep_prefixes() {
-        assert!(is_tooling_dependency("@types/node"));
-        assert!(is_tooling_dependency("eslint"));
-        assert!(is_tooling_dependency("eslint-plugin-react"));
-        assert!(is_tooling_dependency("prettier"));
-        assert!(is_tooling_dependency("@typescript-eslint/parser"));
-        assert!(is_tooling_dependency("husky"));
-        assert!(is_tooling_dependency("lint-staged"));
-        assert!(is_tooling_dependency("commitlint"));
-        assert!(is_tooling_dependency("@commitlint/config-conventional"));
-        assert!(is_tooling_dependency("stylelint"));
-        assert!(is_tooling_dependency("postcss"));
-        assert!(is_tooling_dependency("autoprefixer"));
-        assert!(is_tooling_dependency("tailwindcss"));
-        assert!(is_tooling_dependency("@tailwindcss/forms"));
+        assert!(crate::plugins::is_known_tooling_dependency("@types/node"));
+        assert!(crate::plugins::is_known_tooling_dependency("eslint"));
+        assert!(crate::plugins::is_known_tooling_dependency("eslint-plugin-react"));
+        assert!(crate::plugins::is_known_tooling_dependency("prettier"));
+        assert!(crate::plugins::is_known_tooling_dependency("@typescript-eslint/parser"));
+        assert!(crate::plugins::is_known_tooling_dependency("husky"));
+        assert!(crate::plugins::is_known_tooling_dependency("lint-staged"));
+        assert!(crate::plugins::is_known_tooling_dependency("commitlint"));
+        assert!(crate::plugins::is_known_tooling_dependency("@commitlint/config-conventional"));
+        assert!(crate::plugins::is_known_tooling_dependency("stylelint"));
+        assert!(crate::plugins::is_known_tooling_dependency("postcss"));
+        assert!(crate::plugins::is_known_tooling_dependency("autoprefixer"));
+        assert!(crate::plugins::is_known_tooling_dependency("tailwindcss"));
+        assert!(crate::plugins::is_known_tooling_dependency("@tailwindcss/forms"));
     }
 
     #[test]
     fn tooling_dep_exact_matches() {
-        assert!(is_tooling_dependency("typescript"));
-        assert!(is_tooling_dependency("prettier"));
-        assert!(is_tooling_dependency("turbo"));
-        assert!(is_tooling_dependency("concurrently"));
-        assert!(is_tooling_dependency("cross-env"));
-        assert!(is_tooling_dependency("rimraf"));
-        assert!(is_tooling_dependency("npm-run-all"));
-        assert!(is_tooling_dependency("nodemon"));
-        assert!(is_tooling_dependency("ts-node"));
-        assert!(is_tooling_dependency("tsx"));
+        assert!(crate::plugins::is_known_tooling_dependency("typescript"));
+        assert!(crate::plugins::is_known_tooling_dependency("prettier"));
+        assert!(crate::plugins::is_known_tooling_dependency("turbo"));
+        assert!(crate::plugins::is_known_tooling_dependency("concurrently"));
+        assert!(crate::plugins::is_known_tooling_dependency("cross-env"));
+        assert!(crate::plugins::is_known_tooling_dependency("rimraf"));
+        assert!(crate::plugins::is_known_tooling_dependency("npm-run-all"));
+        assert!(crate::plugins::is_known_tooling_dependency("nodemon"));
+        assert!(crate::plugins::is_known_tooling_dependency("ts-node"));
+        assert!(crate::plugins::is_known_tooling_dependency("tsx"));
     }
 
     #[test]
     fn not_tooling_dep() {
-        assert!(!is_tooling_dependency("react"));
-        assert!(!is_tooling_dependency("next"));
-        assert!(!is_tooling_dependency("lodash"));
-        assert!(!is_tooling_dependency("express"));
-        assert!(!is_tooling_dependency("@emotion/react"));
+        assert!(!crate::plugins::is_known_tooling_dependency("react"));
+        assert!(!crate::plugins::is_known_tooling_dependency("next"));
+        assert!(!crate::plugins::is_known_tooling_dependency("lodash"));
+        assert!(!crate::plugins::is_known_tooling_dependency("express"));
+        assert!(!crate::plugins::is_known_tooling_dependency("@emotion/react"));
     }
 
     // New tooling dependency tests (Issue 2)
     #[test]
     fn tooling_dep_testing_frameworks() {
-        assert!(is_tooling_dependency("jest"));
-        assert!(is_tooling_dependency("vitest"));
-        assert!(is_tooling_dependency("@jest/globals"));
-        assert!(is_tooling_dependency("@vitest/coverage-v8"));
-        assert!(is_tooling_dependency("@testing-library/react"));
-        assert!(is_tooling_dependency("@testing-library/jest-dom"));
-        assert!(is_tooling_dependency("@playwright/test"));
+        assert!(crate::plugins::is_known_tooling_dependency("jest"));
+        assert!(crate::plugins::is_known_tooling_dependency("vitest"));
+        assert!(crate::plugins::is_known_tooling_dependency("@jest/globals"));
+        assert!(crate::plugins::is_known_tooling_dependency("@vitest/coverage-v8"));
+        assert!(crate::plugins::is_known_tooling_dependency("@testing-library/react"));
+        assert!(crate::plugins::is_known_tooling_dependency("@testing-library/jest-dom"));
+        assert!(crate::plugins::is_known_tooling_dependency("@playwright/test"));
     }
 
     #[test]
     fn tooling_dep_environments_and_cli() {
-        assert!(is_tooling_dependency("happy-dom"));
-        assert!(is_tooling_dependency("jsdom"));
-        assert!(is_tooling_dependency("knip"));
+        assert!(crate::plugins::is_known_tooling_dependency("happy-dom"));
+        assert!(crate::plugins::is_known_tooling_dependency("jsdom"));
+        assert!(crate::plugins::is_known_tooling_dependency("knip"));
     }
 
     // React lifecycle method tests (Issue 1)

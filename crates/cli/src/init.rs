@@ -1,0 +1,119 @@
+use std::process::ExitCode;
+
+use fallow_config::{ExternalPluginDef, FallowConfig};
+
+pub(crate) fn run_init(root: &std::path::Path, use_toml: bool) -> ExitCode {
+    // Check if any config file already exists
+    let existing_names = ["fallow.jsonc", "fallow.json", "fallow.toml", ".fallow.toml"];
+    for name in &existing_names {
+        let path = root.join(name);
+        if path.exists() {
+            eprintln!("{name} already exists");
+            return ExitCode::from(2);
+        }
+    }
+
+    if use_toml {
+        let config_path = root.join("fallow.toml");
+        let default_config = r#"# fallow.toml - Dead code analysis configuration
+# See https://github.com/fallow-rs/fallow for documentation
+
+# Additional entry points (beyond auto-detected ones)
+# entry = ["src/workers/*.ts"]
+
+# Patterns to ignore
+# ignore = ["**/*.generated.ts"]
+
+# Dependencies to ignore (always considered used)
+# ignoreDependencies = ["autoprefixer"]
+
+[detect]
+unusedFiles = true
+unusedExports = true
+unusedDependencies = true
+unusedDevDependencies = true
+unusedTypes = true
+
+# Per-issue-type severity: "error" (fail CI), "warn" (report only), "off" (ignore)
+# All default to "error" when omitted.
+# [rules]
+# unusedFiles = "error"
+# unusedExports = "warn"
+# unusedTypes = "off"
+# unresolvedImports = "error"
+"#;
+        if let Err(e) = std::fs::write(&config_path, default_config) {
+            eprintln!("Error: Failed to write fallow.toml: {e}");
+            return ExitCode::from(2);
+        }
+        eprintln!("Created fallow.toml");
+    } else {
+        let config_path = root.join("fallow.jsonc");
+        let default_config = r#"{
+  // fallow.jsonc - Dead code analysis configuration
+  // See https://github.com/fallow-rs/fallow for documentation
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+
+  // Additional entry points (beyond auto-detected ones)
+  // "entry": ["src/workers/*.ts"],
+
+  // Patterns to ignore
+  // "ignore": ["**/*.generated.ts"],
+
+  // Dependencies to ignore (always considered used)
+  // "ignoreDependencies": ["autoprefixer"],
+
+  "detect": {
+    "unusedFiles": true,
+    "unusedExports": true,
+    "unusedDependencies": true,
+    "unusedDevDependencies": true,
+    "unusedTypes": true
+  }
+
+  // Per-issue-type severity: "error" (fail CI), "warn" (report only), "off" (ignore)
+  // All default to "error" when omitted.
+  // "rules": {
+  //   "unusedFiles": "error",
+  //   "unusedExports": "warn",
+  //   "unusedTypes": "off",
+  //   "unresolvedImports": "error"
+  // }
+}
+"#;
+        if let Err(e) = std::fs::write(&config_path, default_config) {
+            eprintln!("Error: Failed to write fallow.jsonc: {e}");
+            return ExitCode::from(2);
+        }
+        eprintln!("Created fallow.jsonc");
+    }
+    ExitCode::SUCCESS
+}
+
+pub(crate) fn run_config_schema() -> ExitCode {
+    let schema = FallowConfig::json_schema();
+    match serde_json::to_string_pretty(&schema) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: failed to serialize schema: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+pub(crate) fn run_plugin_schema() -> ExitCode {
+    let schema = ExternalPluginDef::json_schema();
+    match serde_json::to_string_pretty(&schema) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: failed to serialize plugin schema: {e}");
+            ExitCode::from(2)
+        }
+    }
+}

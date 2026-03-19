@@ -307,6 +307,7 @@ impl FallowMcp {
         let params = params.0;
         let mut args = vec![
             "fix".to_string(),
+            "--yes".to_string(),
             "--format".to_string(),
             "json".to_string(),
             "--quiet".to_string(),

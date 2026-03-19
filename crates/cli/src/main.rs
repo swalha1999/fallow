@@ -154,6 +154,10 @@ enum Command {
         /// Dry run — show what would be changed without modifying files
         #[arg(long)]
         dry_run: bool,
+
+        /// Skip confirmation prompt (required in non-TTY environments like CI or AI agents)
+        #[arg(long, alias = "force")]
+        yes: bool,
     },
 
     /// Initialize a fallow.jsonc configuration file
@@ -422,25 +426,26 @@ fn filter_to_workspace(
 fn resolve_workspace_filter(
     root: &std::path::Path,
     workspace_name: &str,
+    output: &OutputFormat,
 ) -> Result<std::path::PathBuf, ExitCode> {
     let workspaces = discover_workspaces(root);
     if workspaces.is_empty() {
-        eprintln!(
-            "Error: --workspace '{workspace_name}' specified but no workspaces found.\n\
+        let msg = format!(
+            "--workspace '{workspace_name}' specified but no workspaces found. \
              Ensure root package.json has a \"workspaces\" field or pnpm-workspace.yaml exists."
         );
-        return Err(ExitCode::from(2));
+        return Err(emit_error(&msg, 2, output));
     }
 
     match workspaces.iter().find(|ws| ws.name == workspace_name) {
         Some(ws) => Ok(ws.root.clone()),
         None => {
             let names: Vec<&str> = workspaces.iter().map(|ws| ws.name.as_str()).collect();
-            eprintln!(
-                "Error: workspace '{workspace_name}' not found.\nAvailable workspaces: {}",
+            let msg = format!(
+                "workspace '{workspace_name}' not found. Available workspaces: {}",
                 names.join(", ")
             );
-            Err(ExitCode::from(2))
+            Err(emit_error(&msg, 2, output))
         }
     }
 }
@@ -476,6 +481,61 @@ fn validate_root(root: &std::path::Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+/// Reject strings containing control characters (bytes < 0x20) except
+/// newline (0x0A) and tab (0x09). This prevents agents from accidentally
+/// passing invisible characters in CLI arguments.
+fn validate_no_control_chars(s: &str, arg_name: &str) -> Result<(), String> {
+    for (i, byte) in s.bytes().enumerate() {
+        if byte < 0x20 && byte != b'\n' && byte != b'\t' {
+            return Err(format!(
+                "{arg_name} contains control character (byte 0x{byte:02x}) at position {i}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ── Structured error output ──────────────────────────────────────
+
+/// Emit an error as structured JSON on stdout when `--format json` is active,
+/// then return the given exit code. For non-JSON formats, emit to stderr as usual.
+fn emit_error(message: &str, exit_code: u8, output: &OutputFormat) -> ExitCode {
+    if matches!(output, OutputFormat::Json) {
+        let error_obj = serde_json::json!({
+            "error": true,
+            "message": message,
+            "exit_code": exit_code,
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&error_obj) {
+            println!("{json}");
+        }
+    } else {
+        eprintln!("Error: {message}");
+    }
+    ExitCode::from(exit_code)
+}
+
+// ── Environment variable helpers ─────────────────────────────────
+
+/// Read FALLOW_FORMAT env var and parse it into a Format value.
+fn format_from_env() -> Option<Format> {
+    let val = std::env::var("FALLOW_FORMAT").ok()?;
+    match val.to_lowercase().as_str() {
+        "json" => Some(Format::Json),
+        "human" => Some(Format::Human),
+        "sarif" => Some(Format::Sarif),
+        "compact" => Some(Format::Compact),
+        _ => None,
+    }
+}
+
+/// Read FALLOW_QUIET env var: "1" or "true" (case-insensitive) means quiet.
+fn quiet_from_env() -> bool {
+    std::env::var("FALLOW_QUIET")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 // ── Main ─────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
@@ -489,8 +549,25 @@ fn main() -> ExitCode {
         return run_config_schema();
     }
 
+    // Resolve output format: CLI flag > FALLOW_FORMAT env var > default ("human").
+    // clap sets the default to "human", so we only override with the env var
+    // when the user did NOT explicitly pass --format on the CLI.
+    let cli_format_was_explicit = std::env::args().any(|a| {
+        a == "--format" || a == "--output" || a.starts_with("--format=") || a.starts_with("-f")
+    });
+    let format: Format = if cli_format_was_explicit {
+        cli.format
+    } else {
+        format_from_env().unwrap_or(cli.format)
+    };
+
+    // Resolve quiet: CLI --quiet flag > FALLOW_QUIET env var > false
+    let quiet = cli.quiet || quiet_from_env();
+
+    let output: OutputFormat = format.clone().into();
+
     // Set up tracing
-    if !cli.quiet {
+    if !quiet {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_env_filter(
@@ -502,6 +579,24 @@ fn main() -> ExitCode {
             .init();
     }
 
+    // Validate control characters in key string inputs
+    if let Some(ref config_path) = cli.config
+        && let Some(s) = config_path.to_str()
+        && let Err(e) = validate_no_control_chars(s, "--config")
+    {
+        return emit_error(&e, 2, &output);
+    }
+    if let Some(ref ws) = cli.workspace
+        && let Err(e) = validate_no_control_chars(ws, "--workspace")
+    {
+        return emit_error(&e, 2, &output);
+    }
+    if let Some(ref git_ref) = cli.changed_since
+        && let Err(e) = validate_no_control_chars(git_ref, "--changed-since")
+    {
+        return emit_error(&e, 2, &output);
+    }
+
     // Validate and resolve root
     let raw_root = cli
         .root
@@ -509,8 +604,7 @@ fn main() -> ExitCode {
     let root = match validate_root(&raw_root) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::from(2);
+            return emit_error(&e, 2, &output);
         }
     };
 
@@ -518,8 +612,7 @@ fn main() -> ExitCode {
     if let Some(ref git_ref) = cli.changed_since
         && let Err(e) = validate_git_ref(git_ref)
     {
-        eprintln!("Error: invalid --changed-since: {e}");
-        return ExitCode::from(2);
+        return emit_error(&format!("invalid --changed-since: {e}"), 2, &output);
     }
 
     let threads = cli.threads.unwrap_or_else(|| {
@@ -582,10 +675,10 @@ fn main() -> ExitCode {
             run_check(
                 &root,
                 &cli.config,
-                cli.format.into(),
+                output,
                 cli.no_cache,
                 threads,
-                cli.quiet,
+                quiet,
                 fail_on_issues,
                 &filters,
                 cli.changed_since.as_deref(),
@@ -601,20 +694,21 @@ fn main() -> ExitCode {
         Command::Watch => run_watch(
             &root,
             &cli.config,
-            cli.format.into(),
+            output,
             cli.no_cache,
             threads,
-            cli.quiet,
+            quiet,
             cli.production,
         ),
-        Command::Fix { dry_run } => fix::run_fix(
+        Command::Fix { dry_run, yes } => fix::run_fix(
             &root,
             &cli.config,
-            cli.format.into(),
+            output,
             cli.no_cache,
             threads,
-            cli.quiet,
+            quiet,
             dry_run,
+            yes,
             cli.production,
         ),
         Command::Init { toml } => run_init(&root, toml),
@@ -626,7 +720,7 @@ fn main() -> ExitCode {
         } => run_list(
             &root,
             &cli.config,
-            cli.format.into(),
+            output,
             threads,
             entry_points,
             files,
@@ -643,10 +737,10 @@ fn main() -> ExitCode {
         } => run_dupes(
             &root,
             &cli.config,
-            cli.format.into(),
+            output,
             cli.no_cache,
             threads,
-            cli.quiet,
+            quiet,
             mode,
             min_tokens,
             min_lines,
@@ -684,14 +778,21 @@ fn run_check(
 ) -> ExitCode {
     let start = Instant::now();
 
-    let config = match load_config(root, config_path, output, no_cache, threads, production) {
+    let config = match load_config(
+        root,
+        config_path,
+        output.clone(),
+        no_cache,
+        threads,
+        production,
+    ) {
         Ok(c) => c,
         Err(code) => return code,
     };
 
     // Validate --workspace early (before analysis) to fail fast
     let ws_root = if let Some(ws_name) = workspace {
-        match resolve_workspace_filter(root, ws_name) {
+        match resolve_workspace_filter(root, ws_name, &output) {
             Ok(root) => Some(root),
             Err(code) => return code,
         }
@@ -709,16 +810,14 @@ fn run_check(
         match fallow_core::analyze_with_trace(&config) {
             Ok(output) => (output.results, output.graph, output.timings),
             Err(e) => {
-                eprintln!("Analysis error: {e}");
-                return ExitCode::from(2);
+                return emit_error(&format!("Analysis error: {e}"), 2, &output);
             }
         }
     } else {
         match fallow_core::analyze(&config) {
             Ok(r) => (r, None, None),
             Err(e) => {
-                eprintln!("Analysis error: {e}");
-                return ExitCode::from(2);
+                return emit_error(&format!("Analysis error: {e}"), 2, &output);
             }
         }
     };
@@ -737,10 +836,11 @@ fn run_check(
             let (file_path, export_name) = match trace_spec.rsplit_once(':') {
                 Some((f, e)) => (f, e),
                 None => {
-                    eprintln!(
-                        "Error: --trace requires FILE:EXPORT_NAME format (e.g., src/utils.ts:foo)"
+                    return emit_error(
+                        "--trace requires FILE:EXPORT_NAME format (e.g., src/utils.ts:foo)",
+                        2,
+                        &output,
                     );
-                    return ExitCode::from(2);
                 }
             };
             match fallow_core::trace::trace_export(graph, &config.root, file_path, export_name) {
@@ -749,8 +849,11 @@ fn run_check(
                     return ExitCode::SUCCESS;
                 }
                 None => {
-                    eprintln!("Error: export '{export_name}' not found in '{file_path}'");
-                    return ExitCode::from(2);
+                    return emit_error(
+                        &format!("export '{export_name}' not found in '{file_path}'"),
+                        2,
+                        &output,
+                    );
                 }
             }
         }
@@ -762,8 +865,11 @@ fn run_check(
                     return ExitCode::SUCCESS;
                 }
                 None => {
-                    eprintln!("Error: file '{file_path}' not found in module graph");
-                    return ExitCode::from(2);
+                    return emit_error(
+                        &format!("file '{file_path}' not found in module graph"),
+                        2,
+                        &output,
+                    );
                 }
             }
         }
@@ -1157,16 +1263,22 @@ fn run_dupes(
         match serde_json::to_string_pretty(&baseline_data) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(path, json) {
-                    eprintln!("Error: failed to write duplication baseline: {e}");
-                    return ExitCode::from(2);
+                    return emit_error(
+                        &format!("failed to write duplication baseline: {e}"),
+                        2,
+                        &output,
+                    );
                 }
                 if !quiet {
                     eprintln!("Saved duplication baseline to {}", path.display());
                 }
             }
             Err(e) => {
-                eprintln!("Error: failed to serialize duplication baseline: {e}");
-                return ExitCode::from(2);
+                return emit_error(
+                    &format!("failed to serialize duplication baseline: {e}"),
+                    2,
+                    &output,
+                );
             }
         }
     }
@@ -1179,13 +1291,19 @@ fn run_dupes(
                     report = filter_new_clone_groups(report, &baseline_data, &config.root);
                 }
                 Err(e) => {
-                    eprintln!("Error: failed to parse duplication baseline: {e}");
-                    return ExitCode::from(2);
+                    return emit_error(
+                        &format!("failed to parse duplication baseline: {e}"),
+                        2,
+                        &output,
+                    );
                 }
             },
             Err(e) => {
-                eprintln!("Error: failed to read duplication baseline: {e}");
-                return ExitCode::from(2);
+                return emit_error(
+                    &format!("failed to read duplication baseline: {e}"),
+                    2,
+                    &output,
+                );
             }
         }
     }
@@ -1646,7 +1764,12 @@ fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
         "exit_codes": {
             "0": "Success (no error-severity issues found)",
             "1": "Error-severity issues found (per rules config, or --fail-on-issues promotes warn→error)",
-            "2": "Error (invalid config, invalid input, etc.)"
+            "2": "Error (invalid config, invalid input, etc.). When --format json is active, errors are emitted as structured JSON on stdout: {\"error\": true, \"message\": \"...\", \"exit_code\": 2}"
+        },
+        "environment_variables": {
+            "FALLOW_FORMAT": "Default output format (json/human/sarif/compact). CLI --format flag overrides this.",
+            "FALLOW_QUIET": "Set to \"1\" or \"true\" to suppress progress output. CLI --quiet flag overrides this.",
+            "FALLOW_BIN": "Path to fallow binary (used by fallow-mcp server)."
         },
         "severity_levels": ["error", "warn", "off"]
     })
@@ -1707,16 +1830,15 @@ fn load_config(
         match FallowConfig::load(path) {
             Ok(c) => Some(c),
             Err(e) => {
-                eprintln!("Error: failed to load config '{}': {e}", path.display());
-                return Err(ExitCode::from(2));
+                let msg = format!("failed to load config '{}': {e}", path.display());
+                return Err(emit_error(&msg, 2, &output));
             }
         }
     } else {
         match FallowConfig::find_and_load(root) {
             Ok(found) => found.map(|(c, _)| c),
             Err(e) => {
-                eprintln!("Error: {e}");
-                return Err(ExitCode::from(2));
+                return Err(emit_error(&e.to_string(), 2, &output));
             }
         }
     };
@@ -1747,4 +1869,132 @@ fn load_config(
         }
         .resolve(root.to_path_buf(), threads, no_cache),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_no_control_chars ────────────────────────────────────
+
+    #[test]
+    fn control_chars_rejects_null_byte() {
+        let result = validate_no_control_chars("main\x00branch", "--changed-since");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("0x00"));
+        assert!(err.contains("--changed-since"));
+    }
+
+    #[test]
+    fn control_chars_rejects_bell() {
+        assert!(validate_no_control_chars("test\x07ref", "--workspace").is_err());
+    }
+
+    #[test]
+    fn control_chars_rejects_escape() {
+        assert!(validate_no_control_chars("\x1b[31mred", "--config").is_err());
+    }
+
+    #[test]
+    fn control_chars_rejects_carriage_return() {
+        assert!(validate_no_control_chars("main\rinjected", "--changed-since").is_err());
+    }
+
+    #[test]
+    fn control_chars_allows_normal_text() {
+        assert!(validate_no_control_chars("main", "--changed-since").is_ok());
+    }
+
+    #[test]
+    fn control_chars_allows_newline() {
+        assert!(validate_no_control_chars("line1\nline2", "--config").is_ok());
+    }
+
+    #[test]
+    fn control_chars_allows_tab() {
+        assert!(validate_no_control_chars("col1\tcol2", "--config").is_ok());
+    }
+
+    #[test]
+    fn control_chars_allows_empty_string() {
+        assert!(validate_no_control_chars("", "--workspace").is_ok());
+    }
+
+    #[test]
+    fn control_chars_allows_unicode() {
+        assert!(validate_no_control_chars("my-package-日本語", "--workspace").is_ok());
+    }
+
+    #[test]
+    fn control_chars_allows_paths_with_dots_and_slashes() {
+        assert!(validate_no_control_chars("./path/to/config.toml", "--config").is_ok());
+    }
+
+    // ── emit_error ──────────────────────────────────────────────────
+
+    #[test]
+    fn emit_error_returns_given_exit_code() {
+        let code = emit_error("test error", 2, &OutputFormat::Human);
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    // ── format/quiet parsing logic ─────────────────────────────────
+    // Note: format_from_env() and quiet_from_env() read process-global
+    // env vars, so we test the underlying parsing logic directly to
+    // avoid unsafe set_var/remove_var and parallel test interference.
+
+    #[test]
+    fn format_parsing_covers_all_variants() {
+        // The format_from_env function lowercases then matches.
+        // Test the same logic inline.
+        let parse = |s: &str| -> Option<Format> {
+            match s.to_lowercase().as_str() {
+                "json" => Some(Format::Json),
+                "human" => Some(Format::Human),
+                "sarif" => Some(Format::Sarif),
+                "compact" => Some(Format::Compact),
+                _ => None,
+            }
+        };
+        assert!(matches!(parse("json"), Some(Format::Json)));
+        assert!(matches!(parse("JSON"), Some(Format::Json)));
+        assert!(matches!(parse("human"), Some(Format::Human)));
+        assert!(matches!(parse("sarif"), Some(Format::Sarif)));
+        assert!(matches!(parse("compact"), Some(Format::Compact)));
+        assert!(parse("xml").is_none());
+        assert!(parse("").is_none());
+    }
+
+    #[test]
+    fn quiet_parsing_logic() {
+        let parse = |s: &str| -> bool { s == "1" || s.eq_ignore_ascii_case("true") };
+        assert!(parse("1"));
+        assert!(parse("true"));
+        assert!(parse("TRUE"));
+        assert!(parse("True"));
+        assert!(!parse("0"));
+        assert!(!parse("false"));
+        assert!(!parse("yes"));
+    }
+
+    // ── schema includes env vars ─────────────────────────────────────
+
+    #[test]
+    fn schema_includes_environment_variables() {
+        let cmd = Cli::command();
+        let schema = build_cli_schema(&cmd);
+        let env_vars = &schema["environment_variables"];
+        assert!(env_vars["FALLOW_FORMAT"].is_string());
+        assert!(env_vars["FALLOW_QUIET"].is_string());
+        assert!(env_vars["FALLOW_BIN"].is_string());
+    }
+
+    #[test]
+    fn schema_exit_code_2_mentions_json_errors() {
+        let cmd = Cli::command();
+        let schema = build_cli_schema(&cmd);
+        let exit_2 = schema["exit_codes"]["2"].as_str().unwrap();
+        assert!(exit_2.contains("JSON"));
+    }
 }

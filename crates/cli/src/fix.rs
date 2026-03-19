@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -284,12 +284,21 @@ pub(crate) fn run_fix(
     threads: usize,
     quiet: bool,
     dry_run: bool,
+    yes: bool,
     production: bool,
 ) -> ExitCode {
+    // In non-TTY environments (CI, AI agents), require --yes or --dry-run
+    // to prevent accidental destructive operations.
+    if !dry_run && !yes && !std::io::stdin().is_terminal() {
+        let msg = "fix command requires --yes (or --force) in non-interactive environments. \
+                   Use --dry-run to preview changes first, then pass --yes to confirm.";
+        return super::emit_error(msg, 2, &output);
+    }
+
     let config = match super::load_config(
         root,
         config_path,
-        OutputFormat::Human,
+        output.clone(),
         no_cache,
         threads,
         production,
@@ -301,8 +310,7 @@ pub(crate) fn run_fix(
     let results = match fallow_core::analyze(&config) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Analysis error: {e}");
-            return ExitCode::from(2);
+            return super::emit_error(&format!("Analysis error: {e}"), 2, &output);
         }
     };
 

@@ -10,9 +10,9 @@ Fallow detects unused files, exports, dependencies, types, enum members, class m
 
 ## Rules for AI agents
 
-1. **Always use `--format json`** for machine-readable output. Never parse human-formatted output.
-2. **Always use `--quiet`** to suppress progress bars and timing info on stderr.
-3. **Always use `--dry-run` before `fix`** mutations. Review the dry-run output, then run `fix` only if the changes are correct.
+1. **Always use `--format json`** for machine-readable output. Never parse human-formatted output. Alternatively, set `FALLOW_FORMAT=json` as an environment variable.
+2. **Always use `--quiet`** to suppress progress bars and timing info on stderr. Alternatively, set `FALLOW_QUIET=1` as an environment variable.
+3. **Always use `--dry-run` before `fix`** mutations. Review the dry-run output, then run `fix --yes` to apply. The `--yes` flag (alias: `--force`) is **required** in non-TTY environments (CI, piped input, agent subprocesses).
 4. **Use issue type filter flags** (`--unused-files`, `--unused-exports`, etc.) to limit response scope. This keeps output small and avoids exceeding context windows.
 5. **All paths in output are relative** to the project root. Do not join them with an absolute prefix unless you know the working directory.
 6. **Do not run `watch`** in agent workflows. It is interactive and never exits.
@@ -26,6 +26,24 @@ Fallow detects unused files, exports, dependencies, types, enum members, class m
 | 2    | Error (invalid config, parse failure, etc.) |
 
 **Note:** With the rules system, exit code 1 is triggered by any issue type configured as `"error"` in `[rules]`. Without a `[rules]` section, all issue types default to `"error"` severity.
+
+**JSON error output:** When `--format json` is active and an error occurs (exit code 2), the error is emitted as structured JSON on **stdout** instead of plain text on stderr:
+
+```json
+{"error": true, "message": "invalid config: ...", "exit_code": 2}
+```
+
+This allows agents to parse errors the same way they parse normal output.
+
+## Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `FALLOW_FORMAT` | Default output format (`json`, `human`, `sarif`, `compact`). CLI `--format` flag overrides this. |
+| `FALLOW_QUIET` | Set to `1` or `true` to suppress progress output. CLI `--quiet` flag overrides this. |
+| `FALLOW_BIN` | Path to fallow binary (used by the `fallow-mcp` server). |
+
+Set `FALLOW_FORMAT=json` and `FALLOW_QUIET=1` in your agent environment to avoid passing `--format json --quiet` on every invocation.
 
 ## Commands
 
@@ -75,11 +93,12 @@ Auto-remove unused exports and dependencies.
 
 ```bash
 fallow fix --dry-run --format json --quiet   # preview first
-fallow fix --format json --quiet             # apply changes
+fallow fix --yes --format json --quiet       # apply changes (--yes required in non-TTY)
 ```
 
 **Flags:**
 - `--dry-run` -- show what would be removed without modifying files
+- `--yes` (alias: `--force`) -- skip confirmation prompt; **required** in non-TTY environments (CI, piped input, agent subprocesses). Without `--yes` in a non-TTY context, the command exits with code 2 and an error message.
 - `--format json` -- machine-readable output of changes
 
 ### `list`
@@ -169,7 +188,7 @@ fallow dupes --format json --quiet --mode semantic --threshold 5
 ```bash
 fallow fix --dry-run --format json --quiet   # 1. preview
 # agent reviews output
-fallow fix --format json --quiet             # 2. apply
+fallow fix --yes --format json --quiet       # 2. apply (--yes required for non-TTY)
 fallow check --format json --quiet           # 3. verify
 ```
 

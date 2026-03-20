@@ -151,7 +151,6 @@ export type Type{i} = {{ value: number }};
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-
 fn bench_full_pipeline_100(c: &mut Criterion) {
     let (temp_dir, config) = helpers::create_synthetic_project("100", 100);
 

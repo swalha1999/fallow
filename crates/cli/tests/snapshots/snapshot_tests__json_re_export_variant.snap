@@ -1,0 +1,30 @@
+---
+source: crates/cli/tests/snapshot_tests.rs
+expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"CARGO_PKG_VERSION\")),\n\"\\\"version\\\": \\\"[VERSION]\\\"\",)"
+---
+{
+  "unused_files": [],
+  "unused_exports": [
+    {
+      "path": "/project/src/index.ts",
+      "export_name": "reExportedFn",
+      "is_type_only": false,
+      "line": 1,
+      "col": 0,
+      "span_start": 0,
+      "is_re_export": true
+    }
+  ],
+  "unused_types": [],
+  "unused_dependencies": [],
+  "unused_dev_dependencies": [],
+  "unused_enum_members": [],
+  "unused_class_members": [],
+  "unresolved_imports": [],
+  "unlisted_dependencies": [],
+  "duplicate_exports": [],
+  "type_only_dependencies": [],
+  "version": "[VERSION]",
+  "elapsed_ms": 0,
+  "total_issues": 1
+}

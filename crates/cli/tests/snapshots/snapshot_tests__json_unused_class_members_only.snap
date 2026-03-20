@@ -1,0 +1,29 @@
+---
+source: crates/cli/tests/snapshot_tests.rs
+expression: redact_version(&json_str)
+---
+{
+  "unused_files": [],
+  "unused_exports": [],
+  "unused_types": [],
+  "unused_dependencies": [],
+  "unused_dev_dependencies": [],
+  "unused_enum_members": [],
+  "unused_class_members": [
+    {
+      "path": "/project/src/service.ts",
+      "parent_name": "UserService",
+      "member_name": "legacyMethod",
+      "kind": "class_method",
+      "line": 42,
+      "col": 4
+    }
+  ],
+  "unresolved_imports": [],
+  "unlisted_dependencies": [],
+  "duplicate_exports": [],
+  "type_only_dependencies": [],
+  "version": "[VERSION]",
+  "elapsed_ms": 0,
+  "total_issues": 1
+}

@@ -1,0 +1,30 @@
+---
+source: crates/cli/tests/snapshot_tests.rs
+expression: redact_version(&json_str)
+---
+{
+  "unused_files": [],
+  "unused_exports": [],
+  "unused_types": [
+    {
+      "path": "/project/src/types.ts",
+      "export_name": "OldType",
+      "is_type_only": true,
+      "line": 5,
+      "col": 0,
+      "span_start": 60,
+      "is_re_export": false
+    }
+  ],
+  "unused_dependencies": [],
+  "unused_dev_dependencies": [],
+  "unused_enum_members": [],
+  "unused_class_members": [],
+  "unresolved_imports": [],
+  "unlisted_dependencies": [],
+  "duplicate_exports": [],
+  "type_only_dependencies": [],
+  "version": "[VERSION]",
+  "elapsed_ms": 0,
+  "total_issues": 1
+}

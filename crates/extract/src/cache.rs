@@ -1,3 +1,9 @@
+//! Incremental parse cache with bincode serialization.
+//!
+//! Stores parsed module information (exports, imports, re-exports) on disk so
+//! unchanged files can skip AST parsing on subsequent runs. Uses xxh3 content
+//! hashing to detect changes.
+
 use std::path::Path;
 
 use rustc_hash::FxHashMap;
@@ -58,14 +64,22 @@ pub struct CachedSuppression {
     pub kind: u8,
 }
 
+/// Cached export data for a single export declaration.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedExport {
+    /// Export name (or "default" for default exports).
     pub name: String,
+    /// Whether this is a default export.
     pub is_default: bool,
+    /// Whether this is a type-only export.
     pub is_type_only: bool,
+    /// The local binding name, if different.
     pub local_name: Option<String>,
+    /// Byte offset of the export span start.
     pub span_start: u32,
+    /// Byte offset of the export span end.
     pub span_end: u32,
+    /// Members of this export (for enums and classes).
     pub members: Vec<CachedMember>,
 }
 
@@ -76,59 +90,93 @@ const IMPORT_KIND_DEFAULT: u8 = 1;
 const IMPORT_KIND_NAMESPACE: u8 = 2;
 const IMPORT_KIND_SIDE_EFFECT: u8 = 3;
 
+/// Cached import data for a single import declaration.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedImport {
+    /// The import specifier.
     pub source: String,
     /// For Named imports, the imported symbol name. Empty for other kinds.
     pub imported_name: String,
+    /// The local binding name.
     pub local_name: String,
+    /// Whether this is a type-only import.
     pub is_type_only: bool,
     /// Import kind: 0=Named, 1=Default, 2=Namespace, 3=SideEffect.
     pub kind: u8,
+    /// Byte offset of the import span start.
     pub span_start: u32,
+    /// Byte offset of the import span end.
     pub span_end: u32,
 }
 
+/// Cached dynamic import data.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedDynamicImport {
+    /// The import specifier.
     pub source: String,
+    /// Byte offset of the span start.
     pub span_start: u32,
+    /// Byte offset of the span end.
     pub span_end: u32,
+    /// Names destructured from the import result.
     pub destructured_names: Vec<String>,
+    /// Local variable name for namespace imports.
     pub local_name: Option<String>,
 }
 
+/// Cached `require()` call data.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedRequireCall {
+    /// The require specifier.
     pub source: String,
+    /// Byte offset of the span start.
     pub span_start: u32,
+    /// Byte offset of the span end.
     pub span_end: u32,
+    /// Names destructured from the require result.
     pub destructured_names: Vec<String>,
+    /// Local variable name for namespace requires.
     pub local_name: Option<String>,
 }
 
+/// Cached re-export data.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedReExport {
+    /// The module being re-exported from.
     pub source: String,
+    /// Name imported from the source.
     pub imported_name: String,
+    /// Name exported from this module.
     pub exported_name: String,
+    /// Whether this is a type-only re-export.
     pub is_type_only: bool,
 }
 
+/// Cached enum or class member data.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedMember {
+    /// Member name.
     pub name: String,
+    /// Member kind as a string ("enum", "method", "property").
     pub kind: String,
+    /// Byte offset of the span start.
     pub span_start: u32,
+    /// Byte offset of the span end.
     pub span_end: u32,
+    /// Whether this member has decorators.
     pub has_decorator: bool,
 }
 
+/// Cached dynamic import pattern data (template literals, `import.meta.glob`).
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct CachedDynamicImportPattern {
+    /// Static prefix of the import path.
     pub prefix: String,
+    /// Static suffix, if any.
     pub suffix: Option<String>,
+    /// Byte offset of the span start.
     pub span_start: u32,
+    /// Byte offset of the span end.
     pub span_end: u32,
 }
 

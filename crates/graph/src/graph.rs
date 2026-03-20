@@ -1,3 +1,8 @@
+//! Module dependency graph with re-export chain propagation and reachability analysis.
+//!
+//! The graph is built from resolved modules and entry points, then used to determine
+//! which files are reachable and which exports are referenced.
+
 use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -34,7 +39,9 @@ pub struct ModuleGraph {
 /// A single module in the graph.
 #[derive(Debug)]
 pub struct ModuleNode {
+    /// Unique identifier for this module.
     pub file_id: FileId,
+    /// Absolute path to the module file.
     pub path: PathBuf,
     /// Range into the flat `edges` array.
     pub edge_range: Range<usize>,
@@ -66,8 +73,11 @@ pub struct ReExportEdge {
 /// An export with reference tracking.
 #[derive(Debug)]
 pub struct ExportSymbol {
+    /// The exported name (named or default).
     pub name: ExportName,
+    /// Whether this is a type-only export.
     pub is_type_only: bool,
+    /// Source span of the export declaration.
     pub span: oxc_span::Span,
     /// Which files reference this export.
     pub references: Vec<SymbolReference>,
@@ -78,7 +88,9 @@ pub struct ExportSymbol {
 /// A reference to an export from another file.
 #[derive(Debug, Clone)]
 pub struct SymbolReference {
+    /// The file that references this export.
     pub from_file: FileId,
+    /// How the export is referenced.
     pub kind: ReferenceKind,
     /// Byte span of the import statement in the referencing file.
     /// Used by the LSP to locate references for Code Lens navigation.
@@ -88,11 +100,17 @@ pub struct SymbolReference {
 /// How an export is referenced.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReferenceKind {
+    /// A named import (`import { foo }`).
     NamedImport,
+    /// A default import (`import Foo`).
     DefaultImport,
+    /// A namespace import (`import * as ns`).
     NamespaceImport,
+    /// A re-export (`export { foo } from './bar'`).
     ReExport,
+    /// A dynamic import (`import('./foo')`).
     DynamicImport,
+    /// A side-effect import (`import './styles'`).
     SideEffectImport,
 }
 

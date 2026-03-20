@@ -1,16 +1,29 @@
+//! Inline suppression comment types and issue kind definitions.
+
 /// Issue kind for suppression matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueKind {
+    /// An unused file.
     UnusedFile,
+    /// An unused export.
     UnusedExport,
+    /// An unused type export.
     UnusedType,
+    /// An unused dependency.
     UnusedDependency,
+    /// An unused dev dependency.
     UnusedDevDependency,
+    /// An unused enum member.
     UnusedEnumMember,
+    /// An unused class member.
     UnusedClassMember,
+    /// An unresolved import.
     UnresolvedImport,
+    /// An unlisted dependency.
     UnlistedDependency,
+    /// A duplicate export name across modules.
     DuplicateExport,
+    /// Code duplication.
     CodeDuplication,
 }
 

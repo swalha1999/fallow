@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Serializer;
 
+/// Serialize a `Path` with forward slashes for cross-platform consistency.
 pub fn serialize<S: Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&path.to_string_lossy().replace('\\', "/"))
 }
 
+/// Serialize a `Vec<PathBuf>` with forward slashes for cross-platform consistency.
 pub fn serialize_vec<S: Serializer>(paths: &[PathBuf], s: S) -> Result<S::Ok, S::Error> {
     use serde::ser::SerializeSeq;
     let mut seq = s.serialize_seq(Some(paths.len()))?;

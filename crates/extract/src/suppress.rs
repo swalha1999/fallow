@@ -1,3 +1,8 @@
+//! Inline suppression comment parsing.
+//!
+//! Parses `fallow-ignore-file` and `fallow-ignore-next-line` comments from
+//! source files, supporting both `//` and `/* */` styles.
+
 use oxc_ast::ast::Comment;
 
 // Re-export types from fallow-types

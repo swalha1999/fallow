@@ -1,3 +1,7 @@
+//! Astro component frontmatter extraction.
+//!
+//! Extracts the TypeScript code between `---` delimiters in `.astro` files.
+
 use std::path::Path;
 use std::sync::LazyLock;
 

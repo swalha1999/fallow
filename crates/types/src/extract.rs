@@ -1,3 +1,5 @@
+//! Module extraction types: exports, imports, re-exports, members, and parse results.
+
 use oxc_span::Span;
 
 use crate::discover::FileId;
@@ -6,18 +8,28 @@ use crate::suppress::Suppression;
 /// Extracted module information from a single file.
 #[derive(Debug, Clone)]
 pub struct ModuleInfo {
+    /// Unique identifier for this file.
     pub file_id: FileId,
+    /// All export declarations in this module.
     pub exports: Vec<ExportInfo>,
+    /// All import declarations in this module.
     pub imports: Vec<ImportInfo>,
+    /// All re-export declarations (e.g., `export { foo } from './bar'`).
     pub re_exports: Vec<ReExportInfo>,
+    /// All dynamic `import()` calls with string literal sources.
     pub dynamic_imports: Vec<DynamicImportInfo>,
+    /// Dynamic import patterns from template literals, string concat, or `import.meta.glob`.
     pub dynamic_import_patterns: Vec<DynamicImportPattern>,
+    /// All `require()` calls.
     pub require_calls: Vec<RequireCallInfo>,
+    /// Static member access expressions (e.g., `Status.Active`).
     pub member_accesses: Vec<MemberAccess>,
     /// Identifiers used in "all members consumed" patterns
     /// (Object.values, Object.keys, Object.entries, for..in, spread, computed dynamic access).
     pub whole_object_uses: Vec<String>,
+    /// Whether this module uses CommonJS exports (`module.exports` or `exports.*`).
     pub has_cjs_exports: bool,
+    /// xxh3 hash of the file content for incremental caching.
     pub content_hash: u64,
     /// Inline suppression directives parsed from comments.
     pub suppressions: Vec<Suppression>,
@@ -30,15 +42,20 @@ pub struct DynamicImportPattern {
     pub prefix: String,
     /// Static suffix of the import path (e.g., ".json"), if any.
     pub suffix: Option<String>,
+    /// Source span in the original file.
     pub span: Span,
 }
 
 /// An export declaration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExportInfo {
+    /// The exported name (named or default).
     pub name: ExportName,
+    /// The local binding name, if different from the exported name.
     pub local_name: Option<String>,
+    /// Whether this is a type-only export (`export type`).
     pub is_type_only: bool,
+    /// Source span of the export declaration.
     #[serde(serialize_with = "serialize_span")]
     pub span: Span,
     /// Members of this export (for enums and classes).
@@ -49,8 +66,11 @@ pub struct ExportInfo {
 /// A member of an enum or class.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemberInfo {
+    /// Member name.
     pub name: String,
+    /// Whether this is an enum member, class method, or class property.
     pub kind: MemberKind,
+    /// Source span of the member declaration.
     #[serde(serialize_with = "serialize_span")]
     pub span: Span,
     /// Whether this member has decorators (e.g., `@Column()`, `@Inject()`).
@@ -64,8 +84,11 @@ pub struct MemberInfo {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberKind {
+    /// A TypeScript enum member.
     EnumMember,
+    /// A class method.
     ClassMethod,
+    /// A class property.
     ClassProperty,
 }
 
@@ -90,7 +113,9 @@ fn serialize_span<S: serde::Serializer>(span: &Span, serializer: S) -> Result<S:
 /// Export identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum ExportName {
+    /// A named export (e.g., `export const foo`).
     Named(String),
+    /// The default export.
     Default,
 }
 
@@ -106,19 +131,28 @@ impl std::fmt::Display for ExportName {
 /// An import declaration.
 #[derive(Debug, Clone)]
 pub struct ImportInfo {
+    /// The import specifier (e.g., `./utils` or `react`).
     pub source: String,
+    /// How the symbol is imported (named, default, namespace, or side-effect).
     pub imported_name: ImportedName,
+    /// The local binding name in the importing module.
     pub local_name: String,
+    /// Whether this is a type-only import (`import type`).
     pub is_type_only: bool,
+    /// Source span of the import declaration.
     pub span: Span,
 }
 
 /// How a symbol is imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportedName {
+    /// A named import (e.g., `import { foo }`).
     Named(String),
+    /// A default import (e.g., `import React`).
     Default,
+    /// A namespace import (e.g., `import * as utils`).
     Namespace,
+    /// A side-effect import (e.g., `import './styles.css'`).
     SideEffect,
 }
 
@@ -135,16 +169,22 @@ const _: () = assert!(std::mem::size_of::<MemberAccess>() == 48);
 /// A re-export declaration.
 #[derive(Debug, Clone)]
 pub struct ReExportInfo {
+    /// The module being re-exported from.
     pub source: String,
+    /// The name imported from the source module (or `*` for star re-exports).
     pub imported_name: String,
+    /// The name exported from this module.
     pub exported_name: String,
+    /// Whether this is a type-only re-export.
     pub is_type_only: bool,
 }
 
 /// A dynamic `import()` call.
 #[derive(Debug, Clone)]
 pub struct DynamicImportInfo {
+    /// The import specifier.
     pub source: String,
+    /// Source span of the `import()` expression.
     pub span: Span,
     /// Names destructured from the dynamic import result.
     /// Non-empty means `const { a, b } = await import(...)` -> Named imports.
@@ -158,7 +198,9 @@ pub struct DynamicImportInfo {
 /// A `require()` call.
 #[derive(Debug, Clone)]
 pub struct RequireCallInfo {
+    /// The require specifier.
     pub source: String,
+    /// Source span of the `require()` call.
     pub span: Span,
     /// Names destructured from the `require()` result.
     /// Non-empty means `const { a, b } = require(...)` -> Named imports.

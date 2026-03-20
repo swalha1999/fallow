@@ -1,3 +1,8 @@
+//! CSS/SCSS file parsing and CSS Module class name extraction.
+//!
+//! Handles `@import`, `@use`, `@forward`, `@apply`, `@tailwind` directives,
+//! and extracts class names as named exports from `.module.css`/`.module.scss` files.
+
 use std::path::Path;
 use std::sync::LazyLock;
 

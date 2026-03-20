@@ -4,6 +4,8 @@
 //! Astro frontmatter, MDX import/export extraction, CSS Module class name extraction,
 //! and incremental caching of parse results.
 
+#![warn(missing_docs)]
+
 pub mod astro;
 pub mod cache;
 pub mod css;

@@ -1,3 +1,8 @@
+//! MDX import/export statement extraction.
+//!
+//! Extracts `import` and `export` lines from MDX files (Markdown with JSX),
+//! handling multi-line imports via brace depth tracking.
+
 use std::path::Path;
 
 use oxc_allocator::Allocator;

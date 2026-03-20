@@ -1,3 +1,5 @@
+//! Centralized project state with file registry and workspace metadata.
+
 use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashMap;

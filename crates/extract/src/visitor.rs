@@ -1,3 +1,5 @@
+//! Oxc AST visitor for extracting imports, exports, re-exports, and member accesses.
+
 use oxc_ast::ast::*;
 use oxc_ast_visit::Visit;
 use oxc_ast_visit::walk;

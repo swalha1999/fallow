@@ -1,3 +1,8 @@
+//! Vue/Svelte Single File Component (SFC) script extraction.
+//!
+//! Extracts `<script>` block content from `.vue` and `.svelte` files using regex,
+//! handling `lang`, `src`, and `generic` attributes, and filtering HTML comments.
+
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -34,10 +39,13 @@ static SRC_ATTR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 static HTML_COMMENT_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?s)<!--.*?-->").expect("valid regex"));
 
+/// An extracted `<script>` block from a Vue or Svelte SFC.
 pub struct SfcScript {
+    /// The script body text.
     pub body: String,
+    /// Whether the script uses TypeScript (`lang="ts"` or `lang="tsx"`).
     pub is_typescript: bool,
-    /// Whether the script uses JSX syntax (lang="tsx" or lang="jsx").
+    /// Whether the script uses JSX syntax (`lang="tsx"` or `lang="jsx"`).
     pub is_jsx: bool,
     /// Byte offset of the script body within the full SFC source.
     pub byte_offset: usize,
@@ -45,6 +53,7 @@ pub struct SfcScript {
     pub src: Option<String>,
 }
 
+/// Extract all `<script>` blocks from a Vue/Svelte SFC source string.
 pub fn extract_sfc_scripts(source: &str) -> Vec<SfcScript> {
     // Build HTML comment ranges to filter out <script> blocks inside comments.
     // Using ranges instead of source replacement avoids corrupting script body content
@@ -88,6 +97,7 @@ pub fn extract_sfc_scripts(source: &str) -> Vec<SfcScript> {
         .collect()
 }
 
+/// Check if a file path is a Vue or Svelte SFC (`.vue` or `.svelte`).
 pub fn is_sfc_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())

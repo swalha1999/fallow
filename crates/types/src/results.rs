@@ -1,3 +1,5 @@
+//! Analysis result types for all dead code issue categories.
+
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -8,15 +10,25 @@ use crate::serde_path;
 /// Complete analysis results.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct AnalysisResults {
+    /// Files not reachable from any entry point.
     pub unused_files: Vec<UnusedFile>,
+    /// Exports never imported by other modules.
     pub unused_exports: Vec<UnusedExport>,
+    /// Type exports never imported by other modules.
     pub unused_types: Vec<UnusedExport>,
+    /// Dependencies listed in package.json but never imported.
     pub unused_dependencies: Vec<UnusedDependency>,
+    /// Dev dependencies listed in package.json but never imported.
     pub unused_dev_dependencies: Vec<UnusedDependency>,
+    /// Enum members never accessed.
     pub unused_enum_members: Vec<UnusedMember>,
+    /// Class members never accessed.
     pub unused_class_members: Vec<UnusedMember>,
+    /// Import specifiers that could not be resolved.
     pub unresolved_imports: Vec<UnresolvedImport>,
+    /// Dependencies used in code but not listed in package.json.
     pub unlisted_dependencies: Vec<UnlistedDependency>,
+    /// Exports with the same name across multiple modules.
     pub duplicate_exports: Vec<DuplicateExport>,
     /// Production dependencies only used via type-only imports (could be devDependencies).
     /// Only populated in production mode.
@@ -53,6 +65,7 @@ impl AnalysisResults {
 /// A file that is not reachable from any entry point.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnusedFile {
+    /// Absolute path to the unused file.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
 }
@@ -60,11 +73,16 @@ pub struct UnusedFile {
 /// An export that is never imported by other modules.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnusedExport {
+    /// File containing the unused export.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// Name of the unused export.
     pub export_name: String,
+    /// Whether this is a type-only export.
     pub is_type_only: bool,
+    /// 1-based line number of the export.
     pub line: u32,
+    /// 0-based byte column offset.
     pub col: u32,
     /// Byte offset into the source file (used by the fix command).
     pub span_start: u32,
@@ -75,7 +93,9 @@ pub struct UnusedExport {
 /// A dependency that is listed in package.json but never imported.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnusedDependency {
+    /// npm package name.
     pub package_name: String,
+    /// Whether this is in `dependencies` or `devDependencies`.
     pub location: DependencyLocation,
     /// Path to the package.json where this dependency is listed.
     /// For root deps this is `<root>/package.json`, for workspace deps it is `<ws>/package.json`.
@@ -87,36 +107,50 @@ pub struct UnusedDependency {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DependencyLocation {
+    /// Listed in `dependencies`.
     Dependencies,
+    /// Listed in `devDependencies`.
     DevDependencies,
 }
 
 /// An unused enum or class member.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnusedMember {
+    /// File containing the unused member.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// Name of the parent enum or class.
     pub parent_name: String,
+    /// Name of the unused member.
     pub member_name: String,
+    /// Whether this is an enum member, class method, or class property.
     pub kind: MemberKind,
+    /// 1-based line number.
     pub line: u32,
+    /// 0-based byte column offset.
     pub col: u32,
 }
 
 /// An import that could not be resolved.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnresolvedImport {
+    /// File containing the unresolved import.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// The import specifier that could not be resolved.
     pub specifier: String,
+    /// 1-based line number.
     pub line: u32,
+    /// 0-based byte column offset.
     pub col: u32,
 }
 
 /// A dependency used in code but not listed in package.json.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnlistedDependency {
+    /// npm package name.
     pub package_name: String,
+    /// Files that import this unlisted dependency.
     #[serde(serialize_with = "serde_path::serialize_vec")]
     pub imported_from: Vec<PathBuf>,
 }
@@ -124,7 +158,9 @@ pub struct UnlistedDependency {
 /// An export that appears multiple times across the project.
 #[derive(Debug, Clone, Serialize)]
 pub struct DuplicateExport {
+    /// The duplicated export name.
     pub export_name: String,
+    /// Files that export this name.
     #[serde(serialize_with = "serde_path::serialize_vec")]
     pub locations: Vec<PathBuf>,
 }
@@ -134,6 +170,7 @@ pub struct DuplicateExport {
 /// is not needed at runtime and could be moved to devDependencies.
 #[derive(Debug, Clone, Serialize)]
 pub struct TypeOnlyDependency {
+    /// npm package name.
     pub package_name: String,
     /// Path to the package.json where the dependency is listed.
     #[serde(serialize_with = "serde_path::serialize")]
@@ -144,13 +181,16 @@ pub struct TypeOnlyDependency {
 /// reference counts above each export declaration.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportUsage {
+    /// File containing the export.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// Name of the exported symbol.
     pub export_name: String,
     /// 1-based line number.
     pub line: u32,
     /// 0-based byte column offset.
     pub col: u32,
+    /// Number of files that reference this export.
     pub reference_count: usize,
     /// Locations where this export is referenced. Used by the LSP Code Lens
     /// to enable click-to-navigate via `editor.action.showReferences`.
@@ -160,6 +200,7 @@ pub struct ExportUsage {
 /// A location where an export is referenced (import site in another file).
 #[derive(Debug, Clone, Serialize)]
 pub struct ReferenceLocation {
+    /// File containing the import that references the export.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
     /// 1-based line number.

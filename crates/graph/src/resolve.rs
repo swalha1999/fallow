@@ -1,3 +1,10 @@
+//! Import specifier resolution using `oxc_resolver`.
+//!
+//! Resolves all import specifiers across all modules in parallel, mapping each to
+//! an internal file, npm package, or unresolvable target. Includes support for
+//! tsconfig path aliases, pnpm virtual store paths, React Native platform extensions,
+//! and dynamic import pattern matching via glob.
+
 use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashMap;
@@ -50,29 +57,43 @@ pub enum ResolveResult {
 /// A resolved import with its target.
 #[derive(Debug, Clone)]
 pub struct ResolvedImport {
+    /// The original import information.
     pub info: ImportInfo,
+    /// Where the import resolved to.
     pub target: ResolveResult,
 }
 
 /// A resolved re-export with its target.
 #[derive(Debug, Clone)]
 pub struct ResolvedReExport {
+    /// The original re-export information.
     pub info: ReExportInfo,
+    /// Where the re-export source resolved to.
     pub target: ResolveResult,
 }
 
 /// Fully resolved module with all imports mapped to targets.
 #[derive(Debug)]
 pub struct ResolvedModule {
+    /// Unique file identifier.
     pub file_id: FileId,
+    /// Absolute path to the module file.
     pub path: PathBuf,
+    /// All export declarations in this module.
     pub exports: Vec<fallow_types::extract::ExportInfo>,
+    /// All re-exports with resolved targets.
     pub re_exports: Vec<ResolvedReExport>,
+    /// All static imports with resolved targets.
     pub resolved_imports: Vec<ResolvedImport>,
+    /// All dynamic imports with resolved targets.
     pub resolved_dynamic_imports: Vec<ResolvedImport>,
+    /// Dynamic import patterns matched against discovered files.
     pub resolved_dynamic_patterns: Vec<(fallow_types::extract::DynamicImportPattern, Vec<FileId>)>,
+    /// Static member accesses (e.g., `Status.Active`).
     pub member_accesses: Vec<fallow_types::extract::MemberAccess>,
+    /// Identifiers used as whole objects (Object.values, for..in, spread, etc.).
     pub whole_object_uses: Vec<String>,
+    /// Whether this module uses CommonJS exports.
     pub has_cjs_exports: bool,
 }
 

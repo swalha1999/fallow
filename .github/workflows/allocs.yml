@@ -1,0 +1,79 @@
+name: Allocation Tracking
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'alloc-baseline.json'
+      - '.github/workflows/allocs.yml'
+
+concurrency:
+  group: allocs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  allocations:
+    name: Allocation regression check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: allocs
+
+      - name: Run allocation benchmark
+        run: cargo bench --bench allocations 2>&1 | tee alloc-output.txt
+
+      - name: Parse and check allocations
+        run: |
+          total_bytes=$(grep '^alloc_total_bytes:' alloc-output.txt | awk '{print $2}')
+          total_blocks=$(grep '^alloc_total_blocks:' alloc-output.txt | awk '{print $2}')
+          max_bytes=$(grep '^alloc_max_bytes:' alloc-output.txt | awk '{print $2}')
+          max_blocks=$(grep '^alloc_max_blocks:' alloc-output.txt | awk '{print $2}')
+
+          echo "## Allocation Stats" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Total bytes allocated | $total_bytes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Total allocations | $total_blocks |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Peak memory (bytes) | $max_bytes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Peak allocations | $max_blocks |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ! -f alloc-baseline.json ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> No baseline found. Run \`scripts/alloc-check.sh --save\` to create one." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::No alloc-baseline.json found — skipping regression check"
+            exit 0
+          fi
+
+          base_total_bytes=$(python3 -c "import json; print(json.load(open('alloc-baseline.json'))['alloc_total_bytes'])")
+          base_max_bytes=$(python3 -c "import json; print(json.load(open('alloc-baseline.json'))['alloc_max_bytes'])")
+
+          failed=0
+
+          for metric in total_bytes max_bytes; do
+            eval current=\$$metric
+            eval baseline=\$base_$metric
+            if [ "$baseline" -eq 0 ]; then continue; fi
+            pct=$(python3 -c "print(round(($current - $baseline) / $baseline * 100, 1))")
+            echo "::notice::$metric: $current (baseline: $baseline, ${pct}%)"
+            if python3 -c "exit(0 if ($current - $baseline) / $baseline * 100 > 10 else 1)"; then
+              echo "::warning::$metric increased by ${pct}% (threshold: 10%)"
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Allocation regression detected. Run 'scripts/alloc-check.sh --save' to update baseline."
+            exit 1
+          fi

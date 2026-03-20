@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Fallow JSON Output Schema",
+  "description": "Schema for the JSON output of `fallow check --format json` and `fallow dupes --format json`.",
+  "type": "object",
+  "required": ["schema_version", "version", "elapsed_ms", "total_issues"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version for this output format (semver, independent of tool version). Consumers should check this field to detect structural changes.",
+      "examples": ["1.0.0"]
+    },
+    "version": {
+      "type": "string",
+      "description": "Fallow tool version that produced this output.",
+      "examples": ["1.0.0"]
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "description": "Analysis duration in milliseconds."
+    },
+    "total_issues": {
+      "type": "integer",
+      "description": "Total number of issues found across all categories."
+    },
+    "unused_files": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedFile" }
+    },
+    "unused_exports": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedExport" }
+    },
+    "unused_types": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedExport" }
+    },
+    "unused_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedDependency" }
+    },
+    "unused_dev_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedDependency" }
+    },
+    "unused_enum_members": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedMember" }
+    },
+    "unused_class_members": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedMember" }
+    },
+    "unresolved_imports": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnresolvedImport" }
+    },
+    "unlisted_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnlistedDependency" }
+    },
+    "duplicate_exports": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/DuplicateExport" }
+    },
+    "type_only_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/TypeOnlyDependency" }
+    }
+  },
+  "definitions": {
+    "UnusedFile": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path (forward slashes, relative to project root)."
+        }
+      }
+    },
+    "UnusedExport": {
+      "type": "object",
+      "required": ["path", "export_name", "is_type_only", "line", "col", "span_start", "is_re_export"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path containing the unused export."
+        },
+        "export_name": {
+          "type": "string",
+          "description": "Name of the unused export."
+        },
+        "is_type_only": {
+          "type": "boolean",
+          "description": "Whether this is a type-only export (interface, type alias)."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset."
+        },
+        "span_start": {
+          "type": "integer",
+          "description": "Byte offset into the source file (used by the fix command)."
+        },
+        "is_re_export": {
+          "type": "boolean",
+          "description": "Whether this finding comes from a barrel/index re-export rather than the source definition."
+        }
+      }
+    },
+    "UnusedDependency": {
+      "type": "object",
+      "required": ["package_name", "location", "path"],
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "description": "npm package name."
+        },
+        "location": {
+          "type": "string",
+          "enum": ["dependencies", "devDependencies"],
+          "description": "Which section of package.json the dependency is listed in."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to the package.json where this dependency is listed."
+        }
+      }
+    },
+    "UnusedMember": {
+      "type": "object",
+      "required": ["path", "parent_name", "member_name", "kind", "line", "col"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path containing the unused member."
+        },
+        "parent_name": {
+          "type": "string",
+          "description": "Name of the parent enum or class."
+        },
+        "member_name": {
+          "type": "string",
+          "description": "Name of the unused member."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Member kind (e.g., EnumMember, ClassMethod, ClassProperty)."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset."
+        }
+      }
+    },
+    "UnresolvedImport": {
+      "type": "object",
+      "required": ["path", "specifier", "line", "col"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path containing the unresolved import."
+        },
+        "specifier": {
+          "type": "string",
+          "description": "The import specifier that could not be resolved."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset."
+        }
+      }
+    },
+    "UnlistedDependency": {
+      "type": "object",
+      "required": ["package_name", "imported_from"],
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "description": "npm package name that is imported but not listed in package.json."
+        },
+        "imported_from": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File paths that import this unlisted dependency."
+        }
+      }
+    },
+    "DuplicateExport": {
+      "type": "object",
+      "required": ["export_name", "locations"],
+      "properties": {
+        "export_name": {
+          "type": "string",
+          "description": "The export name that appears in multiple modules."
+        },
+        "locations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File paths where this export name is defined."
+        }
+      }
+    },
+    "TypeOnlyDependency": {
+      "type": "object",
+      "required": ["package_name", "path"],
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "description": "Production dependency that is only used via type-only imports."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to the package.json where this dependency is listed."
+        }
+      }
+    }
+  }
+}

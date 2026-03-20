@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use fallow_config::{FallowConfig, OutputFormat};
+use fallow_config::FallowConfig;
 
 pub fn create_test_config(root: PathBuf) -> fallow_config::ResolvedConfig {
     make_config(root, true)
@@ -9,20 +9,20 @@ pub fn create_test_config(root: PathBuf) -> fallow_config::ResolvedConfig {
 pub fn make_config(root: PathBuf, no_cache: bool) -> fallow_config::ResolvedConfig {
     FallowConfig {
         schema: None,
-        extends: vec![],
         entry: vec![],
-        ignore_patterns: vec![],
+        ignore: vec![],
+        detect: fallow_config::DetectConfig::default(),
         framework: vec![],
         workspaces: None,
         ignore_dependencies: vec![],
         ignore_exports: vec![],
+        output: fallow_config::OutputFormat::Human,
         duplicates: fallow_config::DuplicatesConfig::default(),
         rules: fallow_config::RulesConfig::default(),
         production: false,
         plugins: vec![],
-        overrides: vec![],
     }
-    .resolve(root, OutputFormat::Human, 4, no_cache)
+    .resolve(root, 4, no_cache)
 }
 
 /// Generate a synthetic project with `file_count` source files.

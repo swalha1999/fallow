@@ -67,14 +67,14 @@ cd benchmarks/knip6 && npm install
 ### Criterion Benchmarks
 
 ```bash
-# All benchmarks (including large-scale)
+# All benchmarks (both standard and large-scale)
+cargo bench
+
+# Only standard benchmarks (fast)
 cargo bench --bench analysis
 
-# Only the standard group (fast)
-cargo bench --bench analysis -- benches/
-
 # Only large-scale benchmarks (1000+ files, slower)
-cargo bench --bench analysis -- large_scale_benches/
+cargo bench --bench large_analysis
 ```
 
 Large-scale benchmarks use `sample_size(10)` and `measurement_time(60s)` to accommodate longer iteration times.
@@ -131,7 +131,7 @@ When publishing results, always include the environment info printed by the benc
 
 ## Reference Results (2026-03-20)
 
-Environment: Apple M5 (10 cores), 32 GB RAM, macOS 25.2.0, Node v22.21.1, rustc 1.93.0. fallow v0.3.0, knip 5.87.0, knip 6.0.0, jscpd 4.0.8. Median of 5 runs, 2 warmup.
+Environment: Apple M5 (10 cores), 32 GB RAM, macOS 25.2.0, Node v22.21.1, rustc 1.93.0. fallow v0.3.0 (results may differ on current version), knip 5.87.0, knip 6.0.0, jscpd 4.0.8. Median of 5 runs, 2 warmup.
 
 ### Dead code: fallow check vs knip
 
@@ -169,7 +169,7 @@ Note: knip does **not** detect circular dependencies. madge and dpdm are the pri
 
 ## CI Integration
 
-The `.github/workflows/bench.yml` workflow runs Criterion benchmarks on every PR and push to main:
+The `.github/workflows/bench.yml` workflow runs Criterion benchmarks on PRs and pushes to main (when Rust source files change):
 
 - Results stored on `gh-pages` branch
 - 10% regression threshold triggers alerts

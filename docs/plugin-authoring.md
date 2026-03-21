@@ -316,7 +316,7 @@ Reference it in your plugin files:
 | Tooling dependencies | Yes | Yes |
 | Config file patterns | Yes | Yes |
 | AST-based config parsing | Yes | No |
-| Custom detection logic | Yes | No (enablers only) |
+| Custom detection logic | Yes | Yes (dependency, fileExists, all/any combinators) |
 
 External plugins cover the vast majority of use cases. AST-based config parsing (extracting entry points from `vite.config.ts`, resolving ESLint plugin short names, etc.) requires a built-in Rust plugin.
 

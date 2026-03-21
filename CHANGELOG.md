@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-21
+
+### Added
+- Markdown output format (`--format markdown`)
+- Oxc-inspired code quality: workspace-level clippy configuration with `all`, `pedantic`, `nursery`, `cargo` lint groups and 13 restriction lints
+- `#[expect]` over `#[allow]` for all clippy suppressions (warns when suppression becomes unnecessary)
+- Const size assertions on hot-path types (`ModuleNode`, `ModuleInfo`, `ExportInfo`, `ImportInfo`, `Edge`) to prevent accidental struct bloat
+- VS Code extension icon and marketplace metadata
+
+### Changed
+- Module graph split into focused submodules (`types.rs`, `build.rs`, `reachability.rs`, `re_exports.rs`, `cycles.rs`)
+- Dev profile optimized with `debug = false` and selective `opt-level` for proc-macro crates
+
+### Fixed
+- Windows build: restrict `ModuleNode` size assertion to Unix (`PathBuf` layout differs on Windows MSVC)
+
+## [1.0.4] - 2026-03-21
+
+### Fixed
+- CI failures across typos, cargo-deny, docs, MSRV, and clippy
+- Windows symlink support for workspace integration test
+
 ## [1.0.3] - 2026-03-20
 
 ### Fixed
@@ -146,7 +168,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/fallow-rs/fallow/compare/v1.0.4...v1.1.0
+[1.0.4]: https://github.com/fallow-rs/fallow/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/fallow-rs/fallow/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/fallow-rs/fallow/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/fallow-rs/fallow/compare/v1.0.0...v1.0.1

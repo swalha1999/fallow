@@ -1,12 +1,12 @@
 ---
 name: fallow
-description: Rust-native codebase analyzer for JavaScript/TypeScript projects. Finds unused code, circular dependencies, code duplication, and complexity hotspots. 3-36x faster than knip v5.
+description: Rust-native codebase analyzer for JavaScript/TypeScript projects. Finds unused code, circular dependencies, and code duplication. 3-36x faster than knip v5.
 agent-usage: This CLI is frequently invoked by AI coding agents (Claude Code, Cursor, Copilot, etc.) for codebase hygiene tasks.
 ---
 
 # Fallow CLI -- Agent Integration Guide
 
-Fallow is a codebase analyzer for JS/TS projects. It detects unused files, exports, dependencies, types, enum members, class members, unresolved imports, unlisted dependencies, duplicate exports, circular dependencies, code duplication, and complexity hotspots.
+Fallow is a codebase analyzer for JS/TS projects. It detects unused files, exports, dependencies, types, enum members, class members, unresolved imports, unlisted dependencies, duplicate exports, circular dependencies, and code duplication.
 
 ## Rules for AI agents
 
@@ -97,7 +97,7 @@ fallow dupes --format json --quiet --threshold 5
 
 ### `fix`
 
-Auto-remove unused exports and dependencies.
+Auto-remove unused exports, dependencies, and enum members.
 
 ```bash
 fallow fix --dry-run --format json --quiet   # preview first
@@ -174,9 +174,9 @@ fallow plugin-schema > plugin-schema.json
 
 JSON output goes to **stdout**. Progress bars and timing go to **stderr** (suppressed with `--quiet`).
 
-Compact format (`--format compact`) is grep-friendly: one issue per line as `type:path:line:name`.
+Compact format (`--format compact`) is grep-friendly: one issue per line. Format varies by issue type: `unused-export:path:line:name`, `unused-file:path`, `unused-dep:package_name`, `circular-dependency:path:0:chain`, etc.
 
-JSON output includes `version`, `elapsed_ms`, and `total_issues` metadata alongside the issue arrays.
+JSON output includes `schema_version`, `version`, `elapsed_ms`, and `total_issues` metadata alongside the issue arrays.
 
 ## Common agent workflows
 

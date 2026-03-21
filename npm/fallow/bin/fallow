@@ -15,9 +15,14 @@ function getPlatformPackage() {
     return `@fallow-cli/darwin-${arch}`;
   }
   if (platform === 'linux') {
-    const { familySync } = require('detect-libc');
-    const libc = familySync() === 'musl' ? 'musl' : 'gnu';
-    return `@fallow-cli/linux-${arch}-${libc}`;
+    try {
+      const { familySync } = require('detect-libc');
+      const libc = familySync() === 'musl' ? 'musl' : 'gnu';
+      return `@fallow-cli/linux-${arch}-${libc}`;
+    } catch {
+      // musl binaries are statically linked and work on both glibc and musl systems
+      return `@fallow-cli/linux-${arch}-musl`;
+    }
   }
 
   return null;

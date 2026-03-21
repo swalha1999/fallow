@@ -99,7 +99,7 @@ pub fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
                 "id": "unused-enum-member",
                 "description": "Enum member is never referenced",
                 "filter_flag": "--unused-enum-members",
-                "fixable": false,
+                "fixable": true,
                 "suppressible": true,
                 "suppress_comment": "// fallow-ignore-next-line unused-enum-member"
             },
@@ -147,8 +147,9 @@ pub fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
                 "description": "Files form a circular import chain",
                 "filter_flag": "--circular-deps",
                 "fixable": false,
-                "suppressible": false,
-                "note": "Circular dependencies are graph-level issues; inline suppression is not supported"
+                "suppressible": true,
+                "suppress_comment": "// fallow-ignore-file circular-dependency",
+                "note": "Only file-level suppression is supported (fallow-ignore-file), not next-line suppression"
             }
         ],
         "suppression_comments": {
@@ -156,14 +157,14 @@ pub fn build_cli_schema(cmd: &clap::Command) -> serde_json::Value {
             "file": "// fallow-ignore-file [issue-type]",
             "note": "Omit [issue-type] to suppress all issue types. Unknown tokens are silently ignored."
         },
-        "output_formats": ["human", "json", "sarif", "compact"],
+        "output_formats": ["human", "json", "sarif", "compact", "markdown"],
         "exit_codes": {
             "0": "Success (no error-severity issues found)",
             "1": "Error-severity issues found (per rules config, or --fail-on-issues promotes warn→error)",
             "2": "Error (invalid config, invalid input, etc.). When --format json is active, errors are emitted as structured JSON on stdout: {\"error\": true, \"message\": \"...\", \"exit_code\": 2}"
         },
         "environment_variables": {
-            "FALLOW_FORMAT": "Default output format (json/human/sarif/compact). CLI --format flag overrides this.",
+            "FALLOW_FORMAT": "Default output format (json/human/sarif/compact/markdown). CLI --format flag overrides this.",
             "FALLOW_QUIET": "Set to \"1\" or \"true\" to suppress progress output. CLI --quiet flag overrides this.",
             "FALLOW_BIN": "Path to fallow binary (used by fallow-mcp server)."
         },

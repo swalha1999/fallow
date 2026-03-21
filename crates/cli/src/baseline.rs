@@ -5,7 +5,6 @@ use fallow_core::duplicates::DuplicationReport;
 
 /// Baseline data for comparison.
 #[derive(serde::Serialize, serde::Deserialize)]
-#[allow(clippy::struct_field_names)]
 pub struct BaselineData {
     pub unused_files: Vec<String>,
     pub unused_exports: Vec<String>,

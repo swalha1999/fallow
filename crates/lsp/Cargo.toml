@@ -17,7 +17,6 @@ fallow-config = { workspace = true }
 tower-lsp = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rustc-hash = { workspace = true }
 

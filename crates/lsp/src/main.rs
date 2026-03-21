@@ -16,6 +16,23 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::AnalysisResults;
 
+/// Diagnostic codes that the LSP client can disable via initializationOptions.
+/// Maps config key (e.g. "unused-files") to diagnostic code (e.g. "unused-file").
+const ISSUE_TYPE_TO_DIAGNOSTIC_CODE: &[(&str, &str)] = &[
+    ("unused-files", "unused-file"),
+    ("unused-exports", "unused-export"),
+    ("unused-types", "unused-type"),
+    ("unused-dependencies", "unused-dependency"),
+    ("unused-dev-dependencies", "unused-dev-dependency"),
+    ("unused-enum-members", "unused-enum-member"),
+    ("unused-class-members", "unused-class-member"),
+    ("unresolved-imports", "unresolved-import"),
+    ("unlisted-dependencies", "unlisted-dependency"),
+    ("duplicate-exports", "duplicate-export"),
+    ("type-only-dependencies", "type-only-dependency"),
+    ("circular-dependencies", "circular-dependency"),
+];
+
 struct FallowLspServer {
     client: Client,
     root: Arc<RwLock<Option<PathBuf>>>,
@@ -25,6 +42,8 @@ struct FallowLspServer {
     last_analysis: Arc<Mutex<Instant>>,
     analysis_guard: Arc<tokio::sync::Mutex<()>>,
     documents: Arc<RwLock<FxHashMap<Url, String>>>,
+    /// Diagnostic codes to suppress (parsed from initializationOptions.issueTypes)
+    disabled_diagnostic_codes: Arc<RwLock<FxHashSet<String>>>,
 }
 
 #[tower_lsp::async_trait]
@@ -44,18 +63,27 @@ impl LanguageServer for FallowLspServer {
             *self.root.write().await = Some(path);
         }
 
+        // Parse initializationOptions for issue type toggles
+        if let Some(opts) = &params.initialization_options
+            && let Some(issue_types) = opts.get("issueTypes").and_then(|v| v.as_object())
+        {
+            let mut disabled = FxHashSet::default();
+            for &(config_key, diag_code) in ISSUE_TYPE_TO_DIAGNOSTIC_CODE {
+                if let Some(enabled) = issue_types.get(config_key).and_then(|v| v.as_bool())
+                    && !enabled
+                {
+                    disabled.insert(diag_code.to_string());
+                }
+            }
+            // "code-duplication" is controlled by the duplication.* settings,
+            // not issueTypes — always enabled at the LSP level
+            *self.disabled_diagnostic_codes.write().await = disabled;
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
-                )),
-                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
-                    DiagnosticOptions {
-                        identifier: Some("fallow".to_string()),
-                        inter_file_dependencies: true,
-                        workspace_diagnostics: true,
-                        ..Default::default()
-                    },
                 )),
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
@@ -91,20 +119,26 @@ impl LanguageServer for FallowLspServer {
 
     async fn did_save(&self, _params: DidSaveTextDocumentParams) {
         // Debounce: skip if last analysis was less than 500ms ago
-        let now = Instant::now();
         {
-            let last = self.last_analysis.lock().await;
+            let now = Instant::now();
+            let mut last = self.last_analysis.lock().await;
             if now.duration_since(*last) < std::time::Duration::from_millis(500) {
                 return;
             }
+            // Update timestamp under the lock to prevent TOCTOU races
+            // where multiple saves pass the debounce check simultaneously
+            *last = now;
         }
 
         // Re-run analysis on save
         self.run_analysis().await;
+    }
 
-        // Update timestamp AFTER analysis completes so long-running analyses
-        // don't cause subsequent save events to be silently skipped
-        *self.last_analysis.lock().await = Instant::now();
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        self.documents
+            .write()
+            .await
+            .insert(params.text_document.uri, params.text_document.text);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -124,6 +158,7 @@ impl LanguageServer for FallowLspServer {
             .remove(&params.text_document.uri);
     }
 
+    #[expect(clippy::significant_drop_tightening)]
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let results = self.results.read().await;
         let Some(results) = results.as_ref() else {
@@ -138,7 +173,7 @@ impl LanguageServer for FallowLspServer {
         let mut actions = Vec::new();
 
         // Read file content once for computing line positions and edit ranges.
-        // Prefer in-memory document text (from did_change), fall back to disk.
+        // Prefer in-memory document text (from did_open/did_change), fall back to disk.
         let documents = self.documents.read().await;
         let file_content = documents
             .get(uri)
@@ -186,6 +221,7 @@ impl LanguageServer for FallowLspServer {
         }
     }
 
+    #[expect(clippy::significant_drop_tightening)]
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         let results = self.results.read().await;
         let Some(results) = results.as_ref() else {
@@ -205,6 +241,7 @@ impl LanguageServer for FallowLspServer {
         }
     }
 
+    #[expect(clippy::significant_drop_tightening)]
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let results = self.results.read().await;
         let Some(results) = results.as_ref() else {
@@ -289,6 +326,7 @@ impl FallowLspServer {
         }
     }
 
+    #[expect(clippy::significant_drop_tightening)]
     async fn publish_diagnostics(
         &self,
         results: &AnalysisResults,
@@ -296,14 +334,33 @@ impl FallowLspServer {
         root: &std::path::Path,
     ) {
         let diagnostics_by_file = diagnostics::build_diagnostics(results, duplication, root);
+        let disabled = self.disabled_diagnostic_codes.read().await;
 
         // Collect the set of URIs we are publishing to
-        let new_uris: FxHashSet<Url> = diagnostics_by_file.keys().cloned().collect();
+        let mut new_uris: FxHashSet<Url> = FxHashSet::default();
 
-        // Publish diagnostics for current results
+        // Publish diagnostics for current results, filtering out disabled issue types
         for (uri, diags) in &diagnostics_by_file {
+            let filtered: Vec<Diagnostic> = if disabled.is_empty() {
+                diags.clone()
+            } else {
+                diags
+                    .iter()
+                    .filter(|d| {
+                        d.code.as_ref().is_none_or(|code| match code {
+                            NumberOrString::String(s) => !disabled.contains(s.as_str()),
+                            NumberOrString::Number(_) => true,
+                        })
+                    })
+                    .cloned()
+                    .collect()
+            };
+
+            // Track all URIs we publish to (even empty), so stale-clearing
+            // only fires for URIs that truly disappeared from results
+            new_uris.insert(uri.clone());
             self.client
-                .publish_diagnostics(uri.clone(), diags.clone(), None)
+                .publish_diagnostics(uri.clone(), filtered, None)
                 .await;
         }
 
@@ -348,6 +405,7 @@ async fn main() {
         )),
         analysis_guard: Arc::new(tokio::sync::Mutex::new(())),
         documents: Arc::new(RwLock::new(FxHashMap::default())),
+        disabled_diagnostic_codes: Arc::new(RwLock::new(FxHashSet::default())),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;

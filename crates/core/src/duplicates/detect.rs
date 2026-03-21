@@ -675,7 +675,7 @@ fn extract_clone_groups(
     let mut stack: Vec<(usize, usize)> = Vec::new();
     let mut groups: Vec<RawGroup> = Vec::new();
 
-    #[allow(clippy::needless_range_loop)] // `i` is used as a value, not just as an index
+    #[expect(clippy::needless_range_loop)] // `i` is used as a value, not just as an index
     for i in 1..=n {
         let cur_lcp = if i < n { lcp[i] } else { 0 };
         let mut start = i;
@@ -946,7 +946,7 @@ const fn empty_report(total_files: usize) -> DuplicationReport {
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_types)]
+#[expect(clippy::disallowed_types)]
 mod tests {
     use std::collections::HashMap;
 

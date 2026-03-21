@@ -90,6 +90,10 @@ fn check_unused_export(
             if export_line != position.line {
                 continue;
             }
+            let end_col = export.col + export.export_name.len() as u32;
+            if position.character < export.col || position.character >= end_col {
+                continue;
+            }
 
             let value = format!(
                 "**fallow**: {kind_label} `{}` is not imported by any other file.",
@@ -130,6 +134,10 @@ fn check_used_export(
         }
         let usage_line = usage.line.saturating_sub(1);
         if usage_line != position.line {
+            continue;
+        }
+        let end_col = usage.col + usage.export_name.len() as u32;
+        if position.character < usage.col || position.character >= end_col {
             continue;
         }
 
@@ -212,6 +220,10 @@ fn check_unused_member(
             if member_line != position.line {
                 continue;
             }
+            let end_col = member.col + member.member_name.len() as u32;
+            if position.character < member.col || position.character >= end_col {
+                continue;
+            }
 
             let value = format!(
                 "**fallow**: {kind_label} `{}.{}` is never used outside its declaration.",
@@ -252,6 +264,10 @@ fn check_unresolved_import(
         }
         let import_line = import.line.saturating_sub(1);
         if import_line != position.line {
+            continue;
+        }
+        let end_col = import.col + import.specifier.len() as u32;
+        if position.character < import.col || position.character >= end_col {
             continue;
         }
 
@@ -842,6 +858,39 @@ mod tests {
         let pos = Position {
             line: 10,
             character: 0,
+        };
+        let hover = build_hover(&results, &duplication, &path, pos);
+        assert!(hover.is_none());
+    }
+
+    #[test]
+    fn hover_on_wrong_column_returns_none() {
+        let root = test_root();
+        let path = root.join("src/utils.ts");
+        let mut results = AnalysisResults::default();
+        results.unused_exports.push(UnusedExport {
+            path: path.clone(),
+            export_name: "helper".to_string(),
+            is_type_only: false,
+            line: 5,
+            col: 7,
+            span_start: 0,
+            is_re_export: false,
+        });
+        let duplication = DuplicationReport::default();
+
+        // Correct line (0-based: 4), but character is past the export name [7, 13)
+        let pos = Position {
+            line: 4,
+            character: 20,
+        };
+        let hover = build_hover(&results, &duplication, &path, pos);
+        assert!(hover.is_none());
+
+        // Character before the export name
+        let pos = Position {
+            line: 4,
+            character: 3,
         };
         let hover = build_hover(&results, &duplication, &path, pos);
         assert!(hover.is_none());

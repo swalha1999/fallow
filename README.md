@@ -213,7 +213,7 @@ This reads your knip.json/knip.jsonc/.knip.json/.knip.jsonc and/or .jscpd.json (
 - run: npx fallow check --ci
 ```
 
-Supports `--changed-since main` for PR-only analysis, `--baseline` for failing only on new issues, `--format json` for machine-readable output, and per-issue-type severity rules (`error`/`warn`/`off`) for incremental adoption. See the [CI guide](https://docs.fallow.tools/integrations/ci) for full workflow examples.
+Supports `--changed-since main` for PR-only analysis, `--baseline` for failing only on new issues, `--format json` for machine-readable output, `--format markdown` for PR comment workflows, and per-issue-type severity rules (`error`/`warn`/`off`) for incremental adoption. See the [CI guide](https://docs.fallow.tools/integrations/ci) for full workflow examples.
 
 ## Additional features
 

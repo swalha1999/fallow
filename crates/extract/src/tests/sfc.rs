@@ -1,0 +1,369 @@
+use std::path::Path;
+
+use fallow_types::discover::FileId;
+use fallow_types::extract::ModuleInfo;
+
+use crate::parse::parse_source_to_module;
+
+fn parse_sfc(source: &str, filename: &str) -> ModuleInfo {
+    parse_source_to_module(FileId(0), Path::new(filename), source, 0)
+}
+
+#[test]
+fn extracts_vue_script_imports() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { ref } from 'vue';
+import { helper } from './utils';
+export default {};
+</script>
+<template><div></div></template>
+"#,
+        "App.vue",
+    );
+    assert_eq!(info.imports.len(), 2);
+    assert!(info.imports.iter().any(|i| i.source == "vue"));
+    assert!(info.imports.iter().any(|i| i.source == "./utils"));
+}
+
+#[test]
+fn extracts_vue_script_setup_imports() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { ref } from 'vue';
+const count = ref(0);
+</script>
+"#,
+        "Comp.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn extracts_vue_both_scripts() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { defineComponent } from 'vue';
+export default defineComponent({});
+</script>
+<script setup lang="ts">
+import { ref } from 'vue';
+const count = ref(0);
+</script>
+"#,
+        "Dual.vue",
+    );
+    assert!(info.imports.len() >= 2);
+}
+
+#[test]
+fn extracts_svelte_script_imports() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { onMount } from 'svelte';
+import { helper } from './utils';
+</script>
+<p>Hello</p>
+"#,
+        "App.svelte",
+    );
+    assert_eq!(info.imports.len(), 2);
+    assert!(info.imports.iter().any(|i| i.source == "svelte"));
+    assert!(info.imports.iter().any(|i| i.source == "./utils"));
+}
+
+#[test]
+fn vue_no_script_returns_empty() {
+    let info = parse_sfc(
+        "<template><div></div></template><style>div {}</style>",
+        "NoScript.vue",
+    );
+    assert!(info.imports.is_empty());
+    assert!(info.exports.is_empty());
+}
+
+#[test]
+fn vue_js_default_lang() {
+    let info = parse_sfc(
+        r"
+<script>
+import { createApp } from 'vue';
+export default {};
+</script>
+",
+        "JsVue.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+}
+
+#[test]
+fn vue_script_lang_tsx() {
+    let info = parse_sfc(
+        r#"
+<script lang="tsx">
+import { defineComponent } from 'vue';
+export default defineComponent({
+    render() { return <div>Hello</div>; }
+});
+</script>
+"#,
+        "TsxVue.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn svelte_context_module_script() {
+    let info = parse_sfc(
+        r#"
+<script context="module" lang="ts">
+export const preload = () => {};
+</script>
+<script lang="ts">
+import { onMount } from 'svelte';
+let count = 0;
+</script>
+"#,
+        "Module.svelte",
+    );
+    assert!(info.imports.iter().any(|i| i.source == "svelte"));
+    assert!(!info.exports.is_empty());
+}
+
+#[test]
+fn vue_script_with_generic_attr() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts" generic="T extends Record<string, unknown>">
+import { ref } from 'vue';
+const items = ref<T[]>([]);
+</script>
+"#,
+        "Generic.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_empty_script_block() {
+    let info = parse_sfc(
+        r#"<script lang="ts"></script><template><div/></template>"#,
+        "Empty.vue",
+    );
+    assert!(info.imports.is_empty());
+    assert!(info.exports.is_empty());
+}
+
+#[test]
+fn vue_whitespace_only_script() {
+    let info = parse_sfc(
+        "<script lang=\"ts\">\n  \n</script>\n<template><div/></template>",
+        "Whitespace.vue",
+    );
+    assert!(info.imports.is_empty());
+}
+
+#[test]
+fn vue_script_src_attribute() {
+    let info = parse_sfc(
+        r#"<script src="./component.ts" lang="ts"></script><template><div/></template>"#,
+        "External.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "./component.ts");
+}
+
+#[test]
+fn vue_script_inside_html_comment() {
+    let info = parse_sfc(
+        r#"
+<!-- <script lang="ts">
+import { bad } from 'should-not-be-found';
+</script> -->
+<script lang="ts">
+import { good } from 'vue';
+</script>
+<template><div/></template>
+"#,
+        "Commented.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_script_setup_with_compiler_macros() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { ref } from 'vue';
+const props = defineProps<{ msg: string }>();
+const emit = defineEmits<{ change: [value: string] }>();
+const count = ref(0);
+</script>
+"#,
+        "Macros.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_script_with_single_quoted_lang() {
+    let info = parse_sfc(
+        "<script lang='ts'>\nimport { ref } from 'vue';\n</script>",
+        "SingleQuote.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn svelte_generics_attribute() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts" generics="T extends Record<string, unknown>">
+import { onMount } from 'svelte';
+export let items: T[] = [];
+</script>
+"#,
+        "Generic.svelte",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "svelte");
+}
+
+#[test]
+fn vue_script_with_extra_attributes() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts" id="app-script" type="module" data-custom="value">
+import { ref } from 'vue';
+</script>
+"#,
+        "ExtraAttrs.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+}
+
+#[test]
+fn vue_multiple_script_setup_invalid() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { ref } from 'vue';
+</script>
+<script setup lang="ts">
+import { computed } from 'vue';
+</script>
+"#,
+        "DuplicateSetup.vue",
+    );
+    assert!(info.imports.len() >= 2);
+}
+
+#[test]
+fn vue_script_case_insensitive() {
+    let info = parse_sfc(
+        "<SCRIPT lang=\"ts\">\nimport { ref } from 'vue';\n</SCRIPT>",
+        "Upper.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+}
+
+#[test]
+fn svelte_script_with_context_and_generics() {
+    let info = parse_sfc(
+        r#"
+<script context="module" lang="ts">
+export function preload() { return {}; }
+</script>
+<script lang="ts" generics="T">
+import { onMount } from 'svelte';
+export let value: T;
+</script>
+"#,
+        "ContextGenerics.svelte",
+    );
+    assert!(info.imports.iter().any(|i| i.source == "svelte"));
+    assert!(!info.exports.is_empty());
+}
+
+#[test]
+fn vue_script_with_nested_generics() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts" generic="T extends Map<string, Set<number>>">
+import { ref } from 'vue';
+const items = ref<T>();
+</script>
+"#,
+        "NestedGeneric.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_script_src_with_body_ignored() {
+    let info = parse_sfc(
+        r#"<script src="./external.ts" lang="ts">
+import { unused } from 'should-not-matter';
+</script>"#,
+        "SrcWithBody.vue",
+    );
+    assert!(info.imports.iter().any(|i| i.source == "./external.ts"));
+}
+
+#[test]
+fn vue_data_src_not_treated_as_src() {
+    let info = parse_sfc(
+        r#"<script lang="ts" data-src="./not-a-module.ts">
+import { ref } from 'vue';
+</script>"#,
+        "DataSrc.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_html_comment_string_not_corrupted() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+const htmlComment = "<!-- this is not a comment -->";
+import { ref } from 'vue';
+</script>
+"#,
+        "CommentString.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}
+
+#[test]
+fn vue_script_spanning_html_comment() {
+    let info = parse_sfc(
+        r#"
+<!-- disabled:
+<script lang="ts">
+import { bad } from 'should-not-be-found';
+</script>
+-->
+<script lang="ts">
+import { good } from 'vue';
+</script>
+"#,
+        "SpanningComment.vue",
+    );
+    assert_eq!(info.imports.len(), 1);
+    assert_eq!(info.imports[0].source, "vue");
+}

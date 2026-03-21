@@ -87,7 +87,7 @@ pub fn analyze_with_trace(config: &ResolvedConfig) -> Result<AnalysisOutput, Fal
     analyze_full(config, true, false)
 }
 
-#[allow(clippy::unnecessary_wraps)] // Result kept for future error handling
+#[expect(clippy::unnecessary_wraps)] // Result kept for future error handling
 fn analyze_full(
     config: &ResolvedConfig,
     retain: bool,

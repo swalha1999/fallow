@@ -1,5 +1,5 @@
 // CLI binary legitimately prints to stdout/stderr
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![expect(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -31,7 +31,6 @@ use list::ListOptions;
     about = "Find unused files, exports, and dependencies in JavaScript/TypeScript projects",
     version
 )]
-#[allow(clippy::struct_excessive_bools)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -265,6 +264,7 @@ enum Format {
     Json,
     Sarif,
     Compact,
+    Markdown,
 }
 
 impl From<Format> for fallow_config::OutputFormat {
@@ -274,6 +274,7 @@ impl From<Format> for fallow_config::OutputFormat {
             Format::Json => Self::Json,
             Format::Sarif => Self::Sarif,
             Format::Compact => Self::Compact,
+            Format::Markdown => Self::Markdown,
         }
     }
 }
@@ -308,6 +309,7 @@ fn format_from_env() -> Option<Format> {
         "human" => Some(Format::Human),
         "sarif" => Some(Format::Sarif),
         "compact" => Some(Format::Compact),
+        "markdown" | "md" => Some(Format::Markdown),
         _ => None,
     }
 }
@@ -321,7 +323,7 @@ fn quiet_from_env() -> bool {
 
 // ── Config loading ───────────────────────────────────────────────
 
-#[allow(clippy::ref_option)] // &Option matches clap's field type
+#[expect(clippy::ref_option)] // &Option matches clap's field type
 fn load_config(
     root: &std::path::Path,
     config_path: &Option<PathBuf>,
@@ -405,7 +407,7 @@ fn main() -> ExitCode {
     // Resolve quiet: CLI --quiet flag > FALLOW_QUIET env var > false
     let quiet = cli.quiet || quiet_from_env();
 
-    let output: fallow_config::OutputFormat = format.clone().into();
+    let output: fallow_config::OutputFormat = format.into();
 
     // Set up tracing
     if !quiet {
@@ -655,6 +657,7 @@ mod tests {
                 "human" => Some(Format::Human),
                 "sarif" => Some(Format::Sarif),
                 "compact" => Some(Format::Compact),
+                "markdown" | "md" => Some(Format::Markdown),
                 _ => None,
             }
         };
@@ -663,6 +666,8 @@ mod tests {
         assert!(matches!(parse("human"), Some(Format::Human)));
         assert!(matches!(parse("sarif"), Some(Format::Sarif)));
         assert!(matches!(parse("compact"), Some(Format::Compact)));
+        assert!(matches!(parse("markdown"), Some(Format::Markdown)));
+        assert!(matches!(parse("md"), Some(Format::Markdown)));
         assert!(parse("xml").is_none());
         assert!(parse("").is_none());
     }

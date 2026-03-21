@@ -304,7 +304,7 @@ fn strip_trailing_commas(input: &str) -> String {
 ///
 /// Uses the `glob` crate for full glob support including `**` (deep matching).
 /// `canonical_root` is pre-computed to avoid repeated `canonicalize()` syscalls.
-#[allow(clippy::print_stderr)]
+#[expect(clippy::print_stderr)]
 fn expand_workspace_glob(root: &Path, pattern: &str, canonical_root: &Path) -> Vec<PathBuf> {
     let full_pattern = root.join(pattern).to_string_lossy().to_string();
     match glob::glob(&full_pattern) {
@@ -360,7 +360,7 @@ fn parse_pnpm_workspace_yaml(content: &str) -> Vec<String> {
 /// Type alias for standard `HashMap` used in serde-deserialized structs.
 /// `rustc-hash` v2 does not have a `serde` feature, so fields deserialized
 /// from JSON must use `std::collections::HashMap`.
-#[allow(clippy::disallowed_types)]
+#[expect(clippy::disallowed_types)]
 type StdHashMap<K, V> = std::collections::HashMap<K, V>;
 
 /// Parsed package.json with fields relevant to fallow.

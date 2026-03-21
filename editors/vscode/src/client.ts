@@ -9,7 +9,7 @@ import {
   TransportKind,
 } from "vscode-languageclient/node.js";
 import { Trace } from "vscode-languageserver-protocol";
-import { getLspPath, getTraceLevel, getAutoDownload } from "./config.js";
+import { getLspPath, getTraceLevel, getAutoDownload, getIssueTypes } from "./config.js";
 import {
   downloadBinary,
   getInstalledBinaryPath,
@@ -111,7 +111,9 @@ export const startClient = async (
     ],
     outputChannel,
     traceOutputChannel: outputChannel,
-    initializationOptions: {},
+    initializationOptions: {
+      issueTypes: getIssueTypes(),
+    },
   };
 
   client = new LanguageClient(

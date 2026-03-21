@@ -19,7 +19,6 @@ pub const ZERO_RANGE: Range = Range {
 };
 
 /// Build all LSP diagnostics from analysis results and duplication report, keyed by file URI.
-#[allow(clippy::cognitive_complexity)]
 pub fn build_diagnostics(
     results: &AnalysisResults,
     duplication: &DuplicationReport,
@@ -97,7 +96,7 @@ pub fn build_diagnostics(
                         },
                         end: Position {
                             line,
-                            character: import.col,
+                            character: import.col + import.specifier.len() as u32,
                         },
                     },
                     severity: Some(DiagnosticSeverity::ERROR),

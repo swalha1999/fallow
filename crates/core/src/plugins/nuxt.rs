@@ -127,7 +127,7 @@ impl Plugin for NuxtPlugin {
         };
         let mut aliases = vec![
             // ~/  → srcDir (app/ or root)
-            ("~/", src_dir.clone()),
+            ("~/", src_dir),
             // ~~/ → rootDir (project root)
             ("~~/", String::new()),
             // #shared/ → shared/ directory

@@ -9,7 +9,6 @@ use crate::{emit_error, load_config};
 
 // ── Issue type filters ──────────────────────────────────────────
 
-#[allow(clippy::struct_excessive_bools)]
 pub struct IssueFilters {
     pub unused_files: bool,
     pub unused_exports: bool,
@@ -350,7 +349,6 @@ fn get_changed_files(
 
 // ── Check command ────────────────────────────────────────────────
 
-#[allow(clippy::struct_excessive_bools)]
 pub struct CheckOptions<'a> {
     pub root: &'a std::path::Path,
     pub config_path: &'a Option<std::path::PathBuf>,
@@ -370,7 +368,7 @@ pub struct CheckOptions<'a> {
     pub trace_opts: &'a TraceOptions,
 }
 
-#[allow(clippy::cognitive_complexity)] // Top-level command orchestration is inherently complex
+#[expect(clippy::cognitive_complexity)] // Top-level command orchestration is inherently complex
 pub fn run_check(opts: &CheckOptions<'_>) -> ExitCode {
     let start = Instant::now();
 

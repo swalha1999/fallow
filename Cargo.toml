@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
@@ -86,13 +86,31 @@ proptest = "1"
 tempfile = "3"
 
 [workspace.lints.clippy]
-# Pedantic
+# Lint groups (priority -1 so individual overrides take precedence)
+all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-# Restrictions
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Restriction lints — catch common mistakes and enforce discipline
 dbg_macro = "warn"
 todo = "warn"
 print_stdout = "warn"
 print_stderr = "warn"
+clone_on_ref_ptr = "warn"              # Force Arc::clone() / Rc::clone() explicitness
+empty_drop = "warn"                     # Catch no-op Drop impls
+empty_structs_with_brackets = "warn"    # Use `struct Foo;` not `struct Foo {}`
+exit = "warn"                           # Prevent silent process::exit()
+get_unwrap = "warn"                     # Prefer .get() over [] indexing
+rc_buffer = "warn"                      # Prevent Rc<Vec<T>> anti-pattern
+rc_mutex = "warn"                       # Prevent Rc<Mutex<T>> anti-pattern
+undocumented_unsafe_blocks = "warn"     # All unsafe must have SAFETY comment
+unnecessary_safety_comment = "warn"     # No pointless SAFETY comments on safe code
+unused_result_ok = "warn"              # Don't silently ignore Result::ok()
+infinite_loop = "warn"                  # Catch infinite loops without break
+self_named_module_files = "warn"        # Prefer mod.rs style
+pathbuf_init_then_push = "warn"         # Use PathBuf::from() directly
+
 # Allow common pedantic false positives
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
@@ -110,16 +128,44 @@ redundant_closure_for_method_calls = "allow"
 similar_names = "allow"
 wildcard_imports = "allow"
 unnested_or_patterns = "allow"
-# Nursery lints (selectively enabled)
-cognitive_complexity = "warn"
-option_if_let_else = "warn"
-redundant_pub_crate = "warn"
-use_self = "warn"
-missing_const_for_fn = "warn"
-unnecessary_fallible_conversions = "warn"
+doc_markdown = "allow"                  # False positives on technical terms
+too_long_first_doc_paragraph = "allow"  # Too strict for module-level docs
+struct_excessive_bools = "allow"        # CLI filter structs need many bools
+fn_params_excessive_bools = "allow"     # Same reason
+
+# Allow nursery lints that are too noisy or have false positives
+option_if_let_else = "allow"            # Too many false positives in match-heavy code
+missing_const_for_fn = "allow"          # Not a const library
+fallible_impl_from = "allow"            # From impls that can fail are intentional
+use_self = "allow"                      # Too noisy with generics
+
+# Allow cargo lints that are unavoidable
+multiple_crate_versions = "allow"       # Transitive dependency version conflicts
 
 [workspace.lints.rust]
 unsafe_code = "warn"
+unsafe_op_in_unsafe_fn = "warn"         # Require unsafe blocks even inside unsafe fn
+unused_unsafe = "warn"                  # Catch unnecessary unsafe blocks
+non_ascii_idents = "warn"              # Prevent non-ASCII identifiers
+
+# Dev profile: disable debug info for faster builds
+[profile.dev]
+debug = false
+
+[profile.test]
+debug = false
+
+# Optimize proc-macro crates in dev for faster compilation
+[profile.dev.package.serde_derive]
+opt-level = 1
+[profile.dev.package.clap_derive]
+opt-level = 1
+
+# Optimize snapshot testing deps in dev
+[profile.dev.package.insta]
+opt-level = 3
+[profile.dev.package.similar]
+opt-level = 3
 
 [profile.release]
 lto = true

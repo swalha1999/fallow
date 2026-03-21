@@ -52,7 +52,7 @@ impl AnalysisProgress {
 
     /// Finish all progress bars.
     pub fn finish(&self) {
-        self.multi.clear().ok();
+        let _ = self.multi.clear();
     }
 }
 

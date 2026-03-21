@@ -106,7 +106,6 @@ pub struct ExternalUsedExport {
 impl ExternalPluginDef {
     /// Generate JSON Schema for the external plugin format.
     pub fn json_schema() -> serde_json::Value {
-        #[allow(clippy::use_self)] // schemars macro requires the concrete type name
         serde_json::to_value(schemars::schema_for!(ExternalPluginDef)).unwrap_or_default()
     }
 }
@@ -137,7 +136,7 @@ fn is_plugin_file(path: &Path) -> bool {
 }
 
 /// Parse a plugin definition from file content based on format.
-#[allow(clippy::print_stderr)]
+#[expect(clippy::print_stderr)]
 fn parse_plugin(content: &str, format: &PluginFormat, path: &Path) -> Option<ExternalPluginDef> {
     match format {
         PluginFormat::Toml => match toml::from_str::<ExternalPluginDef>(content) {
@@ -193,7 +192,7 @@ fn parse_plugin(content: &str, format: &PluginFormat, path: &Path) -> Option<Ext
 /// 1. Paths from the `plugins` config field (files or directories)
 /// 2. `.fallow/plugins/` directory (auto-discover `*.toml`, `*.json`, `*.jsonc` files)
 /// 3. Project root `fallow-plugin-*` files (`.toml`, `.json`, `.jsonc`)
-#[allow(clippy::print_stderr)]
+#[expect(clippy::print_stderr)]
 pub fn discover_external_plugins(
     root: &Path,
     config_plugin_paths: &[String],
@@ -270,7 +269,7 @@ fn load_plugins_from_dir(
     }
 }
 
-#[allow(clippy::print_stderr)]
+#[expect(clippy::print_stderr)]
 fn load_plugin_file(
     path: &Path,
     canonical_root: &Path,

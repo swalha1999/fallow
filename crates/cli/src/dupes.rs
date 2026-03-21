@@ -15,7 +15,6 @@ pub enum DupesMode {
     Semantic,
 }
 
-#[allow(clippy::struct_excessive_bools)]
 pub struct DupesOptions<'a> {
     pub root: &'a std::path::Path,
     pub config_path: &'a Option<std::path::PathBuf>,

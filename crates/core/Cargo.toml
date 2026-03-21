@@ -32,7 +32,6 @@ rayon = { workspace = true }
 ignore = { workspace = true }
 glob = { workspace = true }
 globset = { workspace = true }
-regex = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -41,9 +40,6 @@ serde_json = { workspace = true }
 # Hashing
 xxhash-rust = { workspace = true }
 rustc-hash = { workspace = true }
-
-# Caching
-bincode = { workspace = true }
 
 # Progress
 indicatif = { workspace = true }

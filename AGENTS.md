@@ -39,7 +39,7 @@ This allows agents to parse errors the same way they parse normal output.
 
 | Variable | Description |
 |----------|-------------|
-| `FALLOW_FORMAT` | Default output format (`json`, `human`, `sarif`, `compact`). CLI `--format` flag overrides this. |
+| `FALLOW_FORMAT` | Default output format (`json`, `human`, `sarif`, `compact`, `markdown`). CLI `--format` flag overrides this. |
 | `FALLOW_QUIET` | Set to `1` or `true` to suppress progress output. CLI `--quiet` flag overrides this. |
 | `FALLOW_BIN` | Path to fallow binary (used by the `fallow-mcp` server). |
 
@@ -59,7 +59,7 @@ fallow check --format json --quiet --changed-since main
 ```
 
 **Flags:**
-- `--format human|json|sarif|compact` -- output format (default: human)
+- `--format human|json|sarif|compact|markdown` -- output format (default: human)
 - `--quiet` -- suppress progress and timing on stderr
 - `--fail-on-issues` -- exit 1 if any issues are found
 - `--changed-since <ref>` -- only analyze files changed since a git ref

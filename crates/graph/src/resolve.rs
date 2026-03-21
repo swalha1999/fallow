@@ -496,7 +496,7 @@ fn create_resolver(active_plugins: &[String]) -> Resolver {
 }
 
 /// Resolve a single import specifier to a target.
-#[allow(clippy::too_many_arguments, clippy::option_if_let_else)]
+#[expect(clippy::too_many_arguments)]
 fn resolve_specifier(
     resolver: &Resolver,
     from_file: &Path,

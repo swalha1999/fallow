@@ -45,17 +45,12 @@ impl Plugin for TypeScriptPlugin {
 
         // tsconfig.json is JSON — wrap in parens to make it a valid JS expression for Oxc
         let is_json = config_path.extension().is_some_and(|ext| ext == "json");
-        let (parse_source, parse_path_buf);
-        let parse_path: &Path;
-        if is_json {
-            parse_source = format!("({source})");
-            parse_path_buf = config_path.with_extension("js");
-            parse_path = &parse_path_buf;
+        let (parse_source, parse_path_buf) = if is_json {
+            (format!("({source})"), config_path.with_extension("js"))
         } else {
-            parse_source = source.to_string();
-            parse_path_buf = config_path.to_path_buf();
-            parse_path = &parse_path_buf;
-        }
+            (source.to_string(), config_path.to_path_buf())
+        };
+        let parse_path: &Path = &parse_path_buf;
 
         // extends → referenced dependency or base config file
         if let Some(extends) =

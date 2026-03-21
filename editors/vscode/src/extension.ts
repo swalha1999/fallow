@@ -28,14 +28,52 @@ export const activate = async (
   const deadCodeProvider = new DeadCodeTreeProvider();
   const duplicatesProvider = new DuplicatesTreeProvider();
 
+  // Use createTreeView to get visibility events — defer CLI analysis until the
+  // tree view is first shown, avoiding a double analysis on activation (the LSP
+  // runs its own analysis for diagnostics).
+  let cliAnalysisRan = false;
+
+  const triggerCliAnalysis = async (): Promise<void> => {
+    setStatusBarAnalyzing();
+    try {
+      const { check, dupes } = await runAnalysis(context);
+      lastCheckResult = check;
+      lastDupesResult = dupes;
+      updateViews();
+    } catch {
+      setStatusBarError();
+    }
+  };
+
+  const deadCodeView = vscode.window.createTreeView("fallow.deadCode", {
+    treeDataProvider: deadCodeProvider,
+  });
+  const duplicatesView = vscode.window.createTreeView("fallow.duplicates", {
+    treeDataProvider: duplicatesProvider,
+  });
+  context.subscriptions.push(deadCodeView, duplicatesView);
+
+  const onViewVisible = (): void => {
+    if (cliAnalysisRan) {
+      return;
+    }
+    cliAnalysisRan = true;
+    void triggerCliAnalysis();
+  };
+
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("fallow.deadCode", deadCodeProvider)
+    deadCodeView.onDidChangeVisibility((e) => {
+      if (e.visible) {
+        onViewVisible();
+      }
+    })
   );
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider(
-      "fallow.duplicates",
-      duplicatesProvider
-    )
+    duplicatesView.onDidChangeVisibility((e) => {
+      if (e.visible) {
+        onViewVisible();
+      }
+    })
   );
 
   const updateViews = (): void => {
@@ -47,15 +85,8 @@ export const activate = async (
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand("fallow.analyze", async () => {
-      setStatusBarAnalyzing();
-      try {
-        const { check, dupes } = await runAnalysis(context);
-        lastCheckResult = check;
-        lastDupesResult = dupes;
-        updateViews();
-      } catch {
-        setStatusBarError();
-      }
+      cliAnalysisRan = true;
+      await triggerCliAnalysis();
     })
   );
 
@@ -63,15 +94,8 @@ export const activate = async (
     vscode.commands.registerCommand("fallow.fix", async () => {
       await runFix(context, false);
       // Re-run analysis after fix
-      setStatusBarAnalyzing();
-      try {
-        const { check, dupes } = await runAnalysis(context);
-        lastCheckResult = check;
-        lastDupesResult = dupes;
-        updateViews();
-      } catch {
-        setStatusBarError();
-      }
+      cliAnalysisRan = true;
+      await triggerCliAnalysis();
     })
   );
 
@@ -99,15 +123,28 @@ export const activate = async (
     vscode.commands.registerCommand("fallow.noop", () => {})
   );
 
-  // Watch for config changes that affect the LSP
+  // Watch for config changes
   context.subscriptions.push(
     onConfigChange(async (e) => {
-      if (
+      const needsRestart =
         e.affectsConfiguration("fallow.lspPath") ||
-        e.affectsConfiguration("fallow.trace.server")
-      ) {
+        e.affectsConfiguration("fallow.trace.server") ||
+        e.affectsConfiguration("fallow.issueTypes");
+
+      const needsReanalysis =
+        e.affectsConfiguration("fallow.production") ||
+        e.affectsConfiguration("fallow.duplication") ||
+        e.affectsConfiguration("fallow.issueTypes");
+
+      if (needsRestart) {
         outputChannel.appendLine("Configuration changed, restarting server...");
         await restartClient(context, outputChannel);
+      }
+
+      if (needsReanalysis) {
+        // Re-run CLI analysis for tree views and status bar
+        // (sequenced after LSP restart if both apply)
+        void triggerCliAnalysis();
       }
     })
   );
@@ -117,16 +154,6 @@ export const activate = async (
   if (client) {
     context.subscriptions.push({ dispose: () => void stopClient() });
   }
-
-  // Run initial background analysis for tree views and status bar (non-blocking)
-  setStatusBarAnalyzing();
-  void runAnalysis(context).then(({ check, dupes }) => {
-    lastCheckResult = check;
-    lastDupesResult = dupes;
-    updateViews();
-  }).catch(() => {
-    setStatusBarError();
-  });
 };
 
 export const deactivate = async (): Promise<void> => {

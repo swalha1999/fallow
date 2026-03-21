@@ -10,15 +10,15 @@ Fallow finds unused files, exports, dependencies, types, enum members, class mem
 crates/
   config/   — Configuration types, custom framework presets, package.json parsing, workspace discovery
   types/    — Shared type definitions (discover, extract, results, suppress, serde_path)
-  extract/  — AST extraction engine (visitor.rs, sfc.rs, astro.rs, mdx.rs, css.rs, parse.rs, cache.rs, suppress.rs)
-  graph/    — Module graph construction (graph.rs), import resolution (resolve.rs), project state (project.rs)
+  extract/  — AST extraction engine (visitor.rs, sfc.rs, astro.rs, mdx.rs, css.rs, parse.rs, cache.rs, suppress.rs, tests/)
+  graph/    — Module graph construction (graph/), import resolution (resolve.rs), project state (project.rs)
   core/     — Analysis orchestration: discovery, plugins, scripts, duplicates, cross-reference, caching, progress
     analyze/    — Dead code detection (mod.rs orchestration, predicates.rs, unused_files/exports/deps/members.rs)
     plugins/    — Plugin system + tooling.rs (general tooling dependency detection)
     duplicates/ — Clone detection (families, normalize, tokenize)
   cli/      — CLI binary, split into per-command modules
-    check.rs, dupes.rs, watch.rs, fix.rs, init.rs, list.rs, schema.rs, validate.rs
-    report/     — Output formatting (mod.rs dispatch, human.rs, json.rs, sarif.rs, compact.rs)
+    check.rs, dupes.rs, watch.rs, fix/, init.rs, list.rs, schema.rs, validate.rs
+    report/     — Output formatting (mod.rs dispatch, human.rs, json.rs, sarif.rs, compact.rs, markdown.rs)
     migrate/    — Config migration (mod.rs, knip.rs, jscpd.rs)
   lsp/      — LSP server, split into modules
     main.rs, diagnostics.rs, code_actions.rs, code_lens.rs, hover.rs
@@ -50,11 +50,18 @@ Key modules in fallow-extract:
 - `css.rs` — CSS Module class name extraction (`.module.css`/`.module.scss` → named exports)
 - `parse.rs` — File type dispatcher: routes files to the appropriate parser (JS/TS, SFC, Astro, MDX, CSS)
 - `cache.rs` — Incremental bincode cache with xxh3 hashing. Unchanged files skip AST parsing and load from cache; only changed/new files are parsed. Cache is pruned of stale entries (deleted files) on each run.
+- `tests/` — Integration tests split by parser type: `js_ts.rs`, `sfc.rs`, `astro.rs`, `mdx.rs`, `css.rs`
 
 Key modules in fallow-graph:
 - `project.rs` — `ProjectState` struct: owns the file registry (stable FileIds sorted by path) and workspace metadata. Foundation for cross-workspace resolution and future incremental analysis.
 - `resolve.rs` — oxc_resolver-based import resolution + glob-based dynamic import pattern resolution + DashMap-backed bare specifier cache for lock-free parallel lookups. Cross-workspace imports resolve through node_modules symlinks via canonicalize. Pnpm content-addressable store detection: `.pnpm` virtual store paths are mapped back to workspace source files for injected dependencies. React Native platform extensions (`.web`/`.ios`/`.android`/`.native`) resolved via `resolve_file` fallback. Per-file tsconfig path alias resolution (`TsconfigDiscovery::Auto`) finds the nearest tsconfig.json for each file.
-- `graph.rs` — Module graph with re-export chain propagation. `ModuleGraph::build` delegates to `populate_edges`, `populate_references`, and `mark_reachable` phase methods.
+- `graph/` — Module graph, split into focused submodules:
+  - `mod.rs` — `ModuleGraph` struct, `build()` orchestrator, public query methods
+  - `types.rs` — `ModuleNode`, `ReExportEdge`, `ExportSymbol`, `SymbolReference`, `ReferenceKind`
+  - `build.rs` — Phase 1 (edge construction) and Phase 2 (reference population)
+  - `reachability.rs` — Phase 3 (BFS reachability from entry points)
+  - `re_exports.rs` — Phase 4 (re-export chain propagation through barrel files)
+  - `cycles.rs` — Circular dependency detection (Tarjan's SCC + elementary cycle enumeration)
 
 Key modules in fallow-core (re-exports fallow-extract, fallow-graph for backwards compatibility):
 - `discover.rs` — File walking + entry point detection (also workspace-aware). FileIds are assigned deterministically by path sort order (not size) for stability across runs. Hidden directory allowlist (`.storybook`, `.well-known`, `.changeset`, `.github`) — other dotdirs are skipped. Only root-level `build/` is ignored (not nested `test/build/` etc.).
@@ -81,12 +88,17 @@ Key modules in fallow-cli:
 - `check.rs` — `check` command: analysis pipeline, tracing, filtering, output
 - `dupes.rs` — `dupes` command: duplication detection, baseline, cross-reference
 - `watch.rs` — `watch` command: file watcher with debounced re-analysis
-- `fix.rs` — `fix` command: auto-remove unused exports, enum members, and deps
+- `fix/` — `fix` command, split into focused submodules:
+  - `mod.rs` — `FixOptions`, `run_fix` orchestrator
+  - `io.rs` — Atomic file write helper (shared by all fix types)
+  - `exports.rs` — Unused export removal
+  - `enum_members.rs` — Unused enum member removal
+  - `deps.rs` — Unused dependency removal from package.json
 - `init.rs` — `init` command: generate config files
 - `list.rs` — `list` command: show plugins, entry points, files
 - `schema.rs` — `schema` + `config-schema` + `plugin-schema` commands
 - `validate.rs` — Input validation (control characters, path sanitization)
-- `report/` — Output formatting: `mod.rs` (format dispatch), `human.rs`, `json.rs`, `sarif.rs`, `compact.rs`
+- `report/` — Output formatting: `mod.rs` (format dispatch), `human.rs`, `json.rs`, `sarif.rs`, `compact.rs`, `markdown.rs`
 - `migrate/` — Config migration: `mod.rs` (orchestration), `knip.rs` (knip config), `jscpd.rs` (jscpd config)
 
 Key modules in fallow-lsp:
@@ -115,6 +127,18 @@ cd benchmarks && npm run generate && npm run bench     # Comparative benchmarks 
 cd benchmarks && npm run generate:dupes && npm run bench:dupes  # vs jscpd
 cd benchmarks && npm run generate:circular && npm run bench:circular  # vs madge/dpdm
 ```
+
+## Code quality & linting
+
+Comprehensive clippy and compiler lint configuration inspired by the Oxc ecosystem:
+
+- **Clippy lint groups**: `all`, `pedantic`, `nursery`, `cargo` (priority -1) with a strategic allow-list for false positives
+- **13 restriction lints**: `dbg_macro`, `todo`, `print_stdout/stderr`, `undocumented_unsafe_blocks`, `unnecessary_safety_comment`, `unused_result_ok`, `infinite_loop`, `self_named_module_files`, `pathbuf_init_then_push`, `empty_drop`, `empty_structs_with_brackets`, `exit`, `get_unwrap`, `rc_buffer`, `rc_mutex`, `clone_on_ref_ptr`
+- **Rust compiler lints**: `unsafe_op_in_unsafe_fn`, `unused_unsafe`, `non_ascii_idents`
+- **`#[expect]` over `#[allow]`**: All clippy suppressions use `#[expect(clippy::...)]` — warns when a suppression becomes unnecessary, preventing dead annotations
+- **Size assertions**: `ModuleNode` (96 bytes), `ModuleInfo` (256 bytes), `ExportInfo`/`ImportInfo` (88 bytes), `Edge` (32 bytes) — prevents accidental struct bloat
+- **Dev profile**: `debug = false` for faster builds, selective `opt-level` for proc-macro crates (`serde_derive`, `clap_derive`) and snapshot test deps (`insta`, `similar`)
+- **CI hardening**: `permissions: {}` deny-all baseline, `git diff --exit-code` to catch uncommitted generated code, `--document-private-items` doc check
 
 ## Detection capabilities
 
@@ -184,7 +208,7 @@ cd benchmarks && npm run generate:circular && npm run bench:circular  # vs madge
 
 ## CLI features
 
-- `check` — analyze with --format (human/json/sarif/compact), --changed-since, --baseline, --save-baseline, --fail-on-issues, --include-dupes (cross-reference with duplication), issue type filters (--unused-files, --unused-exports, etc.), --trace FILE:EXPORT (trace export usage), --trace-file PATH (trace file edges), --trace-dependency PACKAGE (trace dependency usage)
+- `check` — analyze with --format (human/json/sarif/compact/markdown), --changed-since, --baseline, --save-baseline, --fail-on-issues, --include-dupes (cross-reference with duplication), issue type filters (--unused-files, --unused-exports, etc.), --trace FILE:EXPORT (trace export usage), --trace-file PATH (trace file edges), --trace-dependency PACKAGE (trace dependency usage)
 - `dupes` — find code duplication with clone families, refactoring suggestions, --baseline/--save-baseline, --mode (strict/mild/weak/semantic), --min-tokens, --min-lines, --threshold, --skip-local, --cross-language, --trace FILE:LINE (trace all clones at a specific location)
 - `watch` — file watcher with debounced re-analysis
 - `fix` — auto-remove unused exports, enum members, and deps (--dry-run, --yes/--force for non-TTY confirmation, --format json for structured output)
@@ -321,6 +345,7 @@ unresolved-imports = "error"
 - **Lock-free parallel resolution**: Bare specifier cache uses `DashMap` (sharded concurrent map) for contention-free reads under rayon work-stealing.
 - **Re-export chain resolution**: Iterative propagation through barrel files with cycle detection.
 - **Cross-workspace resolution**: Unified module graph across npm/yarn/pnpm workspaces (pnpm-workspace.yaml) and TypeScript project references (tsconfig.json `references`). Cross-package imports resolve through node_modules symlinks via `canonicalize()`. Package.json `exports` field subpath imports resolve via oxc_resolver with output→source fallback (dist/build/out/esm/cjs → src). Pnpm content-addressable store paths (`.pnpm` virtual store) are detected and mapped back to workspace source files, handling injected dependencies where `canonicalize()` resolves through the `.pnpm` directory. TypeScript project references are discovered from root `tsconfig.json` `references` field (additive with npm/pnpm workspaces, deduplicated by canonical path); referenced directories without `package.json` use directory name as workspace name. `--workspace <name>` scopes output to one package while keeping the full graph. `ProjectState` struct owns the file registry with stable FileIds (path-sorted) for future incremental analysis.
+- **Oxc-inspired lint infrastructure**: Workspace-level clippy configuration with 4 lint groups (`all`, `pedantic`, `nursery`, `cargo`) and 13 restriction lints. All lint suppressions use `#[expect]` instead of `#[allow]` to catch dead annotations. Const size assertions on hot-path types prevent accidental struct bloat. Dev profile optimized with `debug = false` and selective `opt-level` for proc-macro crates.
 
 ## Git conventions
 

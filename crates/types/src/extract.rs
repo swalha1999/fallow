@@ -134,7 +134,7 @@ pub struct MemberAccess {
     pub member: String,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde serialize_with requires &T
+#[expect(clippy::trivially_copy_pass_by_ref)] // serde serialize_with requires &T
 fn serialize_span<S: serde::Serializer>(span: &Span, serializer: S) -> Result<S::Ok, S::Error> {
     use serde::ser::SerializeMap;
     let mut map = serializer.serialize_map(Some(2))?;
@@ -203,6 +203,9 @@ const _: () = assert!(std::mem::size_of::<ExportName>() == 24);
 const _: () = assert!(std::mem::size_of::<ImportedName>() == 24);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<MemberAccess>() == 48);
+// `ModuleInfo` is the per-file extraction result — stored in a Vec during parallel parsing.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<ModuleInfo>() == 256);
 
 /// A re-export declaration.
 #[derive(Debug, Clone)]

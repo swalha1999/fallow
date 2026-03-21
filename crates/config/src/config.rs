@@ -261,6 +261,8 @@ pub enum OutputFormat {
     Sarif,
     /// One issue per line (grep-friendly).
     Compact,
+    /// Markdown for PR comments.
+    Markdown,
 }
 
 /// Rule for ignoring specific exports.
@@ -427,7 +429,7 @@ fn resolve_extends(
         )
     })?;
 
-    if !visited.insert(canonical.clone()) {
+    if !visited.insert(canonical) {
         return Err(miette::miette!(
             "Circular extends detected: {} was already visited in the extends chain",
             path.display()
@@ -541,12 +543,11 @@ impl FallowConfig {
 
     /// Generate JSON Schema for the configuration format.
     pub fn json_schema() -> serde_json::Value {
-        #[allow(clippy::use_self)] // schemars macro requires the concrete type name
         serde_json::to_value(schemars::schema_for!(FallowConfig)).unwrap_or_default()
     }
 
     /// Resolve into a fully resolved config with compiled globs.
-    #[allow(clippy::print_stderr)]
+    #[expect(clippy::print_stderr)]
     pub fn resolve(
         self,
         root: PathBuf,

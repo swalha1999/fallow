@@ -9,7 +9,7 @@
 //! runners (`npx`, `pnpm exec`, `yarn dlx`), and Node.js runners (`node`, `tsx`,
 //! `ts-node`). Shell operators (`&&`, `||`, `;`, `|`, `&`) are split correctly.
 
-#[allow(clippy::disallowed_types)]
+#[expect(clippy::disallowed_types)]
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -27,7 +27,7 @@ pub struct ScriptAnalysis {
 }
 
 /// A parsed command segment from a script value.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ScriptCommand {
     /// The binary/command name (e.g., "webpack", "eslint", "tsc").
     pub binary: String,
@@ -62,7 +62,7 @@ const NODE_RUNNERS: &[&str] = &["node", "ts-node", "tsx", "babel-node", "bun"];
 ///
 /// In production mode, dev/test/lint scripts are excluded since they only affect
 /// devDependency usage, not the production dependency graph.
-#[allow(clippy::implicit_hasher, clippy::disallowed_types)]
+#[expect(clippy::implicit_hasher, clippy::disallowed_types)]
 pub fn filter_production_scripts(scripts: &HashMap<String, String>) -> HashMap<String, String> {
     scripts
         .iter()
@@ -99,7 +99,7 @@ fn is_production_script(name: &str) -> bool {
 ///
 /// For each script value, parses shell commands, extracts binary names (mapped to
 /// package names), `--config` file paths, and positional file path arguments.
-#[allow(clippy::implicit_hasher, clippy::disallowed_types)]
+#[expect(clippy::implicit_hasher, clippy::disallowed_types)]
 pub fn analyze_scripts(scripts: &HashMap<String, String>, root: &Path) -> ScriptAnalysis {
     let mut result = ScriptAnalysis::default();
 
@@ -222,7 +222,7 @@ fn split_shell_operators(script: &str) -> Vec<&str> {
 }
 
 /// Parse a single command segment (after splitting on shell operators).
-#[allow(clippy::cognitive_complexity)] // Shell command parsing naturally has many branches
+#[expect(clippy::cognitive_complexity)] // Shell command parsing naturally has many branches
 fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
     let tokens: Vec<&str> = segment.split_whitespace().collect();
     if tokens.is_empty() {

@@ -1,6 +1,7 @@
 mod compact;
 mod human;
 mod json;
+mod markdown;
 mod sarif;
 
 use std::path::Path;
@@ -63,6 +64,10 @@ pub fn print_results(
             ExitCode::SUCCESS
         }
         OutputFormat::Sarif => sarif::print_sarif(results, &config.root, &config.rules),
+        OutputFormat::Markdown => {
+            markdown::print_markdown(results, &config.root);
+            ExitCode::SUCCESS
+        }
     }
 }
 
@@ -87,6 +92,10 @@ pub fn print_duplication_report(
             ExitCode::SUCCESS
         }
         OutputFormat::Sarif => sarif::print_duplication_sarif(report, &config.root),
+        OutputFormat::Markdown => {
+            markdown::print_duplication_markdown(report, &config.root);
+            ExitCode::SUCCESS
+        }
     }
 }
 
@@ -153,6 +162,10 @@ pub fn print_performance(timings: &PipelineTimings, format: &OutputFormat) {
 pub use compact::build_compact_lines;
 #[allow(unused_imports)]
 pub use json::build_json;
+#[allow(unused_imports)]
+pub use markdown::build_duplication_markdown;
+#[allow(unused_imports)]
+pub use markdown::build_markdown;
 #[allow(unused_imports)]
 pub use sarif::build_sarif;
 

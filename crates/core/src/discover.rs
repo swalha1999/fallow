@@ -124,7 +124,7 @@ pub fn discover_files(config: &ResolvedConfig) -> Vec<DiscoveredFile> {
                 let relative = entry
                     .path()
                     .strip_prefix(&config.root)
-                    .unwrap_or(entry.path());
+                    .unwrap_or_else(|_| entry.path());
                 !excludes.is_match(relative)
             })
         })
@@ -172,7 +172,7 @@ fn resolve_entry_path(
 ) -> Option<EntryPoint> {
     let resolved = base.join(entry);
     // Security: ensure resolved path stays within the allowed root
-    let canonical_resolved = resolved.canonicalize().unwrap_or(resolved.clone());
+    let canonical_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
     if !canonical_resolved.starts_with(canonical_root) {
         tracing::warn!(path = %entry, "Skipping entry point outside project root");
         return None;
@@ -348,7 +348,10 @@ pub fn discover_entry_points(config: &ResolvedConfig, files: &[DiscoveredFile]) 
 
     // 2. Package.json entries
     // Pre-compute canonical root once for all resolve_entry_path calls
-    let canonical_root = config.root.canonicalize().unwrap_or(config.root.clone());
+    let canonical_root = config
+        .root
+        .canonicalize()
+        .unwrap_or_else(|_| config.root.clone());
     let pkg_path = config.root.join("package.json");
     if let Ok(pkg) = PackageJson::load(&pkg_path) {
         for entry_path in pkg.entry_points() {
@@ -467,7 +470,9 @@ pub fn discover_workspace_entry_points(
 
     let pkg_path = ws_root.join("package.json");
     if let Ok(pkg) = PackageJson::load(&pkg_path) {
-        let canonical_ws_root = ws_root.canonicalize().unwrap_or(ws_root.to_path_buf());
+        let canonical_ws_root = ws_root
+            .canonicalize()
+            .unwrap_or_else(|_| ws_root.to_path_buf());
         for entry_path in pkg.entry_points() {
             if let Some(ep) = resolve_entry_path(
                 ws_root,

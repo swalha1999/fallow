@@ -114,6 +114,7 @@ pub(super) fn print_trace_json<T: serde::Serialize>(value: &T) {
         Ok(json) => println!("{json}"),
         Err(e) => {
             eprintln!("Error: failed to serialize trace output: {e}");
+            #[expect(clippy::exit)]
             std::process::exit(2);
         }
     }

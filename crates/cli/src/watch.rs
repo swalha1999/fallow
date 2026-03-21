@@ -8,7 +8,7 @@ use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 use crate::load_config;
 use crate::report;
 
-#[allow(clippy::ref_option, clippy::needless_pass_by_value)] // matches load_config signature
+#[expect(clippy::ref_option, clippy::needless_pass_by_value)] // matches load_config signature
 pub fn run_watch(
     root: &Path,
     config_path: &Option<PathBuf>,

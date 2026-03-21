@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { getLspPath, getProduction, getDuplicationMode, getDuplicationThreshold } from "./config.js";
+import { getLspPath, getProduction, getDuplicationMode, getDuplicationThreshold, getIssueTypes } from "./config.js";
 import { getInstalledBinaryPath } from "./download.js";
 import type {
   FallowCheckResult,
@@ -62,8 +62,9 @@ const execFallow = (
       { cwd, maxBuffer: 50 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
-          // Exit code 1 means issues found (expected), only reject on real errors
-          const exitCode = (error as unknown as { status: number }).status;
+          // Exit code 1 means issues found (expected), only reject on real errors.
+          // child_process.ExecException.code is the numeric exit code.
+          const exitCode = (error as child_process.ExecException).code;
           if (exitCode !== 1) {
             reject(new Error(stderr || error.message));
             return;
@@ -73,6 +74,25 @@ const execFallow = (
       }
     );
   });
+
+/** Filter check results based on the user's issueTypes configuration. */
+const filterCheckResult = (result: FallowCheckResult): FallowCheckResult => {
+  const types = getIssueTypes();
+  return {
+    unused_files: types["unused-files"] ? result.unused_files : [],
+    unused_exports: types["unused-exports"] ? result.unused_exports : [],
+    unused_types: types["unused-types"] ? result.unused_types : [],
+    unused_dependencies: types["unused-dependencies"] ? result.unused_dependencies : [],
+    unused_dev_dependencies: types["unused-dev-dependencies"] ? result.unused_dev_dependencies : [],
+    unused_enum_members: types["unused-enum-members"] ? result.unused_enum_members : [],
+    unused_class_members: types["unused-class-members"] ? result.unused_class_members : [],
+    unresolved_imports: types["unresolved-imports"] ? result.unresolved_imports : [],
+    unlisted_dependencies: types["unlisted-dependencies"] ? result.unlisted_dependencies : [],
+    duplicate_exports: types["duplicate-exports"] ? result.duplicate_exports : [],
+    type_only_dependencies: types["type-only-dependencies"] ? result.type_only_dependencies : [],
+    circular_dependencies: types["circular-dependencies"] ? result.circular_dependencies : [],
+  };
+};
 
 const getWorkspaceRoot = (): string | null => {
   const folders = vscode.workspace.workspaceFolders;
@@ -113,7 +133,7 @@ export const runAnalysis = async (
     ]);
 
     try {
-      check = JSON.parse(checkOutput) as FallowCheckResult;
+      check = filterCheckResult(JSON.parse(checkOutput) as FallowCheckResult);
     } catch {
       // Check output may be empty or non-JSON on error
     }

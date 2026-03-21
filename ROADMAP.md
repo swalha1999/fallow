@@ -10,7 +10,7 @@ Code analysis should be fast enough to be invisible — part of the feedback loo
 
 ## Current State
 
-**Dead code analysis** covers 12 issue types (unused files, exports, types, dependencies, devDeps, enum members, class members, unresolved imports, unlisted deps, duplicate exports, circular dependencies, type-only dependencies) with 84 framework plugins (31 with AST-based config parsing), 4 output formats (human, JSON, SARIF, compact), auto-fix, and a per-issue severity rules system. Production mode, inline suppression, cross-workspace resolution (npm/yarn/pnpm workspaces and TypeScript project references), and `--changed-since` for incremental CI are all shipped.
+**Dead code analysis** covers 12 issue types (unused files, exports, types, dependencies, devDeps, enum members, class members, unresolved imports, unlisted deps, duplicate exports, circular dependencies, type-only dependencies) with 84 framework plugins (31 with AST-based config parsing), 5 output formats (human, JSON, SARIF, compact, markdown), auto-fix, and a per-issue severity rules system. Production mode, inline suppression, cross-workspace resolution (npm/yarn/pnpm workspaces and TypeScript project references), and `--changed-since` for incremental CI are all shipped.
 
 **Duplication detection** uses a suffix array with LCP for clone detection — no quadratic pairwise comparison. 4 detection modes (strict, mild, weak, semantic), clone family grouping with refactoring suggestions, baseline tracking for CI adoption, and cross-language TS↔JS matching.
 
@@ -74,7 +74,8 @@ These are ideas, not commitments. They ship as 1.x releases based on user demand
 - **More auto-fix targets** — delete unused files (`--allow-remove-files`), remove unused enum/class members, post-fix formatting integration. Auto-fix is the highest-leverage feature for adoption — users want one-command cleanup.
 - **JSDoc/TSDoc tag support** — `@public` (never report as unused), `@internal` (only report if unused within project). Common request from library authors.
 - **Fine-grained incremental analysis** — patch the graph in place, track export-level dependencies. Cache-aware parsing already covers the main bottleneck; this would additionally skip file I/O for unchanged files.
-- **Markdown reporter** — formatted output for PR comments. Enables `fallow check --format markdown | gh pr comment` workflows without custom scripting.
+- ~~**Markdown reporter** — formatted output for PR comments. Enables `fallow check --format markdown | gh pr comment` workflows without custom scripting.~~ **Done** — shipped as `--format markdown`.
+- **VS Code extension screenshots** — add screenshots and/or GIFs of diagnostics, tree views, Code Lens, and code actions to the extension README for the VS Code Marketplace listing. Visual demos significantly improve install conversion.
 - **Security framing for unused dependencies** — unused dependencies are attack surface. Flag unused deps with known CVEs, or integrate with `npm audit` data. Reframe dead dependency detection as a security practice, not just hygiene.
 - **Historical trend tracking** — store baselines over time, generate trend reports: "dead code grew 15% this quarter, duplication dropped 3%." Depends on a dashboard or reporting surface existing first.
 

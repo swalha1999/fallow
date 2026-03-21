@@ -80,17 +80,12 @@ impl Plugin for EslintPlugin {
 
         // For JSON configs, wrap in parens so Oxc can parse them
         let is_json = config_path.extension().is_some_and(|ext| ext == "json");
-        let (parse_source, parse_path_buf);
-        let parse_path: &Path;
-        if is_json {
-            parse_source = format!("({source})");
-            parse_path_buf = config_path.with_extension("js");
-            parse_path = &parse_path_buf;
+        let (parse_source, parse_path_buf) = if is_json {
+            (format!("({source})"), config_path.with_extension("js"))
         } else {
-            parse_source = source.to_string();
-            parse_path_buf = config_path.to_path_buf();
-            parse_path = &parse_path_buf;
-        }
+            (source.to_string(), config_path.to_path_buf())
+        };
+        let parse_path: &Path = &parse_path_buf;
 
         // Extract import sources as referenced dependencies (eslint plugins, configs)
         let imports = config_parser::extract_imports(&parse_source, parse_path);

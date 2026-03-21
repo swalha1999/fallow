@@ -463,7 +463,7 @@ fn get_nested_string_or_array(obj: &ObjectExpression, path: &[&str]) -> Option<V
     }
 }
 
-/// Convert an expression to a Vec<String>, handling string, array, and object-with-string-values.
+/// Convert an expression to a `Vec<String>`, handling string, array, and object-with-string-values.
 fn expression_to_string_or_array(expr: &Expression) -> Vec<String> {
     match expr {
         Expression::StringLiteral(s) => vec![s.value.to_string()],

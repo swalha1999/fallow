@@ -5,7 +5,8 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 const GITHUB_REPO = "fallow-rs/fallow";
-const BINARY_NAME = "fallow-lsp";
+const LSP_BINARY_NAME = "fallow-lsp";
+const CLI_BINARY_NAME = "fallow";
 
 interface GithubRelease {
   readonly tag_name: string;
@@ -107,8 +108,33 @@ export const getInstalledBinaryPath = (
 ): string | null => {
   const dir = getInstallDir(context);
   const ext = os.platform() === "win32" ? ".exe" : "";
-  const binaryPath = path.join(dir, `${BINARY_NAME}${ext}`);
+  const binaryPath = path.join(dir, `${LSP_BINARY_NAME}${ext}`);
   return fs.existsSync(binaryPath) ? binaryPath : null;
+};
+
+/** Download a single binary asset from a GitHub release. Returns the dest path or null. */
+const downloadAsset = async (
+  release: GithubRelease,
+  binaryName: string,
+  target: string,
+  dir: string
+): Promise<string | null> => {
+  const ext = os.platform() === "win32" ? ".exe" : "";
+  const assetName = `${binaryName}-${target}${ext}`;
+  const asset = release.assets.find((a) => a.name === assetName);
+
+  if (!asset) {
+    return null;
+  }
+
+  const destPath = path.join(dir, `${binaryName}${ext}`);
+  await httpsDownload(asset.browser_download_url, destPath);
+
+  if (os.platform() !== "win32") {
+    fs.chmodSync(destPath, 0o755);
+  }
+
+  return destPath;
 };
 
 export const downloadBinary = async (
@@ -125,7 +151,7 @@ export const downloadBinary = async (
   return vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "Fallow: Downloading language server...",
+      title: "Fallow: Downloading binaries...",
       cancellable: false,
     },
     async () => {
@@ -134,46 +160,34 @@ export const downloadBinary = async (
           `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
         );
         const release: GithubRelease = JSON.parse(releaseJson);
+        const dir = getInstallDir(context);
 
-        const ext = os.platform() === "win32" ? ".exe" : "";
-        const assetName = `${BINARY_NAME}-${target}${ext}`;
-        const asset = release.assets.find((a) => a.name === assetName);
-
-        if (!asset) {
-          // Try with .tar.gz or .zip archive patterns
-          const archiveAsset = release.assets.find(
-            (a) =>
-              a.name.includes(target) && a.name.includes(BINARY_NAME)
-          );
-          if (!archiveAsset) {
-            void vscode.window.showErrorMessage(
-              `Fallow: no binary found for ${target} in release ${release.tag_name}`
-            );
-            return null;
-          }
+        // Download LSP binary (required)
+        const lspPath = await downloadAsset(release, LSP_BINARY_NAME, target, dir);
+        if (!lspPath) {
           void vscode.window.showErrorMessage(
-            `Fallow: archive downloads not yet supported. Please download ${archiveAsset.name} manually.`
+            `Fallow: no LSP binary found for ${target} in release ${release.tag_name}`
           );
           return null;
         }
 
-        const dir = getInstallDir(context);
-        const destPath = path.join(dir, `${BINARY_NAME}${ext}`);
-
-        await httpsDownload(asset.browser_download_url, destPath);
-
-        if (os.platform() !== "win32") {
-          fs.chmodSync(destPath, 0o755);
+        // Download CLI binary (best-effort — tree views and commands need it)
+        const cliPath = await downloadAsset(release, CLI_BINARY_NAME, target, dir);
+        if (cliPath) {
+          void vscode.window.showInformationMessage(
+            `Fallow: ${release.tag_name} installed (LSP + CLI).`
+          );
+        } else {
+          void vscode.window.showInformationMessage(
+            `Fallow: LSP ${release.tag_name} installed. CLI binary not found in release — tree views require the fallow CLI in PATH.`
+          );
         }
 
-        void vscode.window.showInformationMessage(
-          `Fallow: language server ${release.tag_name} installed.`
-        );
-        return destPath;
+        return lspPath;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         void vscode.window.showErrorMessage(
-          `Fallow: failed to download language server: ${message}`
+          `Fallow: failed to download binaries: ${message}`
         );
         return null;
       }

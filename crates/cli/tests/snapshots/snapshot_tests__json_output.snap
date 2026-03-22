@@ -6,7 +6,7 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
   "schema_version": 1,
   "version": "[VERSION]",
   "elapsed_ms": 42,
-  "total_issues": 11,
+  "total_issues": 12,
   "unused_files": [
     {
       "path": "/project/src/dead.ts"
@@ -48,7 +48,13 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
       "path": "/project/package.json"
     }
   ],
-  "unused_optional_dependencies": [],
+  "unused_optional_dependencies": [
+    {
+      "package_name": "fsevents",
+      "location": "optionalDependencies",
+      "path": "/project/package.json"
+    }
+  ],
   "unused_enum_members": [
     {
       "path": "/project/src/enums.ts",

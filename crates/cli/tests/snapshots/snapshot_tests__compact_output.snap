@@ -7,6 +7,7 @@ unused-export:src/utils.ts:10:helperFn
 unused-type:src/types.ts:5:OldType
 unused-dep:lodash
 unused-devdep:jest
+unused-optionaldep:fsevents
 unused-enum-member:src/enums.ts:8:Status.Deprecated
 unused-class-member:src/service.ts:42:UserService.legacyMethod
 unresolved-import:src/app.ts:3:./missing-module

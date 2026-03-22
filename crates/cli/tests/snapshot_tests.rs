@@ -71,6 +71,11 @@ fn sample_results(root: &Path) -> AnalysisResults {
         export_name: "Config".to_string(),
         locations: vec![root.join("src/config.ts"), root.join("src/types.ts")],
     });
+    r.unused_optional_dependencies.push(UnusedDependency {
+        package_name: "fsevents".to_string(),
+        location: DependencyLocation::OptionalDependencies,
+        path: root.join("package.json"),
+    });
     r.circular_dependencies.push(CircularDependency {
         files: vec![root.join("src/a.ts"), root.join("src/b.ts")],
         length: 2,
@@ -261,6 +266,19 @@ fn compact_unused_dev_deps_only_snapshot() {
     });
     let lines = build_compact_lines(&results, &root);
     insta::assert_snapshot!("compact_unused_dev_deps_only", lines.join("\n"));
+}
+
+#[test]
+fn compact_unused_optional_deps_only_snapshot() {
+    let root = PathBuf::from("/project");
+    let mut results = AnalysisResults::default();
+    results.unused_optional_dependencies.push(UnusedDependency {
+        package_name: "fsevents".to_string(),
+        location: DependencyLocation::OptionalDependencies,
+        path: root.join("package.json"),
+    });
+    let lines = build_compact_lines(&results, &root);
+    insta::assert_snapshot!("compact_unused_optional_deps_only", lines.join("\n"));
 }
 
 #[test]

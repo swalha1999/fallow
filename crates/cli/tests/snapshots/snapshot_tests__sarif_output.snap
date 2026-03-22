@@ -214,6 +214,22 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
           ]
         },
         {
+          "ruleId": "fallow/unused-optional-dependency",
+          "level": "error",
+          "message": {
+            "text": "Package 'fsevents' is in optionalDependencies but never imported"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "package.json"
+                }
+              }
+            }
+          ]
+        },
+        {
           "ruleId": "fallow/unused-enum-member",
           "level": "error",
           "message": {

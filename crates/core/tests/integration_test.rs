@@ -1232,6 +1232,26 @@ fn unused_dev_dependency_detected() {
     );
 }
 
+// ── Unused optionalDependencies ───────────────────────────────
+
+#[test]
+fn unused_optional_dependency_detected() {
+    let root = fixture_path("optional-deps");
+    let config = create_config(root.clone());
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_optional_dep_names: Vec<&str> = results
+        .unused_optional_dependencies
+        .iter()
+        .map(|d| d.package_name.as_str())
+        .collect();
+
+    assert!(
+        unused_optional_dep_names.contains(&"unused-optional-pkg"),
+        "unused-optional-pkg should be detected as unused optional dependency, found: {unused_optional_dep_names:?}"
+    );
+}
+
 // ── Default export detection ───────────────────────────────────
 
 #[test]

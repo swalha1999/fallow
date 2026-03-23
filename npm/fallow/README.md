@@ -31,7 +31,7 @@ fallow fix --dry-run             # Preview auto-removal of unused exports and de
 - **Unused dependencies** -- packages in `dependencies` never imported
 - **Unused devDependencies** -- dev packages not referenced
 - **Unused enum members** -- enum values never referenced
-- **Unused class members** -- class methods and properties never referenced
+- **Unused class members** -- class methods and properties never referenced (tracks instance usage: `const svc = new MyService(); svc.greet()` counts `greet` as used)
 - **Unresolved imports** -- import specifiers that cannot be resolved
 - **Unlisted dependencies** -- imported packages missing from `package.json`
 - **Duplicate exports** -- same symbol exported from multiple modules

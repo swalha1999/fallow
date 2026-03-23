@@ -697,4 +697,60 @@ mod tests {
                 .any(|m| m.kind == MemberKind::ClassProperty)
         );
     }
+
+    #[test]
+    fn instance_member_access_not_flagged() {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/service.ts", false)]);
+        graph.modules[1].is_reachable = true;
+        graph.modules[1].exports = vec![make_export_with_members(
+            "MyService",
+            vec![
+                make_member("greet", MemberKind::ClassMethod),
+                make_member("unusedMethod", MemberKind::ClassMethod),
+            ],
+            Some(0),
+        )];
+        let config = test_config();
+
+        // Consumer imports MyService and accesses greet via instance.
+        // The visitor maps `svc.greet()` → `MyService.greet` at extraction time,
+        // so the analysis layer sees it as a direct member access on the export name.
+        let resolved_modules = vec![ResolvedModule {
+            file_id: FileId(0),
+            path: PathBuf::from("/src/entry.ts"),
+            exports: vec![],
+            re_exports: vec![],
+            resolved_imports: vec![ResolvedImport {
+                info: ImportInfo {
+                    source: "./service".to_string(),
+                    imported_name: ImportedName::Named("MyService".to_string()),
+                    local_name: "MyService".to_string(),
+                    is_type_only: false,
+                    span: Span::new(0, 30),
+                },
+                target: ResolveResult::InternalModule(FileId(1)),
+            }],
+            resolved_dynamic_imports: vec![],
+            resolved_dynamic_patterns: vec![],
+            member_accesses: vec![MemberAccess {
+                // Already mapped by the visitor from `svc.greet()` → `MyService.greet`
+                object: "MyService".to_string(),
+                member: "greet".to_string(),
+            }],
+            whole_object_uses: vec![],
+            has_cjs_exports: false,
+            unused_import_bindings: vec![],
+        }];
+
+        let (_, class_members) = find_unused_members(
+            &graph,
+            &config,
+            &resolved_modules,
+            &FxHashMap::default(),
+            &FxHashMap::default(),
+        );
+        // Only unusedMethod should be flagged; greet is used via instance access
+        assert_eq!(class_members.len(), 1);
+        assert_eq!(class_members[0].member_name, "unusedMethod");
+    }
 }

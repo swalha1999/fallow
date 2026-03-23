@@ -35,6 +35,18 @@ fn enum_class_members_detects_unused_members() {
         unused_class_member_names.contains(&"unusedMethod"),
         "unusedMethod should be detected as unused class member, found: {unused_class_member_names:?}"
     );
+
+    // greet() is called via instance: `const svc = new MyService(); svc.greet()`
+    assert!(
+        !unused_class_member_names.contains(&"greet"),
+        "greet should NOT be unused (called via instance), found: {unused_class_member_names:?}"
+    );
+
+    // name property is never accessed (not via svc.name or this.name)
+    assert!(
+        unused_class_member_names.contains(&"name"),
+        "name should be detected as unused class property, found: {unused_class_member_names:?}"
+    );
 }
 
 // ── Whole-object enum member heuristics ────────────────────────

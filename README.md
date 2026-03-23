@@ -51,7 +51,7 @@ cargo install fallow-cli     # Or via cargo
 - **Unused devDependencies** — packages in `devDependencies` never imported or used as script binaries
 - **Unused optionalDependencies** — packages in `optionalDependencies` never imported or used as script binaries
 - **Unused enum members** — enum values never referenced
-- **Unused class members** — class methods and properties never referenced
+- **Unused class members** — class methods and properties never referenced (tracks instance usage: `const svc = new MyService(); svc.greet()` counts `greet` as used)
 - **Unresolved imports** — import specifiers that cannot be resolved
 - **Unlisted dependencies** — imported packages missing from `package.json`
 - **Duplicate exports** — same symbol exported from multiple modules

@@ -148,3 +148,72 @@ pub(super) fn regex_pattern_to_suffix(pattern: &str) -> Option<String> {
 
     None
 }
+
+/// Check if a name is a well-known JavaScript/DOM built-in constructor.
+///
+/// Used to avoid creating spurious instance bindings for `new URL()`, `new Map()`,
+/// etc. These are never user-exported classes and would only create noise in the
+/// member access tracking pipeline.
+pub(super) fn is_builtin_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "Array"
+            | "ArrayBuffer"
+            | "Blob"
+            | "Boolean"
+            | "DataView"
+            | "Date"
+            | "Error"
+            | "EvalError"
+            | "Event"
+            | "Float32Array"
+            | "Float64Array"
+            | "FormData"
+            | "Headers"
+            | "Int8Array"
+            | "Int16Array"
+            | "Int32Array"
+            | "Map"
+            | "Number"
+            | "Object"
+            | "Promise"
+            | "Proxy"
+            | "RangeError"
+            | "ReferenceError"
+            | "RegExp"
+            | "Request"
+            | "Response"
+            | "Set"
+            | "SharedArrayBuffer"
+            | "String"
+            | "SyntaxError"
+            | "TypeError"
+            | "URIError"
+            | "URL"
+            | "URLSearchParams"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Uint16Array"
+            | "Uint32Array"
+            | "WeakMap"
+            | "WeakRef"
+            | "WeakSet"
+            | "Worker"
+            | "AbortController"
+            | "ReadableStream"
+            | "WritableStream"
+            | "TransformStream"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "MutationObserver"
+            | "IntersectionObserver"
+            | "ResizeObserver"
+            | "PerformanceObserver"
+            | "MessageChannel"
+            | "BroadcastChannel"
+            | "WebSocket"
+            | "XMLHttpRequest"
+            | "EventEmitter"
+            | "Buffer"
+    )
+}

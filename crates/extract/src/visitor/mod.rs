@@ -14,7 +14,9 @@ use crate::{
 };
 
 pub(crate) use helpers::extract_class_members;
-use helpers::{extract_concat_parts, is_meta_url_arg, regex_pattern_to_suffix};
+use helpers::{
+    extract_concat_parts, is_builtin_constructor, is_meta_url_arg, regex_pattern_to_suffix,
+};
 
 /// AST visitor that extracts all import/export information in a single pass.
 pub(crate) struct ModuleInfoExtractor {
@@ -35,6 +37,10 @@ pub(crate) struct ModuleInfoExtractor {
     /// (e.g., `import * as ns`, `const mod = require(...)`, `const mod = await import(...)`).
     /// Used to detect destructuring patterns like `const { a, b } = ns`.
     namespace_binding_names: Vec<String>,
+    /// Local names bound to `new ClassName()` expressions.
+    /// Maps (local_name, class_name) so that `x.method()` member accesses
+    /// on an instance `const x = new Foo()` count against `Foo`'s members.
+    instance_binding_names: Vec<(String, String)>,
 }
 
 impl ModuleInfoExtractor {
@@ -52,16 +58,54 @@ impl ModuleInfoExtractor {
             handled_require_spans: Vec::new(),
             handled_import_spans: Vec::new(),
             namespace_binding_names: Vec::new(),
+            instance_binding_names: Vec::new(),
         }
+    }
+
+    /// Map instance member accesses to class member accesses.
+    ///
+    /// When `const x = new Foo()` and later `x.bar()`, emit an additional
+    /// `MemberAccess { object: "Foo", member: "bar" }` so the analysis layer
+    /// can track it as usage of Foo's class member. Same for whole-object uses.
+    fn resolve_instance_member_accesses(&mut self) {
+        if self.instance_binding_names.is_empty() {
+            return;
+        }
+        let additional_accesses: Vec<MemberAccess> = self
+            .member_accesses
+            .iter()
+            .filter_map(|access| {
+                self.instance_binding_names
+                    .iter()
+                    .find(|(local, _)| *local == access.object)
+                    .map(|(_, class_name)| MemberAccess {
+                        object: class_name.clone(),
+                        member: access.member.clone(),
+                    })
+            })
+            .collect();
+        let additional_whole: Vec<String> = self
+            .whole_object_uses
+            .iter()
+            .filter_map(|name| {
+                self.instance_binding_names
+                    .iter()
+                    .find(|(local, _)| local == name)
+                    .map(|(_, class_name)| class_name.clone())
+            })
+            .collect();
+        self.member_accesses.extend(additional_accesses);
+        self.whole_object_uses.extend(additional_whole);
     }
 
     /// Convert this extractor into a `ModuleInfo`, consuming its fields.
     pub(crate) fn into_module_info(
-        self,
+        mut self,
         file_id: fallow_types::discover::FileId,
         content_hash: u64,
         suppressions: Vec<Suppression>,
     ) -> ModuleInfo {
+        self.resolve_instance_member_accesses();
         ModuleInfo {
             file_id,
             exports: self.exports,
@@ -81,7 +125,8 @@ impl ModuleInfoExtractor {
     }
 
     /// Merge this extractor's fields into an existing `ModuleInfo`.
-    pub(crate) fn merge_into(self, info: &mut ModuleInfo) {
+    pub(crate) fn merge_into(mut self, info: &mut ModuleInfo) {
+        self.resolve_instance_member_accesses();
         info.imports.extend(self.imports);
         info.exports.extend(self.exports);
         info.re_exports.extend(self.re_exports);
@@ -566,6 +611,29 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             {
                 self.handle_require_declaration(declarator, call, &lit.value);
                 continue;
+            }
+
+            // Detect instance creation: `const x = new ClassName(...)`.
+            // Records the binding so that `x.method()` member accesses are mapped
+            // to `ClassName.method` during post-processing, enabling unused class
+            // member detection through instance variables.
+            //
+            // Scope-unaware (same as namespace_binding_names): shadowing can cause
+            // false negatives (unused member not reported), not false positives.
+            // Built-in constructors are skipped to avoid spurious mappings.
+            //
+            // Limitation: instance destructuring (`const { method } = new Foo()`)
+            // is not tracked — only `x.method` property access patterns.
+            if let Expression::NewExpression(new_expr) = init
+                && let Expression::Identifier(callee) = &new_expr.callee
+                && let BindingPattern::BindingIdentifier(id) = &declarator.id
+                && !is_builtin_constructor(callee.name.as_str())
+            {
+                self.instance_binding_names
+                    .push((id.name.to_string(), callee.name.to_string()));
+                // No `continue` — falls through to dynamic import detection (which
+                // won't match NewExpression) and then hits `continue` at line 665.
+                // Children are visited by `walk::walk_variable_declaration` after the loop.
             }
 
             // Detect namespace destructuring: `const { a, b } = ns` where `ns`
@@ -1150,6 +1218,151 @@ mod tests {
                 .iter()
                 .any(|a| a.object == "this" && a.member == "bar"),
             "this.bar = ... should be tracked as a member access"
+        );
+    }
+
+    // ── Instance member access tracking ─────────────────────────
+
+    #[test]
+    fn instance_member_access_mapped_to_class() {
+        let info = parse(
+            r#"
+            import { MyService } from './service';
+            const svc = new MyService();
+            svc.greet();
+            "#,
+        );
+        // svc.greet() should produce a MemberAccess for MyService.greet
+        assert!(
+            info.member_accesses
+                .iter()
+                .any(|a| a.object == "MyService" && a.member == "greet"),
+            "svc.greet() should be mapped to MyService.greet, found: {:?}",
+            info.member_accesses
+        );
+    }
+
+    #[test]
+    fn instance_property_access_mapped_to_class() {
+        let info = parse(
+            r#"
+            import { MyClass } from './class';
+            const obj = new MyClass();
+            console.log(obj.name);
+            "#,
+        );
+        assert!(
+            info.member_accesses
+                .iter()
+                .any(|a| a.object == "MyClass" && a.member == "name"),
+            "obj.name should be mapped to MyClass.name, found: {:?}",
+            info.member_accesses
+        );
+    }
+
+    #[test]
+    fn instance_whole_object_use_mapped_to_class() {
+        let info = parse(
+            r#"
+            import { MyClass } from './class';
+            const obj = new MyClass();
+            Object.keys(obj);
+            "#,
+        );
+        assert!(
+            info.whole_object_uses.contains(&"MyClass".to_string()),
+            "Object.keys(obj) should map to whole-object use of MyClass, found: {:?}",
+            info.whole_object_uses
+        );
+    }
+
+    #[test]
+    fn non_instance_binding_not_mapped() {
+        let info = parse(
+            r#"
+            const obj = { greet() {} };
+            obj.greet();
+            "#,
+        );
+        // obj is not a `new` binding, so no class mapping should exist.
+        assert!(
+            !info
+                .member_accesses
+                .iter()
+                .any(|a| { a.object != "obj" && a.object != "this" && a.object != "console" }),
+            "non-instance bindings should not produce class-mapped accesses, found: {:?}",
+            info.member_accesses
+        );
+    }
+
+    #[test]
+    fn instance_binding_with_no_access_produces_nothing() {
+        let info = parse(
+            r#"
+            import { Foo } from './foo';
+            const x = new Foo();
+            "#,
+        );
+        // Binding exists but no x.method() calls — no synthetic accesses should be emitted.
+        assert!(
+            !info.member_accesses.iter().any(|a| a.object == "Foo"),
+            "binding with no member access should not produce Foo entries, found: {:?}",
+            info.member_accesses
+        );
+        assert!(
+            !info.whole_object_uses.contains(&"Foo".to_string()),
+            "binding with no whole-object use should not produce Foo entries, found: {:?}",
+            info.whole_object_uses
+        );
+    }
+
+    #[test]
+    fn builtin_constructor_not_tracked() {
+        let info = parse(
+            r#"
+            const url = new URL('https://example.com');
+            url.href;
+            const m = new Map();
+            m.get('key');
+            "#,
+        );
+        // Built-in constructors should not create instance bindings
+        assert!(
+            !info.member_accesses.iter().any(|a| a.object == "URL"),
+            "new URL() should not create instance binding, found: {:?}",
+            info.member_accesses
+        );
+        assert!(
+            !info.member_accesses.iter().any(|a| a.object == "Map"),
+            "new Map() should not create instance binding, found: {:?}",
+            info.member_accesses
+        );
+    }
+
+    #[test]
+    fn multiple_instances_same_class() {
+        let info = parse(
+            r#"
+            import { Svc } from './svc';
+            const a = new Svc();
+            const b = new Svc();
+            a.foo();
+            b.bar();
+            "#,
+        );
+        assert!(
+            info.member_accesses
+                .iter()
+                .any(|a| a.object == "Svc" && a.member == "foo"),
+            "a.foo() should map to Svc.foo, found: {:?}",
+            info.member_accesses
+        );
+        assert!(
+            info.member_accesses
+                .iter()
+                .any(|a| a.object == "Svc" && a.member == "bar"),
+            "b.bar() should map to Svc.bar, found: {:?}",
+            info.member_accesses
         );
     }
 

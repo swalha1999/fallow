@@ -457,6 +457,7 @@ fn sarif_mixed_severity_snapshot() {
         unresolved_imports: fallow_config::Severity::Error,
         unlisted_dependencies: fallow_config::Severity::Error,
         duplicate_exports: fallow_config::Severity::Warn,
+        type_only_dependencies: fallow_config::Severity::Warn,
         circular_dependencies: fallow_config::Severity::Warn,
     };
     let sarif = build_sarif(&results, &root, &rules);

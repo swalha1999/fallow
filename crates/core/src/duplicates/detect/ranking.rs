@@ -1,0 +1,35 @@
+//! Step 1: Rank reduction — map u64 hashes to consecutive u32 ranks.
+
+use rustc_hash::FxHashMap;
+
+use super::FileData;
+
+/// Map all unique token hashes (u64) to consecutive integer ranks (u32).
+///
+/// Returns `ranked_files` where `ranked_files[i]` contains the rank
+/// sequence for `files[i]`.
+pub(super) fn rank_reduce(files: &[FileData]) -> Vec<Vec<u32>> {
+    // Single-pass: assign ranks on first encounter. The exact rank values
+    // don't matter as long as equal hashes get equal ranks. Skipping the
+    // sort+dedup saves O(N log N) and a second allocation.
+    let total: usize = files.iter().map(|f| f.hashed_tokens.len()).sum();
+    let mut hash_to_rank: FxHashMap<u64, u32> =
+        FxHashMap::with_capacity_and_hasher(total / 2, rustc_hash::FxBuildHasher);
+    let mut next_rank: u32 = 0;
+
+    files
+        .iter()
+        .map(|file| {
+            file.hashed_tokens
+                .iter()
+                .map(|ht| {
+                    *hash_to_rank.entry(ht.hash).or_insert_with(|| {
+                        let r = next_rank;
+                        next_rank += 1;
+                        r
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}

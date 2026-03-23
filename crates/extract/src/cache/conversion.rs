@@ -1,0 +1,250 @@
+//! Conversion between [`ModuleInfo`](crate::ModuleInfo) and [`CachedModule`].
+
+use oxc_span::Span;
+
+use crate::ExportName;
+
+use super::types::*;
+
+/// Reconstruct a [`ModuleInfo`](crate::ModuleInfo) from a [`CachedModule`].
+pub fn cached_to_module(
+    cached: &CachedModule,
+    file_id: fallow_types::discover::FileId,
+) -> crate::ModuleInfo {
+    use crate::*;
+
+    let exports = cached
+        .exports
+        .iter()
+        .map(|e| ExportInfo {
+            name: if e.is_default {
+                ExportName::Default
+            } else {
+                ExportName::Named(e.name.clone())
+            },
+            local_name: e.local_name.clone(),
+            is_type_only: e.is_type_only,
+            span: Span::new(e.span_start, e.span_end),
+            members: e
+                .members
+                .iter()
+                .map(|m| MemberInfo {
+                    name: m.name.clone(),
+                    kind: m.kind.clone(),
+                    span: Span::new(m.span_start, m.span_end),
+                    has_decorator: m.has_decorator,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let imports = cached
+        .imports
+        .iter()
+        .map(|i| ImportInfo {
+            source: i.source.clone(),
+            imported_name: match i.kind {
+                IMPORT_KIND_DEFAULT => ImportedName::Default,
+                IMPORT_KIND_NAMESPACE => ImportedName::Namespace,
+                IMPORT_KIND_SIDE_EFFECT => ImportedName::SideEffect,
+                // IMPORT_KIND_NAMED (0) and any unknown value default to Named
+                _ => ImportedName::Named(i.imported_name.clone()),
+            },
+            local_name: i.local_name.clone(),
+            is_type_only: i.is_type_only,
+            span: Span::new(i.span_start, i.span_end),
+        })
+        .collect();
+
+    let re_exports = cached
+        .re_exports
+        .iter()
+        .map(|r| ReExportInfo {
+            source: r.source.clone(),
+            imported_name: r.imported_name.clone(),
+            exported_name: r.exported_name.clone(),
+            is_type_only: r.is_type_only,
+        })
+        .collect();
+
+    let dynamic_imports = cached
+        .dynamic_imports
+        .iter()
+        .map(|d| DynamicImportInfo {
+            source: d.source.clone(),
+            span: Span::new(d.span_start, d.span_end),
+            destructured_names: d.destructured_names.clone(),
+            local_name: d.local_name.clone(),
+        })
+        .collect();
+
+    let require_calls = cached
+        .require_calls
+        .iter()
+        .map(|r| RequireCallInfo {
+            source: r.source.clone(),
+            span: Span::new(r.span_start, r.span_end),
+            destructured_names: r.destructured_names.clone(),
+            local_name: r.local_name.clone(),
+        })
+        .collect();
+
+    let dynamic_import_patterns = cached
+        .dynamic_import_patterns
+        .iter()
+        .map(|p| crate::DynamicImportPattern {
+            prefix: p.prefix.clone(),
+            suffix: p.suffix.clone(),
+            span: Span::new(p.span_start, p.span_end),
+        })
+        .collect();
+
+    let suppressions = cached
+        .suppressions
+        .iter()
+        .map(|s| crate::suppress::Suppression {
+            line: s.line,
+            kind: if s.kind == 0 {
+                None
+            } else {
+                crate::suppress::IssueKind::from_discriminant(s.kind)
+            },
+        })
+        .collect();
+
+    ModuleInfo {
+        file_id,
+        exports,
+        imports,
+        re_exports,
+        dynamic_imports,
+        dynamic_import_patterns,
+        require_calls,
+        member_accesses: cached.member_accesses.clone(),
+        whole_object_uses: cached.whole_object_uses.clone(),
+        has_cjs_exports: cached.has_cjs_exports,
+        content_hash: cached.content_hash,
+        suppressions,
+        unused_import_bindings: cached.unused_import_bindings.clone(),
+        line_offsets: cached.line_offsets.clone(),
+    }
+}
+
+/// Convert a [`ModuleInfo`](crate::ModuleInfo) to a [`CachedModule`] for storage.
+///
+/// `mtime_secs` and `file_size` come from `std::fs::metadata()` at parse time
+/// and enable fast cache validation on subsequent runs (skip file read when
+/// mtime+size match).
+pub fn module_to_cached(
+    module: &crate::ModuleInfo,
+    mtime_secs: u64,
+    file_size: u64,
+) -> CachedModule {
+    CachedModule {
+        content_hash: module.content_hash,
+        mtime_secs,
+        file_size,
+        exports: module
+            .exports
+            .iter()
+            .map(|e| CachedExport {
+                name: match &e.name {
+                    ExportName::Named(n) => n.clone(),
+                    ExportName::Default => String::new(),
+                },
+                is_default: matches!(e.name, ExportName::Default),
+                is_type_only: e.is_type_only,
+                local_name: e.local_name.clone(),
+                span_start: e.span.start,
+                span_end: e.span.end,
+                members: e
+                    .members
+                    .iter()
+                    .map(|m| CachedMember {
+                        name: m.name.clone(),
+                        kind: m.kind.clone(),
+                        span_start: m.span.start,
+                        span_end: m.span.end,
+                        has_decorator: m.has_decorator,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        imports: module
+            .imports
+            .iter()
+            .map(|i| {
+                let (kind, imported_name) = match &i.imported_name {
+                    crate::ImportedName::Named(n) => (IMPORT_KIND_NAMED, n.clone()),
+                    crate::ImportedName::Default => (IMPORT_KIND_DEFAULT, String::new()),
+                    crate::ImportedName::Namespace => (IMPORT_KIND_NAMESPACE, String::new()),
+                    crate::ImportedName::SideEffect => (IMPORT_KIND_SIDE_EFFECT, String::new()),
+                };
+                CachedImport {
+                    source: i.source.clone(),
+                    imported_name,
+                    local_name: i.local_name.clone(),
+                    is_type_only: i.is_type_only,
+                    kind,
+                    span_start: i.span.start,
+                    span_end: i.span.end,
+                }
+            })
+            .collect(),
+        re_exports: module
+            .re_exports
+            .iter()
+            .map(|r| CachedReExport {
+                source: r.source.clone(),
+                imported_name: r.imported_name.clone(),
+                exported_name: r.exported_name.clone(),
+                is_type_only: r.is_type_only,
+            })
+            .collect(),
+        dynamic_imports: module
+            .dynamic_imports
+            .iter()
+            .map(|d| CachedDynamicImport {
+                source: d.source.clone(),
+                span_start: d.span.start,
+                span_end: d.span.end,
+                destructured_names: d.destructured_names.clone(),
+                local_name: d.local_name.clone(),
+            })
+            .collect(),
+        require_calls: module
+            .require_calls
+            .iter()
+            .map(|r| CachedRequireCall {
+                source: r.source.clone(),
+                span_start: r.span.start,
+                span_end: r.span.end,
+                destructured_names: r.destructured_names.clone(),
+                local_name: r.local_name.clone(),
+            })
+            .collect(),
+        member_accesses: module.member_accesses.clone(),
+        whole_object_uses: module.whole_object_uses.clone(),
+        dynamic_import_patterns: module
+            .dynamic_import_patterns
+            .iter()
+            .map(|p| CachedDynamicImportPattern {
+                prefix: p.prefix.clone(),
+                suffix: p.suffix.clone(),
+                span_start: p.span.start,
+                span_end: p.span.end,
+            })
+            .collect(),
+        has_cjs_exports: module.has_cjs_exports,
+        unused_import_bindings: module.unused_import_bindings.clone(),
+        suppressions: module
+            .suppressions
+            .iter()
+            .map(|s| CachedSuppression {
+                line: s.line,
+                kind: s.kind.map_or(0, |k| k.to_discriminant()),
+            })
+            .collect(),
+        line_offsets: module.line_offsets.clone(),
+    }
+}

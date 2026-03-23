@@ -10,12 +10,360 @@ use super::types::ModuleNode;
 use super::types::{ExportSymbol, ReExportEdge, ReferenceKind, SymbolReference};
 use super::{Edge, ImportedSymbol, ModuleGraph};
 
+/// Insert into the namespace-imported bitset with bounds checking.
+fn record_namespace_import(
+    target_id: FileId,
+    namespace_imported: &mut fixedbitset::FixedBitSet,
+    total_capacity: usize,
+) {
+    let idx = target_id.0 as usize;
+    if idx < total_capacity {
+        namespace_imported.insert(idx);
+    }
+}
+
+/// Track that a file uses an npm package, and optionally record type-only usage.
+fn record_package_usage(
+    name: &str,
+    file_id: FileId,
+    package_usage: &mut FxHashMap<String, Vec<FileId>>,
+    type_only_package_usage: &mut FxHashMap<String, Vec<FileId>>,
+    is_type_only: bool,
+) {
+    package_usage
+        .entry(name.to_owned())
+        .or_default()
+        .push(file_id);
+    if is_type_only {
+        type_only_package_usage
+            .entry(name.to_owned())
+            .or_default()
+            .push(file_id);
+    }
+}
+
+/// Build a `ModuleNode` for a file, including exports, re-export edges, and metadata.
+fn build_module_node(
+    file: &DiscoveredFile,
+    module_by_id: &FxHashMap<FileId, &ResolvedModule>,
+    entry_point_ids: &FxHashSet<FileId>,
+    edge_range: std::ops::Range<usize>,
+) -> ModuleNode {
+    let mut exports: Vec<ExportSymbol> = module_by_id
+        .get(&file.id)
+        .map(|m| {
+            m.exports
+                .iter()
+                .map(|e| ExportSymbol {
+                    name: e.name.clone(),
+                    is_type_only: e.is_type_only,
+                    span: e.span,
+                    references: Vec::new(),
+                    members: e.members.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Create ExportSymbol entries for re-exports so that consumers
+    // importing from this barrel can have their references attached.
+    // Without this, `export { Foo } from './source'` on a barrel would
+    // not be trackable as an export of the barrel module.
+    if let Some(resolved) = module_by_id.get(&file.id) {
+        for re in &resolved.re_exports {
+            // Skip star re-exports without an alias (`export * from './x'`)
+            // — they don't create a named export on the barrel.
+            // But `export * as name from './x'` does create one.
+            if re.info.exported_name == "*" {
+                continue;
+            }
+
+            // Avoid duplicates: if an export with this name already exists
+            // (e.g. the module both declares and re-exports the same name),
+            // skip creating another one.
+            let export_name = if re.info.exported_name == "default" {
+                ExportName::Default
+            } else {
+                ExportName::Named(re.info.exported_name.clone())
+            };
+            let already_exists = exports.iter().any(|e| e.name == export_name);
+            if already_exists {
+                continue;
+            }
+
+            exports.push(ExportSymbol {
+                name: export_name,
+                is_type_only: re.info.is_type_only,
+                span: oxc_span::Span::new(0, 0), // re-exports don't have a meaningful span on the barrel
+                references: Vec::new(),
+                members: Vec::new(),
+            });
+        }
+    }
+
+    let has_cjs_exports = module_by_id
+        .get(&file.id)
+        .is_some_and(|m| m.has_cjs_exports);
+
+    // Build re-export edges
+    let re_export_edges: Vec<ReExportEdge> = module_by_id
+        .get(&file.id)
+        .map(|m| {
+            m.re_exports
+                .iter()
+                .filter_map(|re| {
+                    if let ResolveResult::InternalModule(target_id) = &re.target {
+                        Some(ReExportEdge {
+                            source_file: *target_id,
+                            imported_name: re.info.imported_name.clone(),
+                            exported_name: re.info.exported_name.clone(),
+                            is_type_only: re.info.is_type_only,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    ModuleNode {
+        file_id: file.id,
+        path: file.path.clone(),
+        edge_range,
+        exports,
+        re_exports: re_export_edges,
+        is_entry_point: entry_point_ids.contains(&file.id),
+        is_reachable: false,
+        has_cjs_exports,
+    }
+}
+
+/// Check whether an import binding is unused in the source file.
+///
+/// Returns `true` if the binding should be skipped (unused).
+fn is_unused_import_binding(
+    sym_local_name: &str,
+    sym_imported_name: &ImportedName,
+    source_mod: Option<&&ResolvedModule>,
+) -> bool {
+    !sym_local_name.is_empty()
+        && !matches!(sym_imported_name, ImportedName::SideEffect)
+        && source_mod.is_some_and(|m| m.unused_import_bindings.iter().any(|n| n == sym_local_name))
+}
+
+/// Extract member access names for a given local variable from a resolved module.
+fn extract_accessed_members(source_mod: Option<&&ResolvedModule>, local_name: &str) -> Vec<String> {
+    source_mod
+        .map(|m| {
+            m.member_accesses
+                .iter()
+                .filter(|ma| ma.object == local_name)
+                .map(|ma| ma.member.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Mark all exports on a module as referenced by a given source file.
+///
+/// Deduplicates: skips exports already referenced by `source_id`.
+fn mark_all_exports_referenced(
+    exports: &mut Vec<ExportSymbol>,
+    source_id: FileId,
+    import_span: oxc_span::Span,
+    kind: &ReferenceKind,
+) {
+    for export in exports {
+        if export.references.iter().all(|r| r.from_file != source_id) {
+            export.references.push(SymbolReference {
+                from_file: source_id,
+                kind: kind.clone(),
+                import_span,
+            });
+        }
+    }
+}
+
+/// Mark only exports whose names appear in `accessed_members` as referenced.
+///
+/// Returns the set of member names that were found among the exports.
+fn mark_member_exports_referenced(
+    exports: &mut [ExportSymbol],
+    source_id: FileId,
+    accessed_members: &[String],
+    import_span: oxc_span::Span,
+    kind: &ReferenceKind,
+) -> FxHashSet<String> {
+    let mut found_members: FxHashSet<String> = FxHashSet::default();
+    for export in exports {
+        let name_str = export.name.to_string();
+        if accessed_members.contains(&name_str) {
+            found_members.insert(name_str);
+            if export.references.iter().all(|r| r.from_file != source_id) {
+                export.references.push(SymbolReference {
+                    from_file: source_id,
+                    kind: kind.clone(),
+                    import_span,
+                });
+            }
+        }
+    }
+    found_members
+}
+
+/// Create synthetic `ExportSymbol` entries for members accessed via namespace import
+/// that were not found among the target's own exports, but the target has `export *`
+/// re-exports that may forward those names.
+fn create_synthetic_exports_for_star_re_exports(
+    exports: &mut Vec<ExportSymbol>,
+    re_exports: &[ReExportEdge],
+    source_id: FileId,
+    accessed_members: &[String],
+    found_members: &FxHashSet<String>,
+    import_span: oxc_span::Span,
+) {
+    let has_star_re_exports = re_exports.iter().any(|re| re.exported_name == "*");
+    if !has_star_re_exports {
+        return;
+    }
+    for member in accessed_members {
+        if found_members.contains(member) {
+            continue;
+        }
+        let export_name = if member == "default" {
+            ExportName::Default
+        } else {
+            ExportName::Named(member.clone())
+        };
+        exports.push(ExportSymbol {
+            name: export_name,
+            is_type_only: false,
+            span: oxc_span::Span::new(0, 0),
+            references: vec![SymbolReference {
+                from_file: source_id,
+                kind: ReferenceKind::NamespaceImport,
+                import_span,
+            }],
+            members: Vec::new(),
+        });
+    }
+}
+
+/// Handle namespace import narrowing for `import * as ns from './x'`.
+///
+/// If member accesses can be determined, only those exports are marked as used.
+/// Otherwise, all exports are conservatively marked as referenced.
+fn narrow_namespace_references(
+    module: &mut ModuleNode,
+    source_id: FileId,
+    sym_local_name: &str,
+    sym_import_span: oxc_span::Span,
+    module_by_id: &FxHashMap<FileId, &ResolvedModule>,
+    entry_point_ids: &FxHashSet<FileId>,
+) {
+    let local_name = sym_local_name;
+    let source_mod = module_by_id.get(&source_id);
+    let accessed_members = extract_accessed_members(source_mod, local_name);
+
+    // Check if the namespace is consumed as a whole object
+    // (Object.values, for..in, spread, destructuring with rest, etc.)
+    let is_whole_object =
+        source_mod.is_some_and(|m| m.whole_object_uses.iter().any(|n| n == local_name));
+
+    // Check if the namespace variable is re-exported (export { ns } or export default ns)
+    // from a NON-entry-point file. If the importing file IS an entry point,
+    // the re-export is for external consumption and doesn't prove internal usage.
+    let is_re_exported_from_non_entry = source_mod.is_some_and(|m| {
+        m.exports
+            .iter()
+            .any(|e| e.local_name.as_deref() == Some(local_name))
+    }) && !entry_point_ids.contains(&source_id);
+
+    // For entry point files with no member accesses, the namespace
+    // is purely re-exported for external use — don't mark all exports
+    // as used internally. The `export *` path handles individual tracking.
+    let is_entry_with_no_access =
+        accessed_members.is_empty() && !is_whole_object && entry_point_ids.contains(&source_id);
+
+    if is_whole_object
+        || (!is_entry_with_no_access
+            && (accessed_members.is_empty() || is_re_exported_from_non_entry))
+    {
+        // Can't narrow — mark all exports as referenced (conservative)
+        mark_all_exports_referenced(
+            &mut module.exports,
+            source_id,
+            sym_import_span,
+            &ReferenceKind::NamespaceImport,
+        );
+    } else {
+        // Narrow: only mark accessed members as referenced
+        let found_members = mark_member_exports_referenced(
+            &mut module.exports,
+            source_id,
+            &accessed_members,
+            sym_import_span,
+            &ReferenceKind::NamespaceImport,
+        );
+
+        // For members not found on the target (e.g., barrel with
+        // `export *` that has no own exports for these names),
+        // create synthetic ExportSymbol entries so that
+        // resolve_re_export_chains can propagate them to the
+        // actual source modules.
+        create_synthetic_exports_for_star_re_exports(
+            &mut module.exports,
+            &module.re_exports,
+            source_id,
+            &accessed_members,
+            &found_members,
+            sym_import_span,
+        );
+    }
+}
+
+/// Handle CSS Module default-import narrowing.
+///
+/// `import styles from './Button.module.css'` — member accesses like `styles.primary`
+/// mark the `primary` named export as referenced, since CSS module default imports act
+/// as namespace objects where each property corresponds to a class name (named export).
+fn narrow_css_module_references(
+    exports: &mut Vec<ExportSymbol>,
+    source_id: FileId,
+    sym_local_name: &str,
+    sym_import_span: oxc_span::Span,
+    module_by_id: &FxHashMap<FileId, &ResolvedModule>,
+) {
+    let local_name = sym_local_name;
+    let source_mod = module_by_id.get(&source_id);
+    let is_whole_object =
+        source_mod.is_some_and(|m| m.whole_object_uses.iter().any(|n| n == local_name));
+    let accessed_members = extract_accessed_members(source_mod, local_name);
+
+    if is_whole_object || accessed_members.is_empty() {
+        mark_all_exports_referenced(
+            exports,
+            source_id,
+            sym_import_span,
+            &ReferenceKind::DefaultImport,
+        );
+    } else {
+        mark_member_exports_referenced(
+            exports,
+            source_id,
+            &accessed_members,
+            sym_import_span,
+            &ReferenceKind::DefaultImport,
+        );
+    }
+}
+
 impl ModuleGraph {
     /// Build flat edge storage from resolved modules.
     ///
     /// Creates `ModuleNode` entries, flat `Edge` storage, reverse dependency
     /// indices, package usage maps, and the namespace-imported bitset.
-    #[expect(clippy::cognitive_complexity)] // Complex but coherent edge-population logic
     pub(super) fn populate_edges(
         files: &[DiscoveredFile],
         module_by_id: &FxHashMap<FileId, &ResolvedModule>,
@@ -43,10 +391,11 @@ impl ModuleGraph {
                         ResolveResult::InternalModule(target_id) => {
                             // Track namespace imports during edge creation
                             if matches!(import.info.imported_name, ImportedName::Namespace) {
-                                let idx = target_id.0 as usize;
-                                if idx < total_capacity {
-                                    namespace_imported.insert(idx);
-                                }
+                                record_namespace_import(
+                                    *target_id,
+                                    &mut namespace_imported,
+                                    total_capacity,
+                                );
                             }
                             edges_by_target
                                 .entry(*target_id)
@@ -58,13 +407,13 @@ impl ModuleGraph {
                                 });
                         }
                         ResolveResult::NpmPackage(name) => {
-                            package_usage.entry(name.clone()).or_default().push(file.id);
-                            if import.info.is_type_only {
-                                type_only_package_usage
-                                    .entry(name.clone())
-                                    .or_default()
-                                    .push(file.id);
-                            }
+                            record_package_usage(
+                                name,
+                                file.id,
+                                &mut package_usage,
+                                &mut type_only_package_usage,
+                                import.info.is_type_only,
+                            );
                         }
                         _ => {}
                     }
@@ -86,13 +435,13 @@ impl ModuleGraph {
                                 import_span: oxc_span::Span::new(0, 0),
                             });
                     } else if let ResolveResult::NpmPackage(name) = &re_export.target {
-                        package_usage.entry(name.clone()).or_default().push(file.id);
-                        if re_export.info.is_type_only {
-                            type_only_package_usage
-                                .entry(name.clone())
-                                .or_default()
-                                .push(file.id);
-                        }
+                        record_package_usage(
+                            name,
+                            file.id,
+                            &mut package_usage,
+                            &mut type_only_package_usage,
+                            re_export.info.is_type_only,
+                        );
                     }
                 }
 
@@ -104,10 +453,11 @@ impl ModuleGraph {
                 for import in &resolved.resolved_dynamic_imports {
                     if let ResolveResult::InternalModule(target_id) = &import.target {
                         if matches!(import.info.imported_name, ImportedName::Namespace) {
-                            let idx = target_id.0 as usize;
-                            if idx < total_capacity {
-                                namespace_imported.insert(idx);
-                            }
+                            record_namespace_import(
+                                *target_id,
+                                &mut namespace_imported,
+                                total_capacity,
+                            );
                         }
                         edges_by_target
                             .entry(*target_id)
@@ -123,10 +473,11 @@ impl ModuleGraph {
                 // Dynamic import patterns (template literals, string concat, import.meta.glob)
                 for (_pattern, matched_ids) in &resolved.resolved_dynamic_patterns {
                     for target_id in matched_ids {
-                        let idx = target_id.0 as usize;
-                        if idx < total_capacity {
-                            namespace_imported.insert(idx);
-                        }
+                        record_namespace_import(
+                            *target_id,
+                            &mut namespace_imported,
+                            total_capacity,
+                        );
                         edges_by_target
                             .entry(*target_id)
                             .or_default()
@@ -157,94 +508,12 @@ impl ModuleGraph {
 
             let edge_end = all_edges.len();
 
-            let mut exports: Vec<ExportSymbol> = module_by_id
-                .get(&file.id)
-                .map(|m| {
-                    m.exports
-                        .iter()
-                        .map(|e| ExportSymbol {
-                            name: e.name.clone(),
-                            is_type_only: e.is_type_only,
-                            span: e.span,
-                            references: Vec::new(),
-                            members: e.members.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Create ExportSymbol entries for re-exports so that consumers
-            // importing from this barrel can have their references attached.
-            // Without this, `export { Foo } from './source'` on a barrel would
-            // not be trackable as an export of the barrel module.
-            if let Some(resolved) = module_by_id.get(&file.id) {
-                for re in &resolved.re_exports {
-                    // Skip star re-exports without an alias (`export * from './x'`)
-                    // — they don't create a named export on the barrel.
-                    // But `export * as name from './x'` does create one.
-                    if re.info.exported_name == "*" {
-                        continue;
-                    }
-
-                    // Avoid duplicates: if an export with this name already exists
-                    // (e.g. the module both declares and re-exports the same name),
-                    // skip creating another one.
-                    let export_name = if re.info.exported_name == "default" {
-                        ExportName::Default
-                    } else {
-                        ExportName::Named(re.info.exported_name.clone())
-                    };
-                    let already_exists = exports.iter().any(|e| e.name == export_name);
-                    if already_exists {
-                        continue;
-                    }
-
-                    exports.push(ExportSymbol {
-                        name: export_name,
-                        is_type_only: re.info.is_type_only,
-                        span: oxc_span::Span::new(0, 0), // re-exports don't have a meaningful span on the barrel
-                        references: Vec::new(),
-                        members: Vec::new(),
-                    });
-                }
-            }
-
-            let has_cjs_exports = module_by_id
-                .get(&file.id)
-                .is_some_and(|m| m.has_cjs_exports);
-
-            // Build re-export edges
-            let re_export_edges: Vec<ReExportEdge> = module_by_id
-                .get(&file.id)
-                .map(|m| {
-                    m.re_exports
-                        .iter()
-                        .filter_map(|re| {
-                            if let ResolveResult::InternalModule(target_id) = &re.target {
-                                Some(ReExportEdge {
-                                    source_file: *target_id,
-                                    imported_name: re.info.imported_name.clone(),
-                                    exported_name: re.info.exported_name.clone(),
-                                    is_type_only: re.info.is_type_only,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            modules.push(ModuleNode {
-                file_id: file.id,
-                path: file.path.clone(),
-                edge_range: edge_start..edge_end,
-                exports,
-                re_exports: re_export_edges,
-                is_entry_point: entry_point_ids.contains(&file.id),
-                is_reachable: false,
-                has_cjs_exports,
-            });
+            modules.push(build_module_node(
+                file,
+                module_by_id,
+                entry_point_ids,
+                edge_start..edge_end,
+            ));
         }
 
         Self {
@@ -263,7 +532,6 @@ impl ModuleGraph {
     /// Walks every edge and attaches `SymbolReference` entries to the target
     /// module's exports. Includes namespace import narrowing (member access
     /// tracking) and CSS Module default-import narrowing.
-    #[expect(clippy::cognitive_complexity)]
     pub(super) fn populate_references(
         &mut self,
         module_by_id: &FxHashMap<FileId, &ResolvedModule>,
@@ -288,17 +556,12 @@ impl ModuleGraph {
                 };
 
                 // Skip references for import bindings that are never used in the
-                // importing file. oxc_semantic detected that the binding has zero
-                // references after the import statement — the export should not
-                // count as "referenced" just because a dead import exists.
-                if !sym_local_name.is_empty()
-                    && !matches!(sym_imported_name, ImportedName::SideEffect)
-                    && let Some(source_mod) = module_by_id.get(&source_id)
-                    && source_mod
-                        .unused_import_bindings
-                        .iter()
-                        .any(|n| n == &sym_local_name)
-                {
+                // importing file.
+                if is_unused_import_binding(
+                    &sym_local_name,
+                    &sym_imported_name,
+                    module_by_id.get(&source_id),
+                ) {
                     continue;
                 }
 
@@ -324,113 +587,22 @@ impl ModuleGraph {
                 if matches!(sym_imported_name, ImportedName::Namespace)
                     && !sym_local_name.is_empty()
                 {
-                    let local_name = &sym_local_name;
-                    let source_mod = module_by_id.get(&source_id);
-                    let accessed_members: Vec<String> = source_mod
-                        .map(|m| {
-                            m.member_accesses
-                                .iter()
-                                .filter(|ma| ma.object == *local_name)
-                                .map(|ma| ma.member.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    // Check if the namespace is consumed as a whole object
-                    // (Object.values, for..in, spread, destructuring with rest, etc.)
-                    let is_whole_object = source_mod
-                        .is_some_and(|m| m.whole_object_uses.iter().any(|n| n == local_name));
-
-                    // Check if the namespace variable is re-exported (export { ns } or export default ns)
-                    // from a NON-entry-point file. If the importing file IS an entry point,
-                    // the re-export is for external consumption and doesn't prove internal usage.
-                    let is_re_exported_from_non_entry = source_mod.is_some_and(|m| {
-                        m.exports
-                            .iter()
-                            .any(|e| e.local_name.as_deref() == Some(local_name.as_str()))
-                    }) && !entry_point_ids.contains(&source_id);
-
-                    // For entry point files with no member accesses, the namespace
-                    // is purely re-exported for external use — don't mark all exports
-                    // as used internally. The `export *` path handles individual tracking.
-                    let is_entry_with_no_access = accessed_members.is_empty()
-                        && !is_whole_object
-                        && entry_point_ids.contains(&source_id);
-
-                    if is_whole_object
-                        || (!is_entry_with_no_access
-                            && (accessed_members.is_empty() || is_re_exported_from_non_entry))
-                    {
-                        // Can't narrow — mark all exports as referenced (conservative)
-                        for export in &mut self.modules[target_idx].exports {
-                            if export.references.iter().all(|r| r.from_file != source_id) {
-                                export.references.push(SymbolReference {
-                                    from_file: source_id,
-                                    kind: ReferenceKind::NamespaceImport,
-                                    import_span: sym_import_span,
-                                });
-                            }
-                        }
-                    } else {
-                        // Narrow: only mark accessed members as referenced
-                        let mut found_members: FxHashSet<String> = FxHashSet::default();
-                        for export in &mut self.modules[target_idx].exports {
-                            let name_str = export.name.to_string();
-                            if accessed_members.contains(&name_str) {
-                                found_members.insert(name_str);
-                                if export.references.iter().all(|r| r.from_file != source_id) {
-                                    export.references.push(SymbolReference {
-                                        from_file: source_id,
-                                        kind: ReferenceKind::NamespaceImport,
-                                        import_span: sym_import_span,
-                                    });
-                                }
-                            }
-                        }
-
-                        // For members not found on the target (e.g., barrel with
-                        // `export *` that has no own exports for these names),
-                        // create synthetic ExportSymbol entries so that
-                        // resolve_re_export_chains can propagate them to the
-                        // actual source modules.
-                        let target_has_star_re_exports = self.modules[target_idx]
-                            .re_exports
-                            .iter()
-                            .any(|re| re.exported_name == "*");
-                        if target_has_star_re_exports {
-                            for member in &accessed_members {
-                                if !found_members.contains(member) {
-                                    let export_name = if member == "default" {
-                                        ExportName::Default
-                                    } else {
-                                        ExportName::Named(member.clone())
-                                    };
-                                    self.modules[target_idx].exports.push(ExportSymbol {
-                                        name: export_name,
-                                        is_type_only: false,
-                                        span: oxc_span::Span::new(0, 0),
-                                        references: vec![SymbolReference {
-                                            from_file: source_id,
-                                            kind: ReferenceKind::NamespaceImport,
-                                            import_span: sym_import_span,
-                                        }],
-                                        members: Vec::new(),
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    narrow_namespace_references(
+                        &mut self.modules[target_idx],
+                        source_id,
+                        &sym_local_name,
+                        sym_import_span,
+                        module_by_id,
+                        entry_point_ids,
+                    );
                 } else if matches!(sym_imported_name, ImportedName::Namespace) {
                     // No local name available — mark all (conservative)
-                    for export in &mut self.modules[target_idx].exports {
-                        if export.references.iter().all(|r| r.from_file != source_id) {
-                            export.references.push(SymbolReference {
-                                from_file: source_id,
-                                kind: ReferenceKind::NamespaceImport,
-                                import_span: sym_import_span,
-                            });
-                        }
-                    }
+                    mark_all_exports_referenced(
+                        &mut self.modules[target_idx].exports,
+                        source_id,
+                        sym_import_span,
+                        &ReferenceKind::NamespaceImport,
+                    );
                 }
 
                 // CSS Module default imports: `import styles from './Button.module.css'`
@@ -441,43 +613,13 @@ impl ModuleGraph {
                     && !sym_local_name.is_empty()
                     && is_css_module_path(&self.modules[target_idx].path)
                 {
-                    let local_name = &sym_local_name;
-                    let source_mod = module_by_id.get(&source_id);
-                    let is_whole_object = source_mod
-                        .is_some_and(|m| m.whole_object_uses.iter().any(|n| n == local_name));
-                    let accessed_members: Vec<String> = source_mod
-                        .map(|m| {
-                            m.member_accesses
-                                .iter()
-                                .filter(|ma| ma.object == *local_name)
-                                .map(|ma| ma.member.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    if is_whole_object || accessed_members.is_empty() {
-                        for export in &mut self.modules[target_idx].exports {
-                            if export.references.iter().all(|r| r.from_file != source_id) {
-                                export.references.push(SymbolReference {
-                                    from_file: source_id,
-                                    kind: ReferenceKind::DefaultImport,
-                                    import_span: sym_import_span,
-                                });
-                            }
-                        }
-                    } else {
-                        for export in &mut self.modules[target_idx].exports {
-                            let name_str = export.name.to_string();
-                            if accessed_members.contains(&name_str)
-                                && export.references.iter().all(|r| r.from_file != source_id)
-                            {
-                                export.references.push(SymbolReference {
-                                    from_file: source_id,
-                                    kind: ReferenceKind::DefaultImport,
-                                    import_span: sym_import_span,
-                                });
-                            }
-                        }
-                    }
+                    narrow_css_module_references(
+                        &mut self.modules[target_idx].exports,
+                        source_id,
+                        &sym_local_name,
+                        sym_import_span,
+                        module_by_id,
+                    );
                 }
             }
         }

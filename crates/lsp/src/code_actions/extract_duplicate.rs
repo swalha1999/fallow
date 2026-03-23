@@ -5,162 +5,6 @@ use std::path::Path;
 use tower_lsp::lsp_types::*;
 
 use fallow_core::duplicates::CloneGroup;
-use fallow_core::results::AnalysisResults;
-
-use crate::diagnostics::ZERO_RANGE;
-
-/// Build quick-fix code actions for unused exports (remove the `export` keyword).
-#[expect(clippy::disallowed_types)]
-pub fn build_remove_export_actions(
-    results: &AnalysisResults,
-    file_path: &Path,
-    uri: &Url,
-    cursor_range: &Range,
-    file_lines: &[&str],
-) -> Vec<CodeActionOrCommand> {
-    let mut actions = Vec::new();
-
-    for (exports, msg_prefix) in [
-        (&results.unused_exports, "Export"),
-        (&results.unused_types, "Type export"),
-    ] {
-        for export in exports {
-            if export.path != file_path {
-                continue;
-            }
-
-            // export.line is a 1-based line number; convert to 0-based for LSP
-            let export_line = export.line.saturating_sub(1);
-
-            // Check if this diagnostic is in the requested range
-            if export_line < cursor_range.start.line || export_line > cursor_range.end.line {
-                continue;
-            }
-
-            // Determine the export prefix to remove by inspecting the line content
-            let line_content = file_lines.get(export_line as usize).copied().unwrap_or("");
-            let trimmed = line_content.trim_start();
-            let indent_len = line_content.len() - trimmed.len();
-
-            let prefix_to_remove = if trimmed.starts_with("export default ") {
-                Some("export default ")
-            } else if trimmed.starts_with("export ") {
-                // Handles: export const, export function, export class, export type,
-                // export interface, export enum, export abstract, export async,
-                // export let, export var, etc.
-                Some("export ")
-            } else {
-                None
-            };
-
-            let Some(prefix) = prefix_to_remove else {
-                continue;
-            };
-
-            let title = format!("Remove unused export `{}`", export.export_name);
-            let mut changes = HashMap::new();
-
-            // Create a text edit that removes the export keyword prefix
-            let edit = TextEdit {
-                range: Range {
-                    start: Position {
-                        line: export_line,
-                        character: indent_len as u32,
-                    },
-                    end: Position {
-                        line: export_line,
-                        character: (indent_len + prefix.len()) as u32,
-                    },
-                },
-                new_text: String::new(),
-            };
-
-            changes.insert(uri.clone(), vec![edit]);
-
-            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title,
-                kind: Some(CodeActionKind::QUICKFIX),
-                edit: Some(WorkspaceEdit {
-                    changes: Some(changes),
-                    ..Default::default()
-                }),
-                diagnostics: Some(vec![Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line: export_line,
-                            character: export.col,
-                        },
-                        end: Position {
-                            line: export_line,
-                            character: export.col + export.export_name.len() as u32,
-                        },
-                    },
-                    severity: Some(DiagnosticSeverity::HINT),
-                    source: Some("fallow".to_string()),
-                    message: format!("{msg_prefix} '{}' is unused", export.export_name),
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }));
-        }
-    }
-
-    actions
-}
-
-/// Build quick-fix code actions for unused files (delete the file).
-pub fn build_delete_file_actions(
-    results: &AnalysisResults,
-    file_path: &Path,
-    uri: &Url,
-    cursor_range: &Range,
-) -> Vec<CodeActionOrCommand> {
-    let mut actions = Vec::new();
-
-    for file in &results.unused_files {
-        if file.path != file_path {
-            continue;
-        }
-
-        // The diagnostic is at line 0, col 0 — check if the request range overlaps
-        if cursor_range.start.line > 0 {
-            continue;
-        }
-
-        let title = "Delete this unused file".to_string();
-
-        let delete_file_op = DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
-            uri: uri.clone(),
-            options: Some(DeleteFileOptions {
-                recursive: Some(false),
-                ignore_if_not_exists: Some(true),
-                annotation_id: None,
-            }),
-        }));
-
-        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title,
-            kind: Some(CodeActionKind::QUICKFIX),
-            edit: Some(WorkspaceEdit {
-                document_changes: Some(DocumentChanges::Operations(vec![delete_file_op])),
-                ..Default::default()
-            }),
-            diagnostics: Some(vec![Diagnostic {
-                range: ZERO_RANGE,
-                severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String("unused-file".to_string())),
-                message: "File is not reachable from any entry point".to_string(),
-                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        }));
-    }
-
-    actions
-}
 
 /// Build "Extract duplicate into function" code actions for clone groups overlapping the cursor.
 #[expect(clippy::disallowed_types)]
@@ -207,45 +51,12 @@ pub fn build_extract_duplicate_actions(
         let instance_count_in_file = instances_in_file.len();
         let has_cross_file_instances = group.instances.iter().any(|inst| inst.file != file_path);
 
-        let title = if instance_count_in_file > 1 && has_cross_file_instances {
-            format!(
-                "Extract duplicate into function ({instance_count_in_file} instances in this file, others remain)"
-            )
-        } else if instance_count_in_file > 1 {
-            format!(
-                "Extract duplicate into function ({instance_count_in_file} instances in this file)"
-            )
-        } else if has_cross_file_instances {
-            "Extract duplicate into function (other files unchanged)".to_string()
-        } else {
-            "Extract duplicate into function".to_string()
-        };
+        let title = build_title(instance_count_in_file, has_cross_file_instances);
 
         // Build the function body from the fragment of the first instance.
         // Strip common leading whitespace (dedent), then re-indent with 2 spaces.
         let fragment = &instances_in_file[0].fragment;
-        let common_indent = fragment
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| line.len() - line.trim_start().len())
-            .min()
-            .unwrap_or(0);
-        let indented_fragment: String = fragment
-            .lines()
-            .map(|line| {
-                let stripped = if line.len() > common_indent {
-                    &line[common_indent..]
-                } else {
-                    line.trim_start()
-                };
-                if stripped.is_empty() {
-                    String::new()
-                } else {
-                    format!("  {stripped}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let indented_fragment = dedent_fragment(fragment);
 
         let function_text = format!(
             "function {func_name}() {{\n\
@@ -258,18 +69,7 @@ pub fn build_extract_duplicate_actions(
 
         // Find a suitable insert position at module scope (no indentation) above
         // the first instance. Walk backwards to avoid inserting inside a function body.
-        let insert_line = {
-            let mut line = first_start_0based;
-            while line > 0 {
-                line -= 1;
-                let content = file_lines.get(line as usize).copied().unwrap_or("");
-                // An empty line or a line starting at column 0 (module scope) is a good insert point
-                if content.is_empty() || (!content.starts_with(' ') && !content.starts_with('\t')) {
-                    break;
-                }
-            }
-            line
-        };
+        let insert_line = find_insert_line(first_start_0based, file_lines);
         let can_insert_separately = insert_line < first_start_0based;
 
         let mut edits: Vec<TextEdit> = Vec::new();
@@ -333,77 +133,13 @@ pub fn build_extract_duplicate_actions(
         }
 
         // Sort edits in reverse document order for LSP spec compliance
-        edits.sort_by(|a, b| {
-            b.range
-                .start
-                .line
-                .cmp(&a.range.start.line)
-                .then(b.range.start.character.cmp(&a.range.start.character))
-        });
+        sort_edits_reverse(&mut edits);
 
         let mut changes = HashMap::new();
         changes.insert(uri.clone(), edits);
 
         // Build the diagnostic that this action is associated with
-        let diag_instance = instances_in_file[0];
-        let diag_start_line = (diag_instance.start_line as u32).saturating_sub(1);
-        let diag_end_line = (diag_instance.end_line as u32).saturating_sub(1);
-
-        // Build related information for other instances
-        let related_info: Vec<DiagnosticRelatedInformation> = group
-            .instances
-            .iter()
-            .filter(|inst| {
-                // Exclude the current diagnostic instance
-                !(inst.file == file_path && inst.start_line == diag_instance.start_line)
-            })
-            .filter_map(|inst| {
-                let inst_uri = Url::from_file_path(&inst.file).ok()?;
-                Some(DiagnosticRelatedInformation {
-                    location: Location {
-                        uri: inst_uri,
-                        range: Range {
-                            start: Position {
-                                line: (inst.start_line as u32).saturating_sub(1),
-                                character: inst.start_col as u32,
-                            },
-                            end: Position {
-                                line: (inst.end_line as u32).saturating_sub(1),
-                                character: inst.end_col as u32,
-                            },
-                        },
-                    },
-                    message: "Also duplicated here".to_string(),
-                })
-            })
-            .collect();
-
-        let diagnostic = Diagnostic {
-            range: Range {
-                start: Position {
-                    line: diag_start_line,
-                    character: diag_instance.start_col as u32,
-                },
-                end: Position {
-                    line: diag_end_line,
-                    character: diag_instance.end_col as u32,
-                },
-            },
-            severity: Some(DiagnosticSeverity::HINT),
-            source: Some("fallow".to_string()),
-            code: Some(NumberOrString::String("code-duplication".to_string())),
-            message: format!(
-                "Duplicated code block ({} lines, {} instances)",
-                group.line_count,
-                group.instances.len()
-            ),
-            related_information: if related_info.is_empty() {
-                None
-            } else {
-                Some(related_info)
-            },
-            ..Default::default()
-        };
+        let diagnostic = build_diagnostic(file_path, group, instances_in_file[0]);
 
         actions.push(CodeActionOrCommand::CodeAction(CodeAction {
             title,
@@ -418,6 +154,138 @@ pub fn build_extract_duplicate_actions(
     }
 
     actions
+}
+
+/// Build the title for the extract duplicate action based on instance counts.
+fn build_title(instance_count_in_file: usize, has_cross_file_instances: bool) -> String {
+    if instance_count_in_file > 1 && has_cross_file_instances {
+        format!(
+            "Extract duplicate into function ({instance_count_in_file} instances in this file, others remain)"
+        )
+    } else if instance_count_in_file > 1 {
+        format!("Extract duplicate into function ({instance_count_in_file} instances in this file)")
+    } else if has_cross_file_instances {
+        "Extract duplicate into function (other files unchanged)".to_string()
+    } else {
+        "Extract duplicate into function".to_string()
+    }
+}
+
+/// Strip common leading whitespace from a fragment and re-indent with 2 spaces.
+fn dedent_fragment(fragment: &str) -> String {
+    let common_indent = fragment
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    fragment
+        .lines()
+        .map(|line| {
+            let stripped = if line.len() > common_indent {
+                &line[common_indent..]
+            } else {
+                line.trim_start()
+            };
+            if stripped.is_empty() {
+                String::new()
+            } else {
+                format!("  {stripped}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Find a suitable insert position at module scope above the first instance.
+fn find_insert_line(first_start_0based: u32, file_lines: &[&str]) -> u32 {
+    let mut line = first_start_0based;
+    while line > 0 {
+        line -= 1;
+        let content = file_lines.get(line as usize).copied().unwrap_or("");
+        // An empty line or a line starting at column 0 (module scope) is a good insert point
+        if content.is_empty() || (!content.starts_with(' ') && !content.starts_with('\t')) {
+            break;
+        }
+    }
+    line
+}
+
+/// Sort edits in reverse document order for LSP spec compliance.
+fn sort_edits_reverse(edits: &mut [TextEdit]) {
+    edits.sort_by(|a, b| {
+        b.range
+            .start
+            .line
+            .cmp(&a.range.start.line)
+            .then(b.range.start.character.cmp(&a.range.start.character))
+    });
+}
+
+/// Build the diagnostic associated with a clone group instance.
+fn build_diagnostic(
+    file_path: &Path,
+    group: &CloneGroup,
+    diag_instance: &fallow_core::duplicates::CloneInstance,
+) -> Diagnostic {
+    let diag_start_line = (diag_instance.start_line as u32).saturating_sub(1);
+    let diag_end_line = (diag_instance.end_line as u32).saturating_sub(1);
+
+    // Build related information for other instances
+    let related_info: Vec<DiagnosticRelatedInformation> = group
+        .instances
+        .iter()
+        .filter(|inst| {
+            // Exclude the current diagnostic instance
+            !(inst.file == file_path && inst.start_line == diag_instance.start_line)
+        })
+        .filter_map(|inst| {
+            let inst_uri = Url::from_file_path(&inst.file).ok()?;
+            Some(DiagnosticRelatedInformation {
+                location: Location {
+                    uri: inst_uri,
+                    range: Range {
+                        start: Position {
+                            line: (inst.start_line as u32).saturating_sub(1),
+                            character: inst.start_col as u32,
+                        },
+                        end: Position {
+                            line: (inst.end_line as u32).saturating_sub(1),
+                            character: inst.end_col as u32,
+                        },
+                    },
+                },
+                message: "Also duplicated here".to_string(),
+            })
+        })
+        .collect();
+
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: diag_start_line,
+                character: diag_instance.start_col as u32,
+            },
+            end: Position {
+                line: diag_end_line,
+                character: diag_instance.end_col as u32,
+            },
+        },
+        severity: Some(DiagnosticSeverity::HINT),
+        source: Some("fallow".to_string()),
+        code: Some(NumberOrString::String("code-duplication".to_string())),
+        message: format!(
+            "Duplicated code block ({} lines, {} instances)",
+            group.line_count,
+            group.instances.len()
+        ),
+        related_information: if related_info.is_empty() {
+            None
+        } else {
+            Some(related_info)
+        },
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]

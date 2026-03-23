@@ -221,16 +221,10 @@ fn split_shell_operators(script: &str) -> Vec<&str> {
     segments
 }
 
-/// Parse a single command segment (after splitting on shell operators).
-#[expect(clippy::cognitive_complexity)] // Shell command parsing naturally has many branches
-fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
-    if tokens.is_empty() {
-        return None;
-    }
-
-    let mut idx = 0;
-
+/// Skip env var assignments (`KEY=value`) and env wrapper commands (`cross-env`, `dotenv`, `env`)
+/// at the start of a token list. Returns the index of the first real command token, or `None`
+/// if all tokens were consumed.
+fn skip_initial_wrappers(tokens: &[&str], mut idx: usize) -> Option<usize> {
     // Skip env var assignments (KEY=value pairs)
     while idx < tokens.len() && is_env_assignment(tokens[idx]) {
         idx += 1;
@@ -255,7 +249,13 @@ fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
         return None;
     }
 
-    // Handle package manager prefixes
+    Some(idx)
+}
+
+/// Advance past package manager prefixes (`npx`, `pnpx`, `bunx`, `yarn exec`, `pnpm dlx`, etc.).
+/// Returns the index of the actual binary token, or `None` if the command delegates to a named
+/// script (e.g., `npm run build`, `yarn build`).
+fn advance_past_package_manager(tokens: &[&str], mut idx: usize) -> Option<usize> {
     let token = tokens[idx];
     if matches!(token, "npx" | "pnpx" | "bunx") {
         idx += 1;
@@ -288,56 +288,33 @@ fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
         return None;
     }
 
-    let binary = tokens[idx].to_string();
-    idx += 1;
+    Some(idx)
+}
 
-    // If the binary is a node runner, extract file paths from arguments
-    if NODE_RUNNERS.contains(&binary.as_str()) {
-        let mut file_args = Vec::new();
-        let mut config_args = Vec::new();
-
-        while idx < tokens.len() {
-            let token = tokens[idx];
-
-            // Skip flags that consume the next argument
-            if matches!(
-                token,
-                "-e" | "--eval" | "-p" | "--print" | "-r" | "--require"
-            ) {
-                idx += 2;
-                continue;
-            }
-
-            if token.starts_with('-') {
-                if let Some(config) = extract_config_arg(token, tokens.get(idx + 1).copied()) {
-                    config_args.push(config);
-                    if !token.contains('=') {
-                        idx += 1;
-                    }
-                }
-                idx += 1;
-                continue;
-            }
-
-            if looks_like_file_path(token) {
-                file_args.push(token.to_string());
-            }
-            idx += 1;
-        }
-
-        return Some(ScriptCommand {
-            binary,
-            config_args,
-            file_args,
-        });
-    }
-
-    // For other binaries, extract config args and file args
-    let mut config_args = Vec::new();
+/// Extract file path arguments and `--config`/`-c` arguments from the remaining tokens.
+/// When `is_node_runner` is true, flags like `-e`/`--eval`/`-r`/`--require` that consume
+/// the next argument are skipped.
+fn extract_args_for_binary(
+    tokens: &[&str],
+    mut idx: usize,
+    is_node_runner: bool,
+) -> (Vec<String>, Vec<String>) {
     let mut file_args = Vec::new();
+    let mut config_args = Vec::new();
 
     while idx < tokens.len() {
         let token = tokens[idx];
+
+        // Node runners have flags that consume the next argument
+        if is_node_runner
+            && matches!(
+                token,
+                "-e" | "--eval" | "-p" | "--print" | "-r" | "--require"
+            )
+        {
+            idx += 2;
+            continue;
+        }
 
         if let Some(config) = extract_config_arg(token, tokens.get(idx + 1).copied()) {
             config_args.push(config);
@@ -359,6 +336,23 @@ fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
         }
         idx += 1;
     }
+
+    (file_args, config_args)
+}
+
+/// Parse a single command segment (after splitting on shell operators).
+fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let idx = skip_initial_wrappers(&tokens, 0)?;
+    let idx = advance_past_package_manager(&tokens, idx)?;
+
+    let binary = tokens[idx].to_string();
+    let is_node_runner = NODE_RUNNERS.contains(&binary.as_str());
+    let (file_args, config_args) = extract_args_for_binary(&tokens, idx + 1, is_node_runner);
 
     Some(ScriptCommand {
         binary,

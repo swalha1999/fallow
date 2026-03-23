@@ -1,0 +1,264 @@
+//! Import specifier resolution using `oxc_resolver`.
+//!
+//! Resolves all import specifiers across all modules in parallel, mapping each to
+//! an internal file, npm package, or unresolvable target. Includes support for
+//! tsconfig path aliases, pnpm virtual store paths, React Native platform extensions,
+//! and dynamic import pattern matching via glob.
+
+mod cache;
+pub(crate) mod fallbacks;
+mod path_info;
+mod react_native;
+mod specifier;
+mod types;
+
+pub use path_info::{extract_package_name, is_path_alias};
+pub use types::{ResolveResult, ResolvedImport, ResolvedModule, ResolvedReExport};
+
+use std::path::{Path, PathBuf};
+
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+
+use fallow_types::discover::{DiscoveredFile, FileId};
+use fallow_types::extract::{ImportInfo, ModuleInfo};
+
+use cache::BareSpecifierCache;
+use fallbacks::make_glob_from_pattern;
+use specifier::{create_resolver, resolve_specifier};
+use types::ResolveContext;
+
+/// Resolve all imports across all modules in parallel.
+pub fn resolve_all_imports(
+    modules: &[ModuleInfo],
+    files: &[DiscoveredFile],
+    workspaces: &[fallow_config::WorkspaceInfo],
+    active_plugins: &[String],
+    path_aliases: &[(String, String)],
+    root: &Path,
+) -> Vec<ResolvedModule> {
+    // Build workspace name → root index for pnpm store fallback.
+    // Canonicalize roots to match path_to_id (which uses canonical paths).
+    // Without this, macOS /var → /private/var and similar platform symlinks
+    // cause workspace roots to mismatch canonical file paths.
+    let canonical_ws_roots: Vec<PathBuf> = workspaces
+        .par_iter()
+        .map(|ws| ws.root.canonicalize().unwrap_or_else(|_| ws.root.clone()))
+        .collect();
+    let workspace_roots: FxHashMap<&str, &Path> = workspaces
+        .iter()
+        .zip(canonical_ws_roots.iter())
+        .map(|(ws, canonical)| (ws.name.as_str(), canonical.as_path()))
+        .collect();
+
+    // Pre-compute canonical paths ONCE for all files in parallel (avoiding repeated syscalls).
+    // Each canonicalize() is a syscall — parallelizing over rayon reduces wall time.
+    let canonical_paths: Vec<PathBuf> = files
+        .par_iter()
+        .map(|f| f.path.canonicalize().unwrap_or_else(|_| f.path.clone()))
+        .collect();
+
+    // Build path -> FileId index using pre-computed canonical paths
+    let path_to_id: FxHashMap<&Path, FileId> = canonical_paths
+        .iter()
+        .enumerate()
+        .map(|(idx, canonical)| (canonical.as_path(), files[idx].id))
+        .collect();
+
+    // Also index by non-canonical path for fallback lookups
+    let raw_path_to_id: FxHashMap<&Path, FileId> =
+        files.iter().map(|f| (f.path.as_path(), f.id)).collect();
+
+    // FileIds are sequential 0..n, so direct array indexing is faster than FxHashMap.
+    let file_paths: Vec<&Path> = files.iter().map(|f| f.path.as_path()).collect();
+
+    // Create resolver ONCE and share across threads (oxc_resolver::Resolver is Send + Sync)
+    let resolver = create_resolver(active_plugins);
+
+    // Cache for bare specifier resolutions (e.g., `react`, `lodash/merge`)
+    let bare_cache = BareSpecifierCache::new();
+
+    // Shared resolution context — avoids passing 7 arguments to every resolve_specifier call
+    let ctx = ResolveContext {
+        resolver: &resolver,
+        path_to_id: &path_to_id,
+        raw_path_to_id: &raw_path_to_id,
+        bare_cache: &bare_cache,
+        workspace_roots: &workspace_roots,
+        path_aliases,
+        root,
+    };
+
+    // Resolve in parallel — shared resolver instance
+    modules
+        .par_iter()
+        .filter_map(|module| {
+            let Some(file_path) = file_paths.get(module.file_id.0 as usize) else {
+                tracing::warn!(
+                    file_id = module.file_id.0,
+                    "Skipping module with unknown file_id during resolution"
+                );
+                return None;
+            };
+
+            let resolved_imports: Vec<ResolvedImport> = module
+                .imports
+                .iter()
+                .map(|imp| ResolvedImport {
+                    info: imp.clone(),
+                    target: resolve_specifier(&ctx, file_path, &imp.source),
+                })
+                .collect();
+
+            let resolved_dynamic_imports: Vec<ResolvedImport> = module
+                .dynamic_imports
+                .iter()
+                .flat_map(|imp| {
+                    let target = resolve_specifier(&ctx, file_path, &imp.source);
+                    if !imp.destructured_names.is_empty() {
+                        // `const { a, b } = await import('./x')` → Named imports
+                        imp.destructured_names
+                            .iter()
+                            .map(|name| ResolvedImport {
+                                info: ImportInfo {
+                                    source: imp.source.clone(),
+                                    imported_name: fallow_types::extract::ImportedName::Named(
+                                        name.clone(),
+                                    ),
+                                    local_name: name.clone(),
+                                    is_type_only: false,
+                                    span: imp.span,
+                                },
+                                target: target.clone(),
+                            })
+                            .collect()
+                    } else if imp.local_name.is_some() {
+                        // `const mod = await import('./x')` → Namespace with local_name
+                        vec![ResolvedImport {
+                            info: ImportInfo {
+                                source: imp.source.clone(),
+                                imported_name: fallow_types::extract::ImportedName::Namespace,
+                                local_name: imp.local_name.clone().unwrap_or_default(),
+                                is_type_only: false,
+                                span: imp.span,
+                            },
+                            target,
+                        }]
+                    } else {
+                        // Side-effect only: `await import('./x')` with no assignment
+                        vec![ResolvedImport {
+                            info: ImportInfo {
+                                source: imp.source.clone(),
+                                imported_name: fallow_types::extract::ImportedName::SideEffect,
+                                local_name: String::new(),
+                                is_type_only: false,
+                                span: imp.span,
+                            },
+                            target,
+                        }]
+                    }
+                })
+                .collect();
+
+            let re_exports: Vec<ResolvedReExport> = module
+                .re_exports
+                .iter()
+                .map(|re| ResolvedReExport {
+                    info: re.clone(),
+                    target: resolve_specifier(&ctx, file_path, &re.source),
+                })
+                .collect();
+
+            // Also resolve require() calls.
+            // Destructured requires → Named imports; others → Namespace (conservative).
+            let require_imports: Vec<ResolvedImport> = module
+                .require_calls
+                .iter()
+                .flat_map(|req| {
+                    let target = resolve_specifier(&ctx, file_path, &req.source);
+                    if req.destructured_names.is_empty() {
+                        vec![ResolvedImport {
+                            info: ImportInfo {
+                                source: req.source.clone(),
+                                imported_name: fallow_types::extract::ImportedName::Namespace,
+                                local_name: req.local_name.clone().unwrap_or_default(),
+                                is_type_only: false,
+                                span: req.span,
+                            },
+                            target,
+                        }]
+                    } else {
+                        req.destructured_names
+                            .iter()
+                            .map(|name| ResolvedImport {
+                                info: ImportInfo {
+                                    source: req.source.clone(),
+                                    imported_name: fallow_types::extract::ImportedName::Named(
+                                        name.clone(),
+                                    ),
+                                    local_name: name.clone(),
+                                    is_type_only: false,
+                                    span: req.span,
+                                },
+                                target: target.clone(),
+                            })
+                            .collect()
+                    }
+                })
+                .collect();
+
+            let mut all_imports = resolved_imports;
+            all_imports.extend(require_imports);
+
+            // Resolve dynamic import patterns via glob matching against discovered files.
+            // Use pre-computed canonical paths (no syscalls in inner loop).
+            let from_dir = canonical_paths
+                .get(module.file_id.0 as usize)
+                .and_then(|p| p.parent())
+                .unwrap_or(file_path);
+            let resolved_dynamic_patterns: Vec<(
+                fallow_types::extract::DynamicImportPattern,
+                Vec<FileId>,
+            )> = module
+                .dynamic_import_patterns
+                .iter()
+                .filter_map(|pattern| {
+                    let glob_str = make_glob_from_pattern(pattern);
+                    let matcher = globset::Glob::new(&glob_str)
+                        .ok()
+                        .map(|g| g.compile_matcher())?;
+                    let matched: Vec<FileId> = canonical_paths
+                        .iter()
+                        .enumerate()
+                        .filter(|(_idx, canonical)| {
+                            canonical.strip_prefix(from_dir).is_ok_and(|relative| {
+                                let rel_str = format!("./{}", relative.to_string_lossy());
+                                matcher.is_match(&rel_str)
+                            })
+                        })
+                        .map(|(idx, _)| files[idx].id)
+                        .collect();
+                    if matched.is_empty() {
+                        None
+                    } else {
+                        Some((pattern.clone(), matched))
+                    }
+                })
+                .collect();
+
+            Some(ResolvedModule {
+                file_id: module.file_id,
+                path: file_path.to_path_buf(),
+                exports: module.exports.clone(),
+                re_exports,
+                resolved_imports: all_imports,
+                resolved_dynamic_imports,
+                resolved_dynamic_patterns,
+                member_accesses: module.member_accesses.clone(),
+                whole_object_uses: module.whole_object_uses.clone(),
+                has_cjs_exports: module.has_cjs_exports,
+                unused_import_bindings: module.unused_import_bindings.clone(),
+            })
+        })
+        .collect()
+}

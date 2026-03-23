@@ -1,0 +1,295 @@
+use super::common::{create_config, fixture_path};
+
+#[test]
+fn workspace_patterns_from_package_json() {
+    let pkg: fallow_config::PackageJson =
+        serde_json::from_str(r#"{"workspaces": ["packages/*", "apps/*"]}"#).unwrap();
+
+    let patterns = pkg.workspace_patterns();
+    assert_eq!(patterns, vec!["packages/*", "apps/*"]);
+}
+
+#[test]
+fn workspace_patterns_yarn_format() {
+    let pkg: fallow_config::PackageJson =
+        serde_json::from_str(r#"{"workspaces": {"packages": ["packages/*"]}}"#).unwrap();
+
+    let patterns = pkg.workspace_patterns();
+    assert_eq!(patterns, vec!["packages/*"]);
+}
+
+// ── Workspace integration ──────────────────────────────────────
+
+#[test]
+fn workspace_project_discovers_workspace_packages() {
+    let root = fixture_path("workspace-project");
+
+    // Set up node_modules symlinks for cross-workspace resolution (like npm/pnpm install would)
+    let nm = root.join("node_modules");
+    let _ = std::fs::create_dir_all(nm.join("@workspace"));
+    #[cfg(unix)]
+    {
+        let _ = std::os::unix::fs::symlink(root.join("packages/shared"), nm.join("shared"));
+        let _ =
+            std::os::unix::fs::symlink(root.join("packages/utils"), nm.join("@workspace/utils"));
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::os::windows::fs::symlink_dir(root.join("packages/shared"), nm.join("shared"));
+        let _ = std::os::windows::fs::symlink_dir(
+            root.join("packages/utils"),
+            nm.join("@workspace/utils"),
+        );
+    }
+
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    // Workspace discovery should find files across workspace packages
+    // orphan.ts should always be detected as unused since nothing imports it
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        unused_file_names.contains(&"orphan.ts".to_string()),
+        "orphan.ts should be detected as unused file, found: {unused_file_names:?}"
+    );
+
+    // Cross-workspace resolution via node_modules symlinks:
+    // app imports `@workspace/utils/src/deep` which resolves through the symlink,
+    // making deep.ts reachable. If symlinks are broken, deep.ts would be unreachable.
+    assert!(
+        !unused_file_names.contains(&"deep.ts".to_string()),
+        "deep.ts should NOT be unused (reachable via cross-workspace import through symlink), \
+         but found in unused files: {unused_file_names:?}"
+    );
+
+    // `unusedDeep` should be detected as unused export (deep.ts is reachable but
+    // only `deepHelper` is imported, not `unusedDeep`)
+    let unused_export_names: Vec<String> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.clone())
+        .collect();
+    assert!(
+        unused_export_names.contains(&"unusedDeep".to_string()),
+        "unusedDeep should be detected as unused export, found: {unused_export_names:?}"
+    );
+
+    // No unresolved imports — all cross-workspace imports should resolve
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "should have no unresolved imports, found: {:?}",
+        results
+            .unresolved_imports
+            .iter()
+            .map(|i| &i.specifier)
+            .collect::<Vec<_>>()
+    );
+
+    // The analysis should have found issues across all workspace packages
+    assert!(
+        results.has_issues(),
+        "workspace project should have issues detected"
+    );
+}
+
+#[test]
+fn project_state_stable_file_ids_by_path() {
+    // FileIds should be deterministic: sorted by path, not size.
+    // Running discovery twice on the same project must produce identical IDs.
+    let root = fixture_path("workspace-project");
+    let config = create_config(root);
+
+    let files_a = fallow_core::discover::discover_files(&config);
+    let files_b = fallow_core::discover::discover_files(&config);
+
+    assert_eq!(files_a.len(), files_b.len());
+    for (a, b) in files_a.iter().zip(files_b.iter()) {
+        assert_eq!(a.id, b.id, "FileId mismatch for {:?}", a.path);
+        assert_eq!(a.path, b.path);
+    }
+
+    // Files should be sorted by path (not by size)
+    for window in files_a.windows(2) {
+        assert!(
+            window[0].path <= window[1].path,
+            "Files not sorted by path: {:?} > {:?}",
+            window[0].path,
+            window[1].path
+        );
+    }
+}
+
+#[test]
+fn project_state_workspace_queries() {
+    use fallow_config::discover_workspaces;
+
+    let root = fixture_path("workspace-project");
+    let config = create_config(root.clone());
+    let files = fallow_core::discover::discover_files(&config);
+    let workspaces = discover_workspaces(&root);
+    let project = fallow_core::project::ProjectState::new(files, workspaces);
+
+    // Should find all three workspace packages
+    assert!(project.workspace_by_name("app").is_some());
+    assert!(project.workspace_by_name("shared").is_some());
+    assert!(project.workspace_by_name("@workspace/utils").is_some());
+    assert!(project.workspace_by_name("nonexistent").is_none());
+
+    // Files should be assignable to workspaces
+    let app_ws = project.workspace_by_name("app").unwrap();
+    let app_files = project.files_in_workspace(app_ws);
+    assert!(
+        !app_files.is_empty(),
+        "app workspace should have at least one file"
+    );
+
+    // All app files should be under the app workspace root
+    for fid in &app_files {
+        if let Some(file) = project.file_by_id(*fid) {
+            assert!(
+                file.path.starts_with(&app_ws.root),
+                "File {:?} should be under app workspace root {:?}",
+                file.path,
+                app_ws.root
+            );
+        }
+    }
+}
+
+// ── Workspace exports map resolution ───────────────────────────
+
+#[test]
+fn workspace_exports_map_resolves_subpath_imports() {
+    let root = fixture_path("workspace-exports-map");
+
+    // Set up node_modules symlinks for cross-workspace resolution
+    let nm = root.join("node_modules");
+    let _ = std::fs::create_dir_all(nm.join("@workspace"));
+    #[cfg(unix)]
+    {
+        let _ = std::os::unix::fs::symlink(root.join("packages/ui"), nm.join("@workspace/ui"));
+    }
+
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    // orphan.ts is not exported via exports map and not imported — should be unused
+    assert!(
+        unused_file_names.contains(&"orphan.ts".to_string()),
+        "orphan.ts should be detected as unused file, found: {unused_file_names:?}"
+    );
+
+    // utils.ts is imported via `@workspace/ui/utils` through exports map → should NOT be unused
+    assert!(
+        !unused_file_names.contains(&"utils.ts".to_string()),
+        "utils.ts should be reachable via exports map subpath import, unused: {unused_file_names:?}"
+    );
+
+    // helpers.ts (source) should be reachable via exports map pointing to dist/helpers.js
+    // fallow should map dist/helpers.js back to src/helpers.ts
+    assert!(
+        !unused_file_names.contains(&"helpers.ts".to_string()),
+        "helpers.ts should be reachable via dist→src fallback from exports map, unused: {unused_file_names:?}"
+    );
+
+    // internal.ts is imported by utils.ts, so it should be reachable
+    assert!(
+        !unused_file_names.contains(&"internal.ts".to_string()),
+        "internal.ts should be reachable via import from utils.ts, unused: {unused_file_names:?}"
+    );
+
+    // Unused exports on non-entry-point files should still be detected.
+    // internal.ts is NOT an entry point (not in exports map) but is imported
+    // by utils.ts — so its unused exports should be flagged.
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    assert!(
+        unused_export_names.contains(&"unusedInternal"),
+        "unusedInternal should be unused (internal.ts is not an entry point), found: {unused_export_names:?}"
+    );
+
+    // Used exports should NOT be flagged
+    assert!(
+        !unused_export_names.contains(&"internalHelper"),
+        "internalHelper should be used (imported by utils.ts)"
+    );
+
+    // No unresolved imports — exports map subpaths should all resolve
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "should have no unresolved imports, found: {:?}",
+        results
+            .unresolved_imports
+            .iter()
+            .map(|i| &i.specifier)
+            .collect::<Vec<_>>()
+    );
+}
+
+// ── TypeScript project references ──────────────────────────────
+
+#[test]
+fn tsconfig_references_discovers_workspaces() {
+    use fallow_config::discover_workspaces;
+
+    let root = fixture_path("tsconfig-references");
+    let workspaces = discover_workspaces(&root);
+
+    // Should discover both referenced projects from tsconfig.json references
+    assert!(
+        workspaces.len() >= 2,
+        "Expected at least 2 workspaces from tsconfig references, got: {workspaces:?}"
+    );
+    assert!(
+        workspaces.iter().any(|ws| ws.name == "@project/core"),
+        "Should discover @project/core from package.json name: {workspaces:?}"
+    );
+    assert!(
+        workspaces.iter().any(|ws| ws.name == "ui"),
+        "Should discover ui from directory name (no package.json): {workspaces:?}"
+    );
+}
+
+#[test]
+fn tsconfig_references_analysis_detects_unused() {
+    let root = fixture_path("tsconfig-references");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    // unused.ts in core and orphan.ts in ui should be detected as unused
+    assert!(
+        unused_file_names.contains(&"unused.ts".to_string()),
+        "unused.ts should be detected as unused file: {unused_file_names:?}"
+    );
+    assert!(
+        unused_file_names.contains(&"orphan.ts".to_string()),
+        "orphan.ts should be detected as unused file: {unused_file_names:?}"
+    );
+
+    // index.ts files should NOT be unused (core/index.ts is imported by ui/index.ts)
+    assert!(
+        !unused_file_names.contains(&"index.ts".to_string()),
+        "index.ts should not be unused: {unused_file_names:?}"
+    );
+}

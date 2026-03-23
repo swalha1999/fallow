@@ -167,7 +167,11 @@ enum Command {
     },
 
     /// Watch for changes and re-run analysis
-    Watch,
+    Watch {
+        /// Don't clear the screen between re-analyses
+        #[arg(long)]
+        no_clear: bool,
+    },
 
     /// Auto-fix issues (remove unused exports, dependencies, enum members)
     Fix {
@@ -409,13 +413,19 @@ fn main() -> ExitCode {
 
     let output: fallow_config::OutputFormat = format.into();
 
-    // Set up tracing
+    // Set up tracing — watch mode uses WARN level to suppress per-run INFO noise
+    let is_watch = matches!(cli.command, Some(Command::Watch { .. }));
     if !quiet {
+        let default_level = if is_watch {
+            tracing::Level::WARN
+        } else {
+            tracing::Level::INFO
+        };
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive(tracing::Level::INFO.into()),
+                    .add_directive(default_level.into()),
             )
             .with_target(false)
             .with_timer(tracing_subscriber::fmt::time::uptime())
@@ -558,15 +568,16 @@ fn main() -> ExitCode {
                 trace_opts: &trace_opts,
             })
         }
-        Command::Watch => watch::run_watch(
-            &root,
-            &cli.config,
+        Command::Watch { no_clear } => watch::run_watch(&watch::WatchOptions {
+            root: &root,
+            config_path: &cli.config,
             output,
-            cli.no_cache,
+            no_cache: cli.no_cache,
             threads,
             quiet,
-            cli.production,
-        ),
+            production: cli.production,
+            clear_screen: !no_clear,
+        }),
         Command::Fix { dry_run, yes } => fix::run_fix(&fix::FixOptions {
             root: &root,
             config_path: &cli.config,

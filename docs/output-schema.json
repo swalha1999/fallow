@@ -3,7 +3,7 @@
   "title": "Fallow JSON Output Schema",
   "description": "Schema for the JSON output of `fallow check --format json`. The `fallow dupes` command has a separate output structure (clone_groups, clone_families, stats) sharing only the metadata fields (schema_version, version, elapsed_ms).",
   "type": "object",
-  "required": ["schema_version", "version", "elapsed_ms", "total_issues", "unused_files", "unused_exports", "unused_types", "unused_dependencies", "unused_dev_dependencies", "unused_enum_members", "unused_class_members", "unresolved_imports", "unlisted_dependencies", "duplicate_exports", "type_only_dependencies", "circular_dependencies"],
+  "required": ["schema_version", "version", "elapsed_ms", "total_issues", "unused_files", "unused_exports", "unused_types", "unused_dependencies", "unused_dev_dependencies", "unused_optional_dependencies", "unused_enum_members", "unused_class_members", "unresolved_imports", "unlisted_dependencies", "duplicate_exports", "type_only_dependencies", "circular_dependencies"],
   "properties": {
     "schema_version": {
       "type": "integer",
@@ -40,6 +40,10 @@
       "items": { "$ref": "#/definitions/UnusedDependency" }
     },
     "unused_dev_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/UnusedDependency" }
+    },
+    "unused_optional_dependencies": {
       "type": "array",
       "items": { "$ref": "#/definitions/UnusedDependency" }
     },
@@ -119,7 +123,7 @@
     },
     "UnusedDependency": {
       "type": "object",
-      "required": ["package_name", "location", "path"],
+      "required": ["package_name", "location", "path", "line"],
       "properties": {
         "package_name": {
           "type": "string",
@@ -133,6 +137,10 @@
         "path": {
           "type": "string",
           "description": "Path to the package.json where this dependency is listed."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number of the dependency entry in package.json."
         }
       }
     },
@@ -198,8 +206,26 @@
         },
         "imported_from": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "File paths that import this unlisted dependency."
+          "items": { "$ref": "#/definitions/ImportSite" },
+          "description": "Import sites where this unlisted dependency is used."
+        }
+      }
+    },
+    "ImportSite": {
+      "type": "object",
+      "required": ["path", "line", "col"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File containing the import."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset."
         }
       }
     },
@@ -213,14 +239,32 @@
         },
         "locations": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "File paths where this export name is defined."
+          "items": { "$ref": "#/definitions/DuplicateLocation" },
+          "description": "Locations where this export name is defined."
+        }
+      }
+    },
+    "DuplicateLocation": {
+      "type": "object",
+      "required": ["path", "line", "col"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File containing the duplicate export."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset."
         }
       }
     },
     "TypeOnlyDependency": {
       "type": "object",
-      "required": ["package_name", "path"],
+      "required": ["package_name", "path", "line"],
       "properties": {
         "package_name": {
           "type": "string",
@@ -229,12 +273,16 @@
         "path": {
           "type": "string",
           "description": "Path to the package.json where this dependency is listed."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number of the dependency entry in package.json."
         }
       }
     },
     "CircularDependency": {
       "type": "object",
-      "required": ["files", "length"],
+      "required": ["files", "length", "line", "col"],
       "properties": {
         "files": {
           "type": "array",
@@ -244,6 +292,14 @@
         "length": {
           "type": "integer",
           "description": "Number of files in the cycle."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number of the import that starts the cycle."
+        },
+        "col": {
+          "type": "integer",
+          "description": "0-based byte column offset of the import that starts the cycle."
         }
       }
     }

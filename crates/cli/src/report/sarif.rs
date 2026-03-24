@@ -149,7 +149,11 @@ pub fn build_sarif(
                 dep.package_name, section
             ),
             uri: relative_uri(&dep.path, root),
-            region: None,
+            region: if dep.line > 0 {
+                Some((dep.line, 1))
+            } else {
+                None
+            },
             properties: None,
         }
     };
@@ -198,7 +202,11 @@ pub fn build_sarif(
                 dep.package_name
             ),
             uri: relative_uri(&dep.path, root),
-            region: None,
+            region: if dep.line > 0 {
+                Some((dep.line, 1))
+            } else {
+                None
+            },
             properties: None,
         }
     });
@@ -254,19 +262,21 @@ pub fn build_sarif(
         }
     });
 
-    push_sarif_results(&mut sarif_results, &results.unlisted_dependencies, |dep| {
-        SarifFields {
-            rule_id: "fallow/unlisted-dependency",
-            level: severity_to_sarif_level(rules.unlisted_dependencies),
-            message: format!(
-                "Package '{}' is imported but not listed in package.json",
-                dep.package_name
-            ),
-            uri: "package.json".to_string(),
-            region: None,
-            properties: None,
+    // Unlisted deps: one result per importing file (SARIF points to the import site)
+    for dep in &results.unlisted_dependencies {
+        for site in &dep.imported_from {
+            sarif_results.push(sarif_result(
+                "fallow/unlisted-dependency",
+                severity_to_sarif_level(rules.unlisted_dependencies),
+                &format!(
+                    "Package '{}' is imported but not listed in package.json",
+                    dep.package_name
+                ),
+                &relative_uri(&site.path, root),
+                Some((site.line, site.col + 1)),
+            ));
         }
-    });
+    }
 
     // Duplicate exports: one result per location (SARIF 2.1.0 section 3.27.12)
     for dup in &results.duplicate_exports {
@@ -296,7 +306,11 @@ pub fn build_sarif(
                 level: severity_to_sarif_level(rules.circular_dependencies),
                 message: format!("Circular dependency: {}", display_chain.join(" \u{2192} ")),
                 uri: first_uri,
-                region: None,
+                region: if cycle.line > 0 {
+                    Some((cycle.line, cycle.col + 1))
+                } else {
+                    None
+                },
                 properties: None,
             }
         },
@@ -487,11 +501,13 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_enum_members.push(UnusedMember {
             path: root.join("src/enums.ts"),
@@ -517,7 +533,11 @@ mod tests {
         });
         r.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![root.join("src/cli.ts")],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 2,
+                col: 0,
+            }],
         });
         r.duplicate_exports.push(DuplicateExport {
             export_name: "Config".to_string(),
@@ -537,10 +557,13 @@ mod tests {
         r.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "zod".to_string(),
             path: root.join("package.json"),
+            line: 8,
         });
         r.circular_dependencies.push(CircularDependency {
             files: vec![root.join("src/a.ts"), root.join("src/b.ts")],
             length: 2,
+            line: 3,
+            col: 0,
         });
 
         r
@@ -678,12 +701,16 @@ mod tests {
     }
 
     #[test]
-    fn sarif_unlisted_dependency_is_error_level() {
+    fn sarif_unlisted_dependency_points_to_import_site() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 3,
+                col: 0,
+            }],
         });
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
@@ -692,8 +719,11 @@ mod tests {
         assert_eq!(entry["level"], "error");
         assert_eq!(
             entry["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
-            "package.json"
+            "src/cli.ts"
         );
+        let region = &entry["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(region["startLine"], 3);
+        assert_eq!(region["startColumn"], 1);
     }
 
     #[test]
@@ -704,11 +734,13 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         results.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());

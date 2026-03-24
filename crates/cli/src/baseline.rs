@@ -285,11 +285,13 @@ mod tests {
                 package_name: "lodash".to_string(),
                 location: DependencyLocation::Dependencies,
                 path: PathBuf::from("package.json"),
+                line: 5,
             }],
             unused_dev_dependencies: vec![UnusedDependency {
                 package_name: "jest".to_string(),
                 location: DependencyLocation::DevDependencies,
                 path: PathBuf::from("package.json"),
+                line: 5,
             }],
             ..Default::default()
         }

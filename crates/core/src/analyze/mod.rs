@@ -160,8 +160,15 @@ pub fn find_dead_code_full(
         }
 
         if config.rules.unlisted_dependencies != Severity::Off {
-            results.unlisted_dependencies =
-                find_unlisted_dependencies(graph, pkg, config, workspaces, plugin_result);
+            results.unlisted_dependencies = find_unlisted_dependencies(
+                graph,
+                pkg,
+                config,
+                workspaces,
+                plugin_result,
+                resolved_modules,
+                &line_offsets_by_file,
+            );
         }
     }
 
@@ -215,7 +222,22 @@ pub fn find_dead_code_full(
                     .map(|&id| graph.modules[id.0 as usize].path.clone())
                     .collect();
                 let length = files.len();
-                CircularDependency { files, length }
+                // Look up the import span from cycle[0] → cycle[1] for precise location
+                let (line, col) = if cycle.len() >= 2 {
+                    graph
+                        .find_import_span_start(cycle[0], cycle[1])
+                        .map_or((1, 0), |span_start| {
+                            byte_offset_to_line_col(&line_offsets_by_file, cycle[0], span_start)
+                        })
+                } else {
+                    (1, 0)
+                };
+                CircularDependency {
+                    files,
+                    length,
+                    line,
+                    col,
+                }
             })
             .collect();
     }

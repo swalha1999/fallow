@@ -107,6 +107,8 @@ pub struct UnusedDependency {
     /// For root deps this is `<root>/package.json`, for workspace deps it is `<ws>/package.json`.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// 1-based line number of the dependency entry in package.json.
+    pub line: u32,
 }
 
 /// Where in package.json a dependency is listed.
@@ -158,9 +160,20 @@ pub struct UnresolvedImport {
 pub struct UnlistedDependency {
     /// npm package name.
     pub package_name: String,
-    /// Files that import this unlisted dependency.
-    #[serde(serialize_with = "serde_path::serialize_vec")]
-    pub imported_from: Vec<PathBuf>,
+    /// Import sites where this unlisted dependency is used (file path, line, column).
+    pub imported_from: Vec<ImportSite>,
+}
+
+/// A location where an import occurs.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportSite {
+    /// File containing the import.
+    #[serde(serialize_with = "serde_path::serialize")]
+    pub path: PathBuf,
+    /// 1-based line number.
+    pub line: u32,
+    /// 0-based byte column offset.
+    pub col: u32,
 }
 
 /// An export that appears multiple times across the project.
@@ -194,6 +207,8 @@ pub struct TypeOnlyDependency {
     /// Path to the package.json where the dependency is listed.
     #[serde(serialize_with = "serde_path::serialize")]
     pub path: PathBuf,
+    /// 1-based line number of the dependency entry in package.json.
+    pub line: u32,
 }
 
 /// A circular dependency chain detected in the module graph.
@@ -204,6 +219,12 @@ pub struct CircularDependency {
     pub files: Vec<PathBuf>,
     /// Number of files in the cycle.
     pub length: usize,
+    /// 1-based line number of the import that starts the cycle (in the first file).
+    #[serde(default)]
+    pub line: u32,
+    /// 0-based byte column offset of the import that starts the cycle.
+    #[serde(default)]
+    pub col: u32,
 }
 
 /// Usage count for an export symbol. Used by the LSP Code Lens to show
@@ -303,11 +324,13 @@ mod tests {
             package_name: "dep".to_string(),
             location: DependencyLocation::Dependencies,
             path: PathBuf::from("package.json"),
+            line: 5,
         });
         results.unused_dev_dependencies.push(UnusedDependency {
             package_name: "dev".to_string(),
             location: DependencyLocation::DevDependencies,
             path: PathBuf::from("package.json"),
+            line: 5,
         });
         results.unused_enum_members.push(UnusedMember {
             path: PathBuf::from("d.ts"),
@@ -333,7 +356,11 @@ mod tests {
         });
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "unlisted".to_string(),
-            imported_from: vec![PathBuf::from("g.ts")],
+            imported_from: vec![ImportSite {
+                path: PathBuf::from("g.ts"),
+                line: 1,
+                col: 0,
+            }],
         });
         results.duplicate_exports.push(DuplicateExport {
             export_name: "dup".to_string(),
@@ -353,6 +380,8 @@ mod tests {
         results.circular_dependencies.push(CircularDependency {
             files: vec![PathBuf::from("a.ts"), PathBuf::from("b.ts")],
             length: 2,
+            line: 3,
+            col: 0,
         });
 
         assert_eq!(results.total_issues(), 11);

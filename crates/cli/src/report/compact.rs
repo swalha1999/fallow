@@ -93,8 +93,9 @@ pub fn build_compact_lines(results: &AnalysisResults, root: &Path) -> Vec<String
         }
         let first_file = chain.first().map_or_else(String::new, Clone::clone);
         lines.push(format!(
-            "circular-dependency:{}:0:{}",
+            "circular-dependency:{}:{}:{}",
             first_file,
+            cycle.line,
             display_chain.join(" \u{2192} ")
         ));
     }
@@ -165,11 +166,13 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_enum_members.push(UnusedMember {
             path: root.join("src/enums.ts"),
@@ -195,7 +198,11 @@ mod tests {
         });
         r.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![root.join("src/cli.ts")],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 2,
+                col: 0,
+            }],
         });
         r.duplicate_exports.push(DuplicateExport {
             export_name: "Config".to_string(),
@@ -215,6 +222,7 @@ mod tests {
         r.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "zod".to_string(),
             path: root.join("package.json"),
+            line: 8,
         });
 
         r
@@ -285,6 +293,7 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
 
         let lines = build_compact_lines(&results, &root);
@@ -299,6 +308,7 @@ mod tests {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
 
         let lines = build_compact_lines(&results, &root);

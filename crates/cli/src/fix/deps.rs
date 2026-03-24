@@ -123,6 +123,7 @@ mod tests {
                 package_name: "lodash".into(),
                 location: fallow_core::results::DependencyLocation::Dependencies,
                 path: pkg_path.clone(),
+                line: 5,
             });
 
         let mut fixes = Vec::new();
@@ -153,6 +154,7 @@ mod tests {
                 package_name: "lodash".into(),
                 location: fallow_core::results::DependencyLocation::Dependencies,
                 path: pkg_path.clone(),
+                line: 5,
             });
 
         let mut fixes = Vec::new();

@@ -42,7 +42,7 @@ pub fn filter_to_workspace(
     // Unlisted deps: keep only if any importing file is in this workspace
     results
         .unlisted_dependencies
-        .retain(|d| d.imported_from.iter().any(|p| p.starts_with(ws_root)));
+        .retain(|d| d.imported_from.iter().any(|s| s.path.starts_with(ws_root)));
 
     // Duplicate exports: filter locations to workspace, drop groups with < 2
     for dup in &mut results.duplicate_exports {
@@ -121,9 +121,11 @@ pub(super) fn filter_changed_files(
         .retain(|i| changed_files.contains(&i.path));
 
     // Unlisted deps: keep only if any importing file is changed
-    results
-        .unlisted_dependencies
-        .retain(|d| d.imported_from.iter().any(|p| changed_files.contains(p)));
+    results.unlisted_dependencies.retain(|d| {
+        d.imported_from
+            .iter()
+            .any(|s| changed_files.contains(&s.path))
+    });
 
     // Duplicate exports: filter locations to changed files, drop groups with < 2
     for dup in &mut results.duplicate_exports {
@@ -216,16 +218,19 @@ mod tests {
             package_name: "lodash".into(),
             location: DependencyLocation::Dependencies,
             path: PathBuf::from("/project/package.json"),
+            line: 5,
         });
         results.unused_dependencies.push(UnusedDependency {
             package_name: "react".into(),
             location: DependencyLocation::Dependencies,
             path: PathBuf::from("/project/packages/ui/package.json"),
+            line: 5,
         });
         results.unused_dev_dependencies.push(UnusedDependency {
             package_name: "vitest".into(),
             location: DependencyLocation::DevDependencies,
             path: PathBuf::from("/project/packages/ui/package.json"),
+            line: 5,
         });
 
         let ws_root = PathBuf::from("/project/packages/ui");
@@ -242,11 +247,19 @@ mod tests {
         let mut results = AnalysisResults::default();
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".into(),
-            imported_from: vec![PathBuf::from("/project/packages/ui/src/a.ts")],
+            imported_from: vec![ImportSite {
+                path: PathBuf::from("/project/packages/ui/src/a.ts"),
+                line: 1,
+                col: 0,
+            }],
         });
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "debug".into(),
-            imported_from: vec![PathBuf::from("/project/packages/api/src/b.ts")],
+            imported_from: vec![ImportSite {
+                path: PathBuf::from("/project/packages/api/src/b.ts"),
+                line: 1,
+                col: 0,
+            }],
         });
 
         let ws_root = PathBuf::from("/project/packages/ui");
@@ -345,10 +358,12 @@ mod tests {
         results.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "zod".into(),
             path: PathBuf::from("/project/packages/ui/package.json"),
+            line: 8,
         });
         results.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "yup".into(),
             path: PathBuf::from("/project/package.json"),
+            line: 8,
         });
 
         let ws_root = PathBuf::from("/project/packages/ui");

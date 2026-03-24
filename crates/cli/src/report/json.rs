@@ -29,7 +29,7 @@ pub(super) fn print_json(results: &AnalysisResults, root: &Path, elapsed: Durati
 /// Bump this when the structure of the JSON output changes in a
 /// backwards-incompatible way (removing/renaming fields, changing types).
 /// Adding new fields is always backwards-compatible and does not require a bump.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Build the JSON output value for analysis results.
 ///
@@ -234,11 +234,13 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_enum_members.push(UnusedMember {
             path: root.join("src/enums.ts"),
@@ -264,7 +266,11 @@ mod tests {
         });
         r.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![root.join("src/cli.ts")],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 2,
+                col: 0,
+            }],
         });
         r.duplicate_exports.push(DuplicateExport {
             export_name: "Config".to_string(),
@@ -284,6 +290,8 @@ mod tests {
         r.circular_dependencies.push(CircularDependency {
             files: vec![root.join("src/a.ts"), root.join("src/b.ts")],
             length: 2,
+            line: 3,
+            col: 0,
         });
 
         r
@@ -296,7 +304,7 @@ mod tests {
         let elapsed = Duration::from_millis(123);
         let output = build_json(&results, &root, elapsed).expect("should serialize");
 
-        assert_eq!(output["schema_version"], 2);
+        assert_eq!(output["schema_version"], 3);
         assert!(output["version"].is_string());
         assert_eq!(output["elapsed_ms"], 123);
         assert_eq!(output["total_issues"], 0);

@@ -201,6 +201,10 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "package.json"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 1
                 }
               }
             }
@@ -217,6 +221,10 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "package.json"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 1
                 }
               }
             }
@@ -233,6 +241,10 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "package.json"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 1
                 }
               }
             }
@@ -249,6 +261,10 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "package.json"
+                },
+                "region": {
+                  "startLine": 8,
+                  "startColumn": 1
                 }
               }
             }
@@ -324,7 +340,11 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "package.json"
+                  "uri": "src/cli.ts"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 1
                 }
               }
             }
@@ -381,6 +401,10 @@ expression: "json_str.replace(&format!(\"\\\"version\\\": \\\"{}\\\"\", env!(\"C
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "src/a.ts"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 1
                 }
               }
             }

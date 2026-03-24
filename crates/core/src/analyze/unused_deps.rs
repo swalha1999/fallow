@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use fallow_config::{PackageJson, ResolvedConfig};
@@ -12,6 +14,60 @@ use super::predicates::{
     is_builtin_module, is_implicit_dependency, is_path_alias, is_virtual_module,
 };
 use super::{LineOffsetsMap, byte_offset_to_line_col};
+
+/// Find the 1-based line number of a dependency key in a package.json file.
+///
+/// Searches the raw file content for `"<package_name>"` followed by `:` on the
+/// same line. Skips JSONC comment lines. Returns 1 if not found (safe fallback).
+fn find_dep_line_in_json(content: &str, package_name: &str) -> u32 {
+    let needle = format!("\"{package_name}\"");
+    let mut in_block_comment = false;
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        // Track block comments
+        if in_block_comment {
+            if let Some(end) = trimmed.find("*/") {
+                // Block comment ends on this line — check the remainder
+                let rest = &trimmed[end + 2..];
+                in_block_comment = false;
+                if rest.contains(&*needle) {
+                    // Check it's a key after the comment ends
+                    if let Some(pos) = line.find(&needle) {
+                        let after = &line[pos + needle.len()..];
+                        if after.trim_start().starts_with(':') {
+                            return (i + 1) as u32;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        // Skip line comments
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // Start of block comment
+        if trimmed.starts_with("/*") {
+            if !trimmed.contains("*/") {
+                in_block_comment = true;
+            }
+            continue;
+        }
+        if let Some(pos) = line.find(&needle) {
+            // Verify it's a key (followed by `:` after optional whitespace)
+            let after = &line[pos + needle.len()..];
+            if after.trim_start().starts_with(':') {
+                return (i + 1) as u32;
+            }
+        }
+    }
+    1
+}
+
+/// Read a package.json file's raw text for line-number scanning.
+fn read_pkg_json_content(pkg_path: &Path) -> Option<String> {
+    std::fs::read_to_string(pkg_path).ok()
+}
 
 /// Find dependencies in package.json that are never imported.
 ///
@@ -63,6 +119,7 @@ pub fn find_unused_dependencies(
     let used_packages: FxHashSet<&str> = graph.package_usage.keys().map(|s| s.as_str()).collect();
 
     let root_pkg_path = config.root.join("package.json");
+    let root_pkg_content = read_pkg_json_content(&root_pkg_path);
 
     // --- Root package.json check (existing behavior: any file can satisfy usage) ---
     let mut unused_deps: Vec<UnusedDependency> = pkg
@@ -75,10 +132,16 @@ pub fn find_unused_dependencies(
         .filter(|dep| !plugin_tooling.contains(dep.as_str()))
         .filter(|dep| !ignore_deps.contains(dep.as_str()))
         .filter(|dep| !workspace_names.contains(dep.as_str()))
-        .map(|dep| UnusedDependency {
-            package_name: dep,
-            location: DependencyLocation::Dependencies,
-            path: root_pkg_path.clone(),
+        .map(|dep| {
+            let line = root_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
+            UnusedDependency {
+                package_name: dep,
+                location: DependencyLocation::Dependencies,
+                path: root_pkg_path.clone(),
+                line,
+            }
         })
         .collect();
 
@@ -92,10 +155,16 @@ pub fn find_unused_dependencies(
         .filter(|dep| !plugin_referenced.contains(dep.as_str()))
         .filter(|dep| !ignore_deps.contains(dep.as_str()))
         .filter(|dep| !workspace_names.contains(dep.as_str()))
-        .map(|dep| UnusedDependency {
-            package_name: dep,
-            location: DependencyLocation::DevDependencies,
-            path: root_pkg_path.clone(),
+        .map(|dep| {
+            let line = root_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
+            UnusedDependency {
+                package_name: dep,
+                location: DependencyLocation::DevDependencies,
+                path: root_pkg_path.clone(),
+                line,
+            }
         })
         .collect();
 
@@ -108,10 +177,16 @@ pub fn find_unused_dependencies(
         .filter(|dep| !plugin_referenced.contains(dep.as_str()))
         .filter(|dep| !ignore_deps.contains(dep.as_str()))
         .filter(|dep| !workspace_names.contains(dep.as_str()))
-        .map(|dep| UnusedDependency {
-            package_name: dep,
-            location: DependencyLocation::OptionalDependencies,
-            path: root_pkg_path.clone(),
+        .map(|dep| {
+            let line = root_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
+            UnusedDependency {
+                package_name: dep,
+                location: DependencyLocation::OptionalDependencies,
+                path: root_pkg_path.clone(),
+                line,
+            }
         })
         .collect();
 
@@ -129,6 +204,7 @@ pub fn find_unused_dependencies(
         let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path) else {
             continue;
         };
+        let ws_pkg_content = read_pkg_json_content(&ws_pkg_path);
 
         // Helper: check if a dependency is used by any file within this workspace.
         // Uses raw path comparison (module paths are absolute, workspace root is absolute)
@@ -160,10 +236,14 @@ pub fn find_unused_dependencies(
             {
                 continue;
             }
+            let line = ws_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
             unused_deps.push(UnusedDependency {
                 package_name: dep,
                 location: DependencyLocation::Dependencies,
                 path: ws_pkg_path.clone(),
+                line,
             });
         }
 
@@ -182,10 +262,14 @@ pub fn find_unused_dependencies(
             {
                 continue;
             }
+            let line = ws_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
             unused_dev_deps.push(UnusedDependency {
                 package_name: dep,
                 location: DependencyLocation::DevDependencies,
                 path: ws_pkg_path.clone(),
+                line,
             });
         }
 
@@ -203,10 +287,14 @@ pub fn find_unused_dependencies(
             {
                 continue;
             }
+            let line = ws_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
             unused_optional_deps.push(UnusedDependency {
                 package_name: dep,
                 location: DependencyLocation::OptionalDependencies,
                 path: ws_pkg_path.clone(),
+                line,
             });
         }
     }
@@ -248,6 +336,7 @@ pub fn find_type_only_dependencies(
     workspaces: &[fallow_config::WorkspaceInfo],
 ) -> Vec<TypeOnlyDependency> {
     let root_pkg_path = config.root.join("package.json");
+    let root_pkg_content = read_pkg_json_content(&root_pkg_path);
     let workspace_names: FxHashSet<&str> = workspaces.iter().map(|ws| ws.name.as_str()).collect();
 
     let mut type_only_deps = Vec::new();
@@ -280,9 +369,13 @@ pub fn find_type_only_dependencies(
             .map_or(0, Vec::len);
 
         if has_type_only_usage && type_only_count == total_count {
+            let line = root_pkg_content
+                .as_deref()
+                .map_or(1, |c| find_dep_line_in_json(c, &dep));
             type_only_deps.push(TypeOnlyDependency {
                 package_name: dep,
                 path: root_pkg_path.clone(),
+                line,
             });
         }
     }
@@ -297,6 +390,8 @@ pub fn find_unlisted_dependencies(
     config: &ResolvedConfig,
     workspaces: &[fallow_config::WorkspaceInfo],
     plugin_result: Option<&crate::plugins::AggregatedPluginResult>,
+    resolved_modules: &[ResolvedModule],
+    line_offsets_by_file: &LineOffsetsMap<'_>,
 ) -> Vec<UnlistedDependency> {
     let all_deps: FxHashSet<String> = pkg.all_dependency_names().into_iter().collect();
 
@@ -336,7 +431,23 @@ pub fn find_unlisted_dependencies(
         .map(|pr| pr.tooling_dependencies.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
-    let mut unlisted: FxHashMap<String, Vec<std::path::PathBuf>> = FxHashMap::default();
+    // Build a lookup: FileId -> Vec<(package_name, span_start)> from resolved modules,
+    // so we can recover the import location when building UnlistedDependency results.
+    let mut import_spans_by_file: FxHashMap<FileId, Vec<(&str, u32)>> = FxHashMap::default();
+    for rm in resolved_modules {
+        for import in &rm.resolved_imports {
+            if let crate::resolve::ResolveResult::NpmPackage(name) = &import.target {
+                import_spans_by_file
+                    .entry(rm.file_id)
+                    .or_default()
+                    .push((name.as_str(), import.info.span.start));
+            }
+        }
+        // Re-exports don't have span info on ReExportInfo, so skip them here.
+        // The import span lookup will fall back to (1, 0) for re-export-only usages.
+    }
+
+    let mut unlisted: FxHashMap<String, Vec<ImportSite>> = FxHashMap::default();
 
     for (package_name, file_ids) in &graph.package_usage {
         if is_builtin_module(package_name) || is_path_alias(package_name) {
@@ -369,7 +480,7 @@ pub fn find_unlisted_dependencies(
 
         // Slower fallback: check if each importing file belongs to a workspace that lists this dep.
         // Uses raw path comparison (module paths are absolute) to avoid per-file canonicalize().
-        let mut unlisted_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut unlisted_sites: Vec<ImportSite> = Vec::new();
         for id in file_ids {
             if let Some(module) = graph.modules.get(id.0 as usize) {
                 let listed_in_ws = ws_dep_map.iter().any(|(ws_root, ws_deps)| {
@@ -378,24 +489,40 @@ pub fn find_unlisted_dependencies(
                 // Also check root deps
                 let listed_in_root = all_deps.contains(package_name);
                 if !listed_in_ws && !listed_in_root {
-                    unlisted_paths.push(module.path.clone());
+                    // Look up the import span for this package in this file
+                    let (line, col) = import_spans_by_file
+                        .get(id)
+                        .and_then(|spans| {
+                            spans.iter().find(|(name, _)| *name == package_name).map(
+                                |(_, span_start)| {
+                                    byte_offset_to_line_col(line_offsets_by_file, *id, *span_start)
+                                },
+                            )
+                        })
+                        .unwrap_or((1, 0));
+
+                    unlisted_sites.push(ImportSite {
+                        path: module.path.clone(),
+                        line,
+                        col,
+                    });
                 }
             }
         }
 
-        if !unlisted_paths.is_empty() {
-            unlisted_paths.sort();
-            unlisted_paths.dedup();
-            unlisted.insert(package_name.clone(), unlisted_paths);
+        if !unlisted_sites.is_empty() {
+            unlisted_sites.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+            unlisted_sites.dedup_by(|a, b| a.path == b.path);
+            unlisted.insert(package_name.clone(), unlisted_sites);
         }
     }
 
     let _ = config; // future use
     unlisted
         .into_iter()
-        .map(|(name, paths)| UnlistedDependency {
+        .map(|(name, sites)| UnlistedDependency {
             package_name: name,
-            imported_from: paths,
+            imported_from: sites,
         })
         .collect()
 }
@@ -761,5 +888,61 @@ mod tests {
         assert!(!super::super::predicates::is_path_alias("@angular/core"));
         assert!(!super::super::predicates::is_path_alias("@emotion/react"));
         assert!(!super::super::predicates::is_path_alias("@nestjs/common"));
+    }
+
+    // ---- find_dep_line_in_json tests ----
+
+    #[test]
+    fn find_dep_line_finds_dependency_key() {
+        let content = r#"{
+  "name": "my-app",
+  "dependencies": {
+    "react": "^18.0.0",
+    "lodash": "^4.17.21"
+  }
+}"#;
+        assert_eq!(super::find_dep_line_in_json(content, "lodash"), 5);
+        assert_eq!(super::find_dep_line_in_json(content, "react"), 4);
+    }
+
+    #[test]
+    fn find_dep_line_returns_1_when_not_found() {
+        let content = r#"{ "dependencies": {} }"#;
+        assert_eq!(super::find_dep_line_in_json(content, "missing"), 1);
+    }
+
+    #[test]
+    fn find_dep_line_handles_scoped_packages() {
+        let content = r#"{
+  "devDependencies": {
+    "@typescript-eslint/parser": "^6.0.0"
+  }
+}"#;
+        assert_eq!(
+            super::find_dep_line_in_json(content, "@typescript-eslint/parser"),
+            3
+        );
+    }
+
+    #[test]
+    fn find_dep_line_skips_line_comments() {
+        let content = r#"{
+  // "lodash": "old version",
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}"#;
+        assert_eq!(super::find_dep_line_in_json(content, "lodash"), 4);
+    }
+
+    #[test]
+    fn find_dep_line_skips_block_comments() {
+        let content = r#"{
+  /* "lodash": "old" */
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}"#;
+        assert_eq!(super::find_dep_line_in_json(content, "lodash"), 4);
     }
 }

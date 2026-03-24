@@ -160,6 +160,22 @@ impl ModuleGraph {
         let range = &self.modules[idx].edge_range;
         self.edges[range.clone()].iter().map(|e| e.target).collect()
     }
+
+    /// Find the byte offset of the first import statement from `source` to `target`.
+    /// Returns `None` if no edge exists or the edge has no symbols.
+    pub fn find_import_span_start(&self, source: FileId, target: FileId) -> Option<u32> {
+        let idx = source.0 as usize;
+        if idx >= self.modules.len() {
+            return None;
+        }
+        let range = &self.modules[idx].edge_range;
+        for edge in &self.edges[range.clone()] {
+            if edge.target == target {
+                return edge.symbols.first().map(|s| s.import_span.start);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

@@ -173,7 +173,7 @@ runs:
             "| `\(.path)` | \(.line) | `\(.specifier)` |") +
           section("Unlisted dependencies"; "unlisted_dependencies";
             "Imported but not declared in `package.json`.\n\n| Package | Used in |\n|---------|--------|\n";
-            "| `\(.package_name)` | \(if (.imported_from | length) > 0 then (.imported_from[:3] | map("`\(.)`") | join(", ")) + (if (.imported_from | length) > 3 then " *+\((.imported_from | length) - 3) more*" else "" end) else "" end) |") +
+            "| `\(.package_name)` | \(if (.imported_from | length) > 0 then (.imported_from[:3] | map("`\(.path):\(.line)`") | join(", ")) + (if (.imported_from | length) > 3 then " *+\((.imported_from | length) - 3) more*" else "" end) else "" end) |") +
           section("Duplicate exports"; "duplicate_exports";
             "Same name exported from multiple modules.\n\n| Export | Locations |\n|--------|-----------|\n";
             "| `\(.export_name)` | \(.locations[:3] | map("`\(.path):\(.line)`") | join(", "))\(if (.locations | length) > 3 then " *+\((.locations | length) - 3) more*" else "" end) |") +

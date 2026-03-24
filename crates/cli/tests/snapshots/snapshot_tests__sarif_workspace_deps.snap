@@ -145,6 +145,10 @@ expression: redact_sarif_version(&json_str)
               "physicalLocation": {
                 "artifactLocation": {
                   "uri": "packages/ui/package.json"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 1
                 }
               }
             }

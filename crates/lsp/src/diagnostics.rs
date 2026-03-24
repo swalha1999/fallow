@@ -363,7 +363,7 @@ mod tests {
     use fallow_core::duplicates::{CloneGroup, CloneInstance, DuplicationStats};
     use fallow_core::extract::MemberKind;
     use fallow_core::results::{
-        DependencyLocation, DuplicateExport, DuplicateLocation, UnlistedDependency,
+        DependencyLocation, DuplicateExport, DuplicateLocation, ImportSite, UnlistedDependency,
         UnresolvedImport, UnusedDependency, UnusedExport, UnusedFile, UnusedMember,
     };
 
@@ -528,6 +528,7 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
 
         let duplication = empty_duplication();
@@ -551,6 +552,7 @@ mod tests {
             package_name: "prettier".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
 
         let duplication = empty_duplication();
@@ -571,7 +573,11 @@ mod tests {
         let mut results = AnalysisResults::default();
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![root.join("src/cli.ts")],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 2,
+                col: 0,
+            }],
         });
 
         let duplication = empty_duplication();

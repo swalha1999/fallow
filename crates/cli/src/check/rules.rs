@@ -218,11 +218,13 @@ mod tests {
             package_name: "lodash".into(),
             location: DependencyLocation::Dependencies,
             path: PathBuf::from("/project/package.json"),
+            line: 5,
         });
         r.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".into(),
             location: DependencyLocation::DevDependencies,
             path: PathBuf::from("/project/package.json"),
+            line: 5,
         });
         r.unused_enum_members.push(UnusedMember {
             path: PathBuf::from("/project/src/d.ts"),
@@ -248,7 +250,11 @@ mod tests {
         });
         r.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".into(),
-            imported_from: vec![PathBuf::from("/project/src/g.ts")],
+            imported_from: vec![ImportSite {
+                path: PathBuf::from("/project/src/g.ts"),
+                line: 1,
+                col: 0,
+            }],
         });
         r.duplicate_exports.push(DuplicateExport {
             export_name: "helper".into(),

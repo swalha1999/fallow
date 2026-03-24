@@ -386,11 +386,13 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_dev_dependencies.push(UnusedDependency {
             package_name: "jest".to_string(),
             location: DependencyLocation::DevDependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         r.unused_enum_members.push(UnusedMember {
             path: root.join("src/enums.ts"),
@@ -416,7 +418,11 @@ mod tests {
         });
         r.unlisted_dependencies.push(UnlistedDependency {
             package_name: "chalk".to_string(),
-            imported_from: vec![root.join("src/cli.ts")],
+            imported_from: vec![ImportSite {
+                path: root.join("src/cli.ts"),
+                line: 2,
+                col: 0,
+            }],
         });
         r.duplicate_exports.push(DuplicateExport {
             export_name: "Config".to_string(),
@@ -436,10 +442,13 @@ mod tests {
         r.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "zod".to_string(),
             path: root.join("package.json"),
+            line: 8,
         });
         r.circular_dependencies.push(CircularDependency {
             files: vec![root.join("src/a.ts"), root.join("src/b.ts")],
             length: 2,
+            line: 3,
+            col: 0,
         });
 
         r
@@ -538,6 +547,7 @@ mod tests {
             package_name: "lodash".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         let md = build_markdown(&results, &root);
         assert!(md.contains("- `lodash`"));
@@ -550,6 +560,8 @@ mod tests {
         results.circular_dependencies.push(CircularDependency {
             files: vec![root.join("src/a.ts"), root.join("src/b.ts")],
             length: 2,
+            line: 3,
+            col: 0,
         });
         let md = build_markdown(&results, &root);
         assert!(md.contains("`src/a.ts`"));
@@ -587,6 +599,7 @@ mod tests {
         results.type_only_dependencies.push(TypeOnlyDependency {
             package_name: "zod".to_string(),
             path: root.join("package.json"),
+            line: 8,
         });
         let md = build_markdown(&results, &root);
         assert!(md.contains("### Type-only dependencies"));
@@ -619,6 +632,7 @@ mod tests {
             package_name: "pkg`name".to_string(),
             location: DependencyLocation::Dependencies,
             path: root.join("package.json"),
+            line: 5,
         });
         let md = build_markdown(&results, &root);
         assert!(md.contains("pkg\\`name"));

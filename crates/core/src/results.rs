@@ -1,8 +1,8 @@
 // Re-export all result types from fallow-types
 pub use fallow_types::results::{
     AnalysisResults, CircularDependency, DependencyLocation, DuplicateExport, DuplicateLocation,
-    ExportUsage, ReferenceLocation, TypeOnlyDependency, UnlistedDependency, UnresolvedImport,
-    UnusedDependency, UnusedExport, UnusedFile, UnusedMember,
+    ExportUsage, ImportSite, ReferenceLocation, TypeOnlyDependency, UnlistedDependency,
+    UnresolvedImport, UnusedDependency, UnusedExport, UnusedFile, UnusedMember,
 };
 
 #[cfg(test)]
@@ -73,11 +73,13 @@ mod tests {
             package_name: "dep".to_string(),
             location: DependencyLocation::Dependencies,
             path: PathBuf::from("package.json"),
+            line: 5,
         });
         results.unused_dev_dependencies.push(UnusedDependency {
             package_name: "dev".to_string(),
             location: DependencyLocation::DevDependencies,
             path: PathBuf::from("package.json"),
+            line: 5,
         });
         results.unused_enum_members.push(UnusedMember {
             path: PathBuf::from("d.ts"),
@@ -103,7 +105,11 @@ mod tests {
         });
         results.unlisted_dependencies.push(UnlistedDependency {
             package_name: "unlisted".to_string(),
-            imported_from: vec![PathBuf::from("g.ts")],
+            imported_from: vec![ImportSite {
+                path: PathBuf::from("g.ts"),
+                line: 1,
+                col: 0,
+            }],
         });
         results.duplicate_exports.push(DuplicateExport {
             export_name: "dup".to_string(),

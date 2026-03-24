@@ -1,5 +1,5 @@
 name: 'Fallow'
-description: 'Analyze JavaScript/TypeScript projects for unused code, circular dependencies, code duplication, and auto-fixable issues. Supports SARIF upload, PR comments, and job summaries.'
+description: 'Analyze TypeScript/JavaScript projects for unused code, circular dependencies, code duplication, and auto-fixable issues. Supports SARIF upload, PR comments, and job summaries.'
 author: 'Bart Waardenburg'
 
 branding:

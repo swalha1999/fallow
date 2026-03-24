@@ -1,4 +1,4 @@
-# Fallow - Rust-native codebase analyzer for JavaScript/TypeScript
+# Fallow - Rust-native codebase analyzer for TypeScript/JavaScript
 
 ## What is this?
 
@@ -181,6 +181,8 @@ Comprehensive clippy and compiler lint configuration inspired by the Oxc ecosyst
 
 37. Complexity metrics (`fallow health`): per-function cyclomatic complexity (McCabe, classic variant — counts `if`, `for`, `while`, `do`, `switch case`, `catch`, `?:`, `&&`, `||`, `??`, `&&=`/`||=`/`??=`, `?.`) and cognitive complexity (SonarSource algorithm — structural increments with nesting penalty, boolean operator sequence detection, function scope reset, `?.` NOT counted). Computed in a single-pass `ComplexityVisitor` during the existing parse phase (zero additional parsing cost). Configurable thresholds (default: cyclomatic 20, cognitive 15) via `[health]` config section or `--max-cyclomatic`/`--max-cognitive` CLI flags. Results cached alongside other extraction data.
 
+38. File-level health scores (`fallow health --file-scores`): per-file maintainability index combining complexity density (total cyclomatic / LOC), dead code ratio (fraction of value exports with zero references, excluding type-only exports), and fan-out (logarithmic scaling capped at 15 points). Formula: `100 - (complexity_density × 30) - (dead_code_ratio × 20) - min(ln(fan_out+1) × 4, 15)` clamped to [0, 100]. Zero-function files (barrel/re-export files) are excluded by default. Requires full analysis pipeline (graph + dead code detection). Sorted by maintainability index ascending (worst files first). Available in all output formats (human, JSON, compact, markdown). JSON output includes `file_scores` array and `summary.files_scored`/`summary.average_maintainability`. MCP `check_health` tool supports `file_scores: true` parameter.
+
 ## Framework support (84 plugins)
 
 **Frameworks**: Next.js, Nuxt, Remix, SvelteKit, Gatsby, Astro, Angular, React Router, TanStack Router, React Native, Expo, NestJS, Docusaurus, Nitro, VitePress, Sanity, Capacitor, next-intl, Relay, Electron, i18next
@@ -222,7 +224,7 @@ Comprehensive clippy and compiler lint configuration inspired by the Oxc ecosyst
 ## CLI features
 
 - `check` — analyze with --format (human/json/sarif/compact/markdown), --changed-since, --baseline, --save-baseline, --fail-on-issues, --include-dupes (cross-reference with duplication), issue type filters (--unused-files, --unused-exports, etc.), --trace FILE:EXPORT (trace export usage), --trace-file PATH (trace file edges), --trace-dependency PACKAGE (trace dependency usage)
-- `health` — analyze function complexity (cyclomatic + cognitive), --max-cyclomatic, --max-cognitive, --top N, --sort (cyclomatic/cognitive/lines), --changed-since, --format (human/json/compact). Exit code 1 if any function exceeds thresholds.
+- `health` — analyze function complexity (cyclomatic + cognitive), --max-cyclomatic, --max-cognitive, --top N, --sort (cyclomatic/cognitive/lines), --changed-since, --format (human/json/compact/markdown/sarif), --file-scores (per-file maintainability index with fan-in/fan-out/dead-code-ratio/complexity-density). Exit code 1 if any function exceeds thresholds.
 - `dupes` — find code duplication with clone families, refactoring suggestions, --changed-since, --baseline/--save-baseline, --mode (strict/mild/weak/semantic), --min-tokens, --min-lines, --threshold, --skip-local, --cross-language, --trace FILE:LINE (trace all clones at a specific location)
 - `watch` — file watcher with debounced re-analysis, screen clear between runs (--no-clear to disable), shows changed file paths
 - `fix` — auto-remove unused exports, enum members, and deps (--dry-run, --yes/--force for non-TTY confirmation, --format json for structured output)

@@ -4,7 +4,7 @@
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/fallow-rs/fallow/main/assets/logo.svg">
     <img src="https://raw.githubusercontent.com/fallow-rs/fallow/main/assets/logo.svg" alt="fallow" width="290">
   </picture><br>
-  <strong>The codebase analyzer for JavaScript and TypeScript, built in Rust.</strong><br><br>
+  <strong>The codebase analyzer for TypeScript and JavaScript, built in Rust.</strong><br><br>
   <a href="https://github.com/fallow-rs/fallow/actions/workflows/ci.yml"><img src="https://github.com/fallow-rs/fallow/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/fallow-rs/fallow/actions/workflows/coverage.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/fallow-rs/fallow/badges/coverage.json" alt="Coverage"></a>
   <a href="https://crates.io/crates/fallow-cli"><img src="https://img.shields.io/crates/v/fallow-cli.svg" alt="crates.io"></a>
@@ -97,8 +97,11 @@ fallow health --max-cognitive 10       # Custom cognitive complexity threshold
 fallow health --top 20                 # Show the 20 most complex functions
 fallow health --sort cognitive         # Sort by cognitive complexity
 fallow health --changed-since main     # Only analyze changed files
+fallow health --file-scores            # Per-file maintainability index (0–100)
 fallow health --format json            # Machine-readable output
 ```
+
+`--file-scores` computes a per-file maintainability index combining complexity density, dead code ratio (value exports only, excluding types), and coupling (fan-out with logarithmic scaling). Barrel files are excluded by default. Formula: `100 - (complexity_density × 30) - (dead_code_ratio × 20) - min(ln(fan_out+1) × 4, 15)`, clamped to 0–100. Higher is better.
 
 ## Benchmarks
 
@@ -298,7 +301,7 @@ Supports `--changed-since main` for PR-only analysis, `--baseline` for failing o
 - **Non-JS file support** — Vue/Svelte SFC (`<script>` block extraction), Astro (frontmatter), MDX (import/export statements), CSS/SCSS (`@import`, `@use`, `@forward`, `@apply`/`@tailwind` as Tailwind dependency usage), CSS Modules (`.module.css`/`.module.scss` class name tracking)
 - **Production mode** — `--production` excludes test/story/dev files, only considers start/build scripts, and reports type-only dependencies that could be devDependencies
 - **Circular dependency detection** — finds import cycles using Tarjan's SCC algorithm; configurable via `"circular-dependencies"` rule. Unique feature not available in knip.
-- **Complexity metrics** — `fallow health` reports cyclomatic and cognitive complexity per function with configurable thresholds (`--max-cyclomatic`, `--max-cognitive`), top-N ranking (`--top`), and `--changed-since` for PR-scoped analysis
+- **Complexity metrics** — `fallow health` reports cyclomatic and cognitive complexity per function with configurable thresholds (`--max-cyclomatic`, `--max-cognitive`), top-N ranking (`--top`), and `--changed-since` for PR-scoped analysis. `--file-scores` adds per-file maintainability index combining complexity density, dead code ratio, and fan-out
 - **JSDoc `@public` tag** — exports annotated with `/** @public */` are never reported as unused, for library authors whose exports are consumed by external projects
 
 ## Inline suppression comments

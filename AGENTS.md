@@ -1,6 +1,6 @@
 ---
 name: fallow
-description: Rust-native codebase analyzer for JavaScript/TypeScript projects. Finds unused code, circular dependencies, and code duplication. 3-36x faster than knip v5.
+description: Rust-native codebase analyzer for TypeScript/JavaScript projects. Finds unused code, circular dependencies, and code duplication. 3-36x faster than knip v5.
 agent-usage: This CLI is frequently invoked by AI coding agents (Claude Code, Cursor, Copilot, etc.) for codebase hygiene tasks.
 ---
 
@@ -99,24 +99,26 @@ fallow dupes --format json --quiet --changed-since main
 
 ### `health`
 
-Analyze function complexity (cyclomatic and cognitive).
+Analyze function complexity (cyclomatic and cognitive) and per-file health scores.
 
 ```bash
 fallow health --format json --quiet
 fallow health --format json --quiet --max-cyclomatic 15
 fallow health --format json --quiet --top 10 --sort cognitive
+fallow health --format json --quiet --file-scores
 ```
 
 **Flags:**
 - `--max-cyclomatic <N>` -- cyclomatic complexity threshold (default: 20)
 - `--max-cognitive <N>` -- cognitive complexity threshold (default: 15)
-- `--top <N>` -- only show the top N most complex functions
+- `--top <N>` -- only show the top N most complex functions (and file scores)
 - `--sort cyclomatic|cognitive|lines` -- sort order for results
-- `--format human|json|compact` -- output format (default: human)
+- `--file-scores` -- compute per-file maintainability index (fan-in, fan-out, dead code ratio, complexity density). Runs the full analysis pipeline.
+- `--format human|json|compact|markdown|sarif` -- output format (default: human)
 
 **Exit codes:** 0 = no functions exceed thresholds, 1 = findings exist.
 
-**JSON output** includes a `findings` array and a `summary` object.
+**JSON output** includes a `findings` array and a `summary` object. With `--file-scores`, also includes a `file_scores` array with per-file metrics and `summary.files_scored` / `summary.average_maintainability`.
 
 ### `fix`
 
@@ -245,6 +247,7 @@ fallow dupes --format json --quiet --mode semantic --threshold 5
 ```bash
 fallow health --format json --quiet
 fallow health --format json --quiet --top 10 --sort cognitive
+fallow health --format json --quiet --file-scores   # includes per-file maintainability index
 ```
 
 ### Safe auto-fix cycle

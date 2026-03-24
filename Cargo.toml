@@ -10,7 +10,7 @@ license = "MIT"
 repository = "https://github.com/fallow-rs/fallow"
 homepage = "https://docs.fallow.tools"
 documentation = "https://docs.fallow.tools"
-keywords = ["javascript", "typescript", "lint", "static-analysis", "code-quality"]
+keywords = ["typescript", "javascript", "lint", "static-analysis", "code-quality"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]

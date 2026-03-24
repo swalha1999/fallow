@@ -8,7 +8,7 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "CLI for the fallow JavaScript/TypeScript codebase analyzer"
+description = "CLI for the fallow TypeScript/JavaScript codebase analyzer"
 readme = "../../README.md"
 
 [[bin]]

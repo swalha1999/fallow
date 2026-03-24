@@ -1,6 +1,6 @@
 # fallow
 
-The codebase analyzer for JavaScript and TypeScript, built in Rust.
+The codebase analyzer for TypeScript and JavaScript, built in Rust.
 
 [![CI](https://github.com/fallow-rs/fallow/actions/workflows/ci.yml/badge.svg)](https://github.com/fallow-rs/fallow/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/fallow.svg)](https://www.npmjs.com/package/fallow)

@@ -1,6 +1,6 @@
 # Ecosystem Tests
 
-Tests fallow against real-world open-source JavaScript/TypeScript projects to catch crashes, panics, and regressions that unit tests and fixtures may miss.
+Tests fallow against real-world open-source TypeScript/JavaScript projects to catch crashes, panics, and regressions that unit tests and fixtures may miss.
 
 ## What this tests
 

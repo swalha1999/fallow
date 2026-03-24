@@ -136,26 +136,19 @@ fn is_plugin_file(path: &Path) -> bool {
 }
 
 /// Parse a plugin definition from file content based on format.
-#[expect(clippy::print_stderr)]
 fn parse_plugin(content: &str, format: &PluginFormat, path: &Path) -> Option<ExternalPluginDef> {
     match format {
         PluginFormat::Toml => match toml::from_str::<ExternalPluginDef>(content) {
             Ok(plugin) => Some(plugin),
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to parse external plugin {}: {e}",
-                    path.display()
-                );
+                tracing::warn!("failed to parse external plugin {}: {e}", path.display());
                 None
             }
         },
         PluginFormat::Json => match serde_json::from_str::<ExternalPluginDef>(content) {
             Ok(plugin) => Some(plugin),
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to parse external plugin {}: {e}",
-                    path.display()
-                );
+                tracing::warn!("failed to parse external plugin {}: {e}", path.display());
                 None
             }
         },
@@ -167,18 +160,12 @@ fn parse_plugin(content: &str, format: &PluginFormat, path: &Path) -> Option<Ext
                 Ok(_) => match serde_json::from_str::<ExternalPluginDef>(&stripped) {
                     Ok(plugin) => Some(plugin),
                     Err(e) => {
-                        eprintln!(
-                            "Warning: failed to parse external plugin {}: {e}",
-                            path.display()
-                        );
+                        tracing::warn!("failed to parse external plugin {}: {e}", path.display());
                         None
                     }
                 },
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to strip comments from {}: {e}",
-                        path.display()
-                    );
+                    tracing::warn!("failed to strip comments from {}: {e}", path.display());
                     None
                 }
             }
@@ -192,7 +179,6 @@ fn parse_plugin(content: &str, format: &PluginFormat, path: &Path) -> Option<Ext
 /// 1. Paths from the `plugins` config field (files or directories)
 /// 2. `.fallow/plugins/` directory (auto-discover `*.toml`, `*.json`, `*.jsonc` files)
 /// 3. Project root `fallow-plugin-*` files (`.toml`, `.json`, `.jsonc`)
-#[expect(clippy::print_stderr)]
 pub fn discover_external_plugins(
     root: &Path,
     config_plugin_paths: &[String],
@@ -207,7 +193,7 @@ pub fn discover_external_plugins(
     for path_str in config_plugin_paths {
         let path = root.join(path_str);
         if !is_within_root(&path, &canonical_root) {
-            eprintln!("Warning: plugin path '{path_str}' resolves outside project root, skipping");
+            tracing::warn!("plugin path '{path_str}' resolves outside project root, skipping");
             continue;
         }
         if path.is_dir() {
@@ -269,7 +255,6 @@ fn load_plugins_from_dir(
     }
 }
 
-#[expect(clippy::print_stderr)]
 fn load_plugin_file(
     path: &Path,
     canonical_root: &Path,
@@ -278,16 +263,16 @@ fn load_plugin_file(
 ) {
     // Verify symlinks don't escape the project root
     if !is_within_root(path, canonical_root) {
-        eprintln!(
-            "Warning: plugin file '{}' resolves outside project root (symlink?), skipping",
+        tracing::warn!(
+            "plugin file '{}' resolves outside project root (symlink?), skipping",
             path.display()
         );
         return;
     }
 
     let Some(format) = PluginFormat::from_path(path) else {
-        eprintln!(
-            "Warning: unsupported plugin file extension for {}, expected .toml, .json, or .jsonc",
+        tracing::warn!(
+            "unsupported plugin file extension for {}, expected .toml, .json, or .jsonc",
             path.display()
         );
         return;
@@ -297,8 +282,8 @@ fn load_plugin_file(
         Ok(content) => {
             if let Some(plugin) = parse_plugin(&content, &format, path) {
                 if plugin.name.is_empty() {
-                    eprintln!(
-                        "Warning: external plugin in {} has an empty name, skipping",
+                    tracing::warn!(
+                        "external plugin in {} has an empty name, skipping",
                         path.display()
                     );
                     return;
@@ -306,8 +291,8 @@ fn load_plugin_file(
                 if seen.insert(plugin.name.clone()) {
                     plugins.push(plugin);
                 } else {
-                    eprintln!(
-                        "Warning: duplicate external plugin '{}' in {}, skipping",
+                    tracing::warn!(
+                        "duplicate external plugin '{}' in {}, skipping",
                         plugin.name,
                         path.display()
                     );
@@ -315,8 +300,8 @@ fn load_plugin_file(
             }
         }
         Err(e) => {
-            eprintln!(
-                "Warning: failed to read external plugin file {}: {e}",
+            tracing::warn!(
+                "failed to read external plugin file {}: {e}",
                 path.display()
             );
         }

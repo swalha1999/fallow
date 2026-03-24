@@ -66,7 +66,6 @@ pub struct ResolvedConfig {
 
 impl FallowConfig {
     /// Resolve into a fully resolved config with compiled globs.
-    #[expect(clippy::print_stderr)]
     pub fn resolve(
         self,
         root: PathBuf,
@@ -82,7 +81,7 @@ impl FallowConfig {
                     ignore_builder.add(glob);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Invalid ignore glob pattern '{pattern}': {e}");
+                    tracing::warn!("invalid ignore glob pattern '{pattern}': {e}");
                 }
             }
         }
@@ -132,7 +131,7 @@ impl FallowConfig {
                     .filter_map(|pattern| match Glob::new(pattern) {
                         Ok(glob) => Some(glob.compile_matcher()),
                         Err(e) => {
-                            eprintln!("Warning: Invalid override glob pattern '{pattern}': {e}");
+                            tracing::warn!("invalid override glob pattern '{pattern}': {e}");
                             None
                         }
                     })

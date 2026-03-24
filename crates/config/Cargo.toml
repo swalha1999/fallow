@@ -21,6 +21,7 @@ glob = { workspace = true }
 globset = { workspace = true }
 miette = { workspace = true }
 rustc-hash = { workspace = true }
+tracing = { workspace = true }
 
 [lints]
 workspace = true

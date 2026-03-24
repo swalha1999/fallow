@@ -346,7 +346,6 @@ fn strip_trailing_commas(input: &str) -> String {
 /// directories that globs like `packages/*` or `**` can match.
 ///
 /// `canonical_root` is pre-computed to avoid repeated `canonicalize()` syscalls.
-#[expect(clippy::print_stderr)]
 fn expand_workspace_glob(
     root: &Path,
     pattern: &str,
@@ -370,7 +369,7 @@ fn expand_workspace_glob(
             })
             .collect(),
         Err(e) => {
-            eprintln!("Warning: Invalid workspace glob pattern '{pattern}': {e}");
+            tracing::warn!("invalid workspace glob pattern '{pattern}': {e}");
             Vec::new()
         }
     }

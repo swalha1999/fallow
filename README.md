@@ -136,6 +136,8 @@ fallow health --format json            # Machine-readable output
 
 Measured on real-world open-source projects (median of 5 runs, 2 warmup). Apple M5 (10 cores), macOS.
 
+### Dead code: fallow dead-code vs knip
+
 | Project | Files | fallow | knip v5 | knip v6 | vs v5 | vs v6 |
 |:--------|------:|-------:|--------:|--------:|------:|------:|
 | [zod](https://github.com/colinhacks/zod) | 174 | **19ms** | 639ms | 334ms | **34x** | **18x** |
@@ -162,7 +164,7 @@ Memory usage is equally striking — fallow uses 4-11x less memory than knip v5 
 
 fallow uses the [Oxc](https://oxc.rs) parser for syntactic analysis, [oxc_semantic](https://docs.rs/oxc_semantic) for scope-aware binding analysis, and [rayon](https://github.com/rayon-rs/rayon) for parallel parsing — no TypeScript compiler, no Node.js runtime. Dead code detection is a graph problem on import/export edges; you don't need type information for that.
 
-### Duplication detection: fallow dupes vs jscpd
+### Duplication: fallow dupes vs jscpd
 
 | Project | Files | fallow | jscpd | Speedup |
 |:--------|------:|-------:|------:|--------:|

@@ -23,6 +23,7 @@ use std::time::Instant;
 
 use errors::FallowError;
 use fallow_config::{PackageJson, ResolvedConfig, discover_workspaces};
+use rayon::prelude::*;
 use results::AnalysisResults;
 use trace::PipelineTimings;
 
@@ -227,10 +228,11 @@ fn analyze_full(
     // Stage 3: Discover entry points (static patterns + plugin-discovered patterns)
     let t = Instant::now();
     let mut entry_points = discover::discover_entry_points(config, files);
-    for ws in workspaces {
-        let ws_entries = discover::discover_workspace_entry_points(&ws.root, config, files);
-        entry_points.extend(ws_entries);
-    }
+    let ws_entries: Vec<_> = workspaces
+        .par_iter()
+        .flat_map(|ws| discover::discover_workspace_entry_points(&ws.root, config, files))
+        .collect();
+    entry_points.extend(ws_entries);
     let plugin_entries = discover::discover_plugin_entry_points(&plugin_result, config, files);
     entry_points.extend(plugin_entries);
     let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
@@ -381,10 +383,12 @@ fn run_plugins(
         })
         .collect();
 
-    // Run plugins for each workspace package using the fast path
-    for ws in workspaces {
-        let ws_pkg_path = ws.root.join("package.json");
-        if let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path) {
+    // Run plugins for each workspace package in parallel, then merge results.
+    let ws_results: Vec<_> = workspaces
+        .par_iter()
+        .filter_map(|ws| {
+            let ws_pkg_path = ws.root.join("package.json");
+            let ws_pkg = PackageJson::load(&ws_pkg_path).ok()?;
             let ws_result = registry.run_workspace_fast(
                 &ws_pkg,
                 &ws.root,
@@ -392,74 +396,72 @@ fn run_plugins(
                 &precompiled_matchers,
                 &relative_files,
             );
-
-            // Early skip if workspace produced no results (common for leaf packages)
             if ws_result.active_plugins.is_empty() {
-                continue;
+                return None;
             }
-
-            // Workspace plugin patterns are relative to the workspace root (e.g., `jest.setup.ts`),
-            // but `discover_plugin_entry_points` matches against paths relative to the monorepo root
-            // (e.g., `packages/foo/jest.setup.ts`). Prefix workspace patterns with the workspace
-            // path to make them matchable from the monorepo root.
             let ws_prefix = ws
                 .root
                 .strip_prefix(&config.root)
                 .unwrap_or(&ws.root)
-                .to_string_lossy();
+                .to_string_lossy()
+                .into_owned();
+            Some((ws_result, ws_prefix))
+        })
+        .collect();
 
-            // Prefix helper: workspace-relative patterns need the workspace prefix
-            // to be matchable from the monorepo root. But patterns that are already
-            // project-root-relative (e.g., from angular.json which uses absolute paths
-            // like "apps/client/src/styles.css") should not be double-prefixed.
-            let prefix_if_needed = |pat: &str| -> String {
-                if pat.starts_with(ws_prefix.as_ref()) || pat.starts_with('/') {
-                    pat.to_string()
-                } else {
-                    format!("{ws_prefix}/{pat}")
-                }
-            };
+    // Merge workspace results sequentially (deterministic order via par_iter index stability)
+    for (ws_result, ws_prefix) in ws_results {
+        // Prefix helper: workspace-relative patterns need the workspace prefix
+        // to be matchable from the monorepo root. But patterns that are already
+        // project-root-relative (e.g., from angular.json which uses absolute paths
+        // like "apps/client/src/styles.css") should not be double-prefixed.
+        let prefix_if_needed = |pat: &str| -> String {
+            if pat.starts_with(ws_prefix.as_str()) || pat.starts_with('/') {
+                pat.to_string()
+            } else {
+                format!("{ws_prefix}/{pat}")
+            }
+        };
 
-            for (pat, pname) in &ws_result.entry_patterns {
-                result
-                    .entry_patterns
-                    .push((prefix_if_needed(pat), pname.clone()));
-            }
-            for (pat, pname) in &ws_result.always_used {
-                result
-                    .always_used
-                    .push((prefix_if_needed(pat), pname.clone()));
-            }
-            for (pat, pname) in &ws_result.discovered_always_used {
-                result
-                    .discovered_always_used
-                    .push((prefix_if_needed(pat), pname.clone()));
-            }
-            for (file_pat, exports) in &ws_result.used_exports {
-                result
-                    .used_exports
-                    .push((prefix_if_needed(file_pat), exports.clone()));
-            }
-            // Merge active plugin names (deduplicated)
-            for plugin_name in &ws_result.active_plugins {
-                if !result.active_plugins.contains(plugin_name) {
-                    result.active_plugins.push(plugin_name.clone());
-                }
-            }
-            // These don't need prefixing (absolute paths / package names)
+        for (pat, pname) in &ws_result.entry_patterns {
             result
-                .referenced_dependencies
-                .extend(ws_result.referenced_dependencies);
-            result.setup_files.extend(ws_result.setup_files);
+                .entry_patterns
+                .push((prefix_if_needed(pat), pname.clone()));
+        }
+        for (pat, pname) in &ws_result.always_used {
             result
-                .tooling_dependencies
-                .extend(ws_result.tooling_dependencies);
-            // Virtual module prefixes (e.g., Docusaurus @theme/, @site/) are
-            // package-name prefixes, not file paths — no workspace prefix needed.
-            for prefix in &ws_result.virtual_module_prefixes {
-                if !result.virtual_module_prefixes.contains(prefix) {
-                    result.virtual_module_prefixes.push(prefix.clone());
-                }
+                .always_used
+                .push((prefix_if_needed(pat), pname.clone()));
+        }
+        for (pat, pname) in &ws_result.discovered_always_used {
+            result
+                .discovered_always_used
+                .push((prefix_if_needed(pat), pname.clone()));
+        }
+        for (file_pat, exports) in &ws_result.used_exports {
+            result
+                .used_exports
+                .push((prefix_if_needed(file_pat), exports.clone()));
+        }
+        // Merge active plugin names (deduplicated)
+        for plugin_name in &ws_result.active_plugins {
+            if !result.active_plugins.contains(plugin_name) {
+                result.active_plugins.push(plugin_name.clone());
+            }
+        }
+        // These don't need prefixing (absolute paths / package names)
+        result
+            .referenced_dependencies
+            .extend(ws_result.referenced_dependencies);
+        result.setup_files.extend(ws_result.setup_files);
+        result
+            .tooling_dependencies
+            .extend(ws_result.tooling_dependencies);
+        // Virtual module prefixes (e.g., Docusaurus @theme/, @site/) are
+        // package-name prefixes, not file paths — no workspace prefix needed.
+        for prefix in &ws_result.virtual_module_prefixes {
+            if !result.virtual_module_prefixes.contains(prefix) {
+                result.virtual_module_prefixes.push(prefix.clone());
             }
         }
     }

@@ -88,7 +88,6 @@ pub fn discover_files(config: &ResolvedConfig) -> Vec<DiscoveredFile> {
         .types(types)
         .threads(config.threads)
         .filter_entry(is_allowed_hidden);
-    let walker = walk_builder.build();
 
     // Build production exclude matcher if needed
     let production_excludes = if config.production {
@@ -102,6 +101,8 @@ pub fn discover_files(config: &ResolvedConfig) -> Vec<DiscoveredFile> {
     } else {
         None
     };
+
+    let walker = walk_builder.build();
 
     let mut files: Vec<DiscoveredFile> = walker
         .filter_map(|entry| entry.ok())

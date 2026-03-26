@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-03-26
+
+### Added
+
+- **Efficiency score** — refactoring targets now include an `efficiency` field (`priority / effort`) and are sorted by efficiency descending, surfacing quick wins first
+- **Confidence levels** — each target includes a `confidence` field (`high`/`medium`/`low`) based on data source reliability: `high` for graph/AST analysis, `medium` for heuristic thresholds, `low` for git-dependent recommendations
+- **Adaptive thresholds** — fan-in/fan-out normalization uses percentile-based thresholds (p95/p90/p75/p25) from the project's distribution instead of hardcoded constants, with floors to prevent degenerate values in small projects
+- **Target thresholds in JSON** — `target_thresholds` object in health JSON output exposes the computed adaptive thresholds for programmatic consumers
+- **Effort summary** — human output shows effort breakdown after the targets header (e.g., `16 low effort · 34 medium · 43 high`)
+- **Machine-parseable compact categories** — compact output uses underscore-delimited category labels (`circular_dep`, `dead_code`) instead of space-separated labels
+
+### Changed
+
+- **Human output: efficiency as primary score** — the hero number is now efficiency (sort key), with priority shown as a dimmed secondary value
+- **Human output: labeled metadata** — effort and confidence on line 2 are now prefixed (`effort:low · confidence:high`) for self-documenting output
+- **Markdown table: 5 columns** — reduced from 7 to 5 columns by merging effort/confidence and dropping the separate priority column
+- **SARIF messages** — now include priority, efficiency, and confidence values
+
+### Fixed
+
+- **Cycle path deduplication** — `evidence.cycle_path` no longer contains duplicate entries when a file participates in multiple cycles
+- **GitLab CI template** — uses Alpine image and detects package manager correctly
+- **Benchmark alert threshold** — corrected for `customBiggerIsBetter` benchmarks
+- **SARIF version redaction** in test fixtures
+- **MCP analyze tool description** — corrected to match `dead-code` command
+
 ## [2.1.0] - 2026-03-25
 
 ### Added
@@ -425,7 +451,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/fallow-rs/fallow/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/fallow-rs/fallow/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/fallow-rs/fallow/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/fallow-rs/fallow/compare/v1.9.0...v2.0.0
 [1.9.0]: https://github.com/fallow-rs/fallow/compare/v1.8.1...v1.9.0

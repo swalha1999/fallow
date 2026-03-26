@@ -258,6 +258,87 @@ jobs:
             exit 1
           fi
 
+  test-dead-code-alias:
+    name: Test dead-code command alias
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Run action with dead-code command
+        id: fallow
+        uses: ./
+        with:
+          command: dead-code
+          root: tests/fixtures/basic-project
+          format: json
+          fail-on-issues: false
+
+      - name: Verify dead-code alias produces valid output
+        env:
+          RESULTS_PATH: ${{ steps.fallow.outputs.results }}
+          ISSUES: ${{ steps.fallow.outputs.issues }}
+        run: |
+          if [ ! -f "$RESULTS_PATH" ]; then
+            echo "::error::Results file not found"
+            exit 1
+          fi
+          jq empty "$RESULTS_PATH"
+          jq -e '.total_issues' "$RESULTS_PATH" > /dev/null
+          jq -e '.unused_exports' "$RESULTS_PATH" > /dev/null
+          echo "dead-code alias: JSON validated, $ISSUES issues"
+
+  test-bare-combined:
+    name: Test bare invocation (combined JSON)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Run action with no command (bare invocation)
+        id: fallow
+        uses: ./
+        with:
+          root: tests/fixtures/basic-project
+          format: json
+          fail-on-issues: false
+
+      - name: Verify combined JSON structure
+        env:
+          RESULTS_PATH: ${{ steps.fallow.outputs.results }}
+          ISSUES: ${{ steps.fallow.outputs.issues }}
+        run: |
+          if [ ! -f "$RESULTS_PATH" ]; then
+            echo "::error::Results file not found"
+            exit 1
+          fi
+          jq empty "$RESULTS_PATH"
+
+          # Combined output nests results under .check, .dupes, .health
+          jq -e '.check' "$RESULTS_PATH" > /dev/null
+          jq -e '.dupes' "$RESULTS_PATH" > /dev/null
+          jq -e '.health' "$RESULTS_PATH" > /dev/null
+
+          # Verify nested structure
+          jq -e '.check.total_issues' "$RESULTS_PATH" > /dev/null
+          jq -e '.dupes.stats.clone_groups' "$RESULTS_PATH" > /dev/null
+          jq -e '.health.summary.functions_above_threshold' "$RESULTS_PATH" > /dev/null
+          echo "Combined JSON validated: check + dupes + health, $ISSUES total issues"
+
   test-comment:
     name: Test PR comment
     runs-on: ubuntu-latest

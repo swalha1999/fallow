@@ -35,13 +35,13 @@ pub struct CombinedOptions<'a> {
 pub fn resolve_analyses(only: &[AnalysisKind], skip: &[AnalysisKind]) -> (bool, bool, bool) {
     if !only.is_empty() {
         (
-            only.contains(&AnalysisKind::Check),
+            only.contains(&AnalysisKind::DeadCode),
             only.contains(&AnalysisKind::Dupes),
             only.contains(&AnalysisKind::Health),
         )
     } else if !skip.is_empty() {
         (
-            !skip.contains(&AnalysisKind::Check),
+            !skip.contains(&AnalysisKind::DeadCode),
             !skip.contains(&AnalysisKind::Dupes),
             !skip.contains(&AnalysisKind::Health),
         )

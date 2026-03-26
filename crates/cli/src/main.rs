@@ -36,7 +36,7 @@ use list::ListOptions;
     name = "fallow",
     about = "Find unused code, circular dependencies, code duplication, and complexity hotspots in TypeScript/JavaScript projects",
     version,
-    after_help = "When no command is given, runs check + dupes + health together.\nUse --only/--skip to select specific analyses."
+    after_help = "When no command is given, runs dead-code + dupes + health together.\nUse --only/--skip to select specific analyses."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -117,11 +117,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     sarif_file: Option<PathBuf>,
 
-    /// Run only specific analyses when no subcommand is given (comma-separated: check,dupes,health)
+    /// Run only specific analyses when no subcommand is given (comma-separated: dead-code,dupes,health)
     #[arg(long, value_delimiter = ',')]
     only: Vec<AnalysisKind>,
 
-    /// Skip specific analyses when no subcommand is given (comma-separated: check,dupes,health)
+    /// Skip specific analyses when no subcommand is given (comma-separated: dead-code,dupes,health)
     #[arg(long, value_delimiter = ',')]
     skip: Vec<AnalysisKind>,
 }
@@ -129,7 +129,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Analyze project for unused code, circular dependencies, and code duplication
-    #[command(visible_alias = "dead-code")]
+    #[command(name = "dead-code", alias = "check")]
     Check {
         /// Only report unused files
         #[arg(long)]
@@ -375,7 +375,8 @@ impl From<Format> for fallow_config::OutputFormat {
 /// Analysis types for --only/--skip selection.
 #[derive(Clone, PartialEq, Eq, clap::ValueEnum)]
 pub enum AnalysisKind {
-    Check,
+    #[value(alias = "check")]
+    DeadCode,
     Dupes,
     Health,
 }
@@ -668,7 +669,7 @@ fn main() -> ExitCode {
         )
     {
         return emit_error(
-            "--ci, --fail-on-issues, and --sarif-file are only valid with check, dupes, health, or bare invocation",
+            "--ci, --fail-on-issues, and --sarif-file are only valid with dead-code, dupes, health, or bare invocation",
             2,
             &output,
         );
@@ -815,6 +816,7 @@ fn main() -> ExitCode {
                 config_path: &cli.config,
                 output,
                 threads,
+                no_cache: cli.no_cache,
                 entry_points,
                 files,
                 plugins,

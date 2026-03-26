@@ -9,6 +9,7 @@ pub struct ListOptions<'a> {
     pub config_path: &'a Option<std::path::PathBuf>,
     pub output: OutputFormat,
     pub threads: usize,
+    pub no_cache: bool,
     pub entry_points: bool,
     pub files: bool,
     pub plugins: bool,
@@ -20,7 +21,7 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
         opts.root,
         opts.config_path,
         OutputFormat::Human,
-        true,
+        opts.no_cache,
         opts.threads,
         opts.production,
         true, // list command doesn't need progress bars

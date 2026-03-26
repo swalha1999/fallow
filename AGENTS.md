@@ -77,13 +77,13 @@ Runs all analyses: check + dupes + health. Use `--only`/`--skip` to select.
 
 ```bash
 fallow --format json --quiet              # all three analyses
-fallow --only check --format json --quiet # just dead code
+fallow --only dead-code --format json --quiet # just dead code
 fallow --skip health --format json        # check + dupes only
 ```
 
 **Flags:**
-- `--only <check,dupes,health>` -- run only these analyses (comma-separated)
-- `--skip <check,dupes,health>` -- skip these analyses (comma-separated)
+- `--only <dead-code,dupes,health>` -- run only these analyses (comma-separated)
+- `--skip <dead-code,dupes,health>` -- skip these analyses (comma-separated)
 - `--ci` -- CI mode: sarif + quiet + fail-on-issues
 - `--fail-on-issues` -- exit 1 if any issues are found
 

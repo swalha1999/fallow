@@ -138,10 +138,10 @@ inputs:
     required: false
   # Bare invocation selectors
   only:
-    description: 'Run only these analyses when no command is specified (comma-separated: check,dupes,health)'
+    description: 'Run only these analyses when no command is specified (comma-separated: dead-code,dupes,health)'
     required: false
   skip:
-    description: 'Skip these analyses when no command is specified (comma-separated: check,dupes,health)'
+    description: 'Skip these analyses when no command is specified (comma-separated: dead-code,dupes,health)'
     required: false
 
 outputs:
@@ -332,6 +332,30 @@ runs:
         end
         JQEOF
 
+        # --- Combined (bare invocation) summary ---
+        cat > "$FALLOW_TMP/summary-combined.jq" << 'JQEOF'
+        def count(obj; key): obj | if . then .[key] // 0 else 0 end;
+
+        (count(.check; "total_issues")) as $check_issues |
+        (count(.dupes.stats; "clone_groups")) as $dupes_groups |
+        (count(.health.summary; "functions_above_threshold")) as $health_findings |
+        ($check_issues + $dupes_groups + $health_findings) as $total |
+
+        if $total == 0 then
+          "# Fallow — Codebase Analysis\n\n" +
+          "> [!NOTE]\n> **No issues found**\n\n" +
+          "Dead code: clean \u00b7 Duplication: clean \u00b7 Complexity: clean"
+        else
+          "# Fallow — Codebase Analysis\n\n" +
+          "> [!WARNING]\n> **\($total) issues** found\n\n" +
+          "| Analysis | Issues |\n|----------|-------:|\n" +
+          (if $check_issues > 0 then "| Dead code | \($check_issues) |\n" else "" end) +
+          (if $dupes_groups > 0 then "| Duplication | \($dupes_groups) clone groups |\n" else "" end) +
+          (if $health_findings > 0 then "| Complexity | \($health_findings) functions above threshold |\n" else "" end) +
+          "\n> Run `fallow dead-code`, `fallow dupes`, or `fallow health` individually for detailed findings."
+        end
+        JQEOF
+
     - name: Install fallow
       shell: bash
       env:
@@ -415,9 +439,9 @@ runs:
           echo "::error::threshold must be a number, got: ${INPUT_THRESHOLD}"; exit 2
         fi
 
-        # Check for --sarif-file support (global flag since v2, check-only in v1)
+        # Check for --sarif-file support (global flag since v2)
         HAS_SARIF_FILE=false
-        if { [ "$INPUT_COMMAND" = "dead-code" ] || [ "$INPUT_COMMAND" = "check" ]; } && \
+        if { [ "$INPUT_COMMAND" = "dead-code" ] || [ "$INPUT_COMMAND" = "check" ] || [ -z "$INPUT_COMMAND" ]; } && \
            fallow dead-code --help 2>/dev/null | grep -q -- '--sarif-file'; then
           HAS_SARIF_FILE=true
         fi
@@ -495,6 +519,11 @@ runs:
               ARGS+=(--yes)
             fi
             ;;
+          "")
+            if [ "$INPUT_FORMAT" = "sarif" ] && [ "$HAS_SARIF_FILE" = "true" ]; then
+              ARGS+=(--sarif-file fallow-results.sarif)
+            fi
+            ;;
         esac
 
         # Parse extra arguments safely (guard against empty producing [""])
@@ -526,6 +555,12 @@ runs:
           [ -n "$INPUT_WORKSPACE" ] && SARIF_ARGS+=(--workspace "$INPUT_WORKSPACE")
           [ "$INPUT_NO_CACHE" = "true" ] && SARIF_ARGS+=(--no-cache)
           [ -n "$INPUT_THREADS" ] && SARIF_ARGS+=(--threads "$INPUT_THREADS")
+
+          # Bare invocation: carry over --only/--skip
+          if [ -z "$INPUT_COMMAND" ]; then
+            [ -n "$INPUT_ONLY" ] && SARIF_ARGS+=(--only "$INPUT_ONLY")
+            [ -n "$INPUT_SKIP" ] && SARIF_ARGS+=(--skip "$INPUT_SKIP")
+          fi
 
           # Carry over command-specific args for SARIF run
           if [ "$INPUT_COMMAND" = "dupes" ]; then
@@ -610,15 +645,10 @@ runs:
           dupes)           JQ_FILE="$FALLOW_TMP/summary-dupes.jq" ;;
           health)          JQ_FILE="$FALLOW_TMP/summary-health.jq" ;;
           fix)             JQ_FILE="$FALLOW_TMP/summary-fix.jq" ;;
-          "")              JQ_FILE="$FALLOW_TMP/summary-check.jq" ;;  # bare invocation: summarize the check portion
+          "")              JQ_FILE="$FALLOW_TMP/summary-combined.jq" ;;
           *)               echo "::error::Unexpected command: ${FALLOW_COMMAND}"; exit 2 ;;
         esac
-        # Bare invocation nests results under .check — extract for the jq script
-        if [ -z "$FALLOW_COMMAND" ]; then
-          jq -r '.check' fallow-results.json | jq -r -f "$JQ_FILE" >> "$GITHUB_STEP_SUMMARY"
-        else
-          jq -r -f "$JQ_FILE" fallow-results.json >> "$GITHUB_STEP_SUMMARY"
-        fi
+        jq -r -f "$JQ_FILE" fallow-results.json >> "$GITHUB_STEP_SUMMARY"
 
     - name: Check Code Scanning availability
       id: ghas-check
@@ -671,17 +701,12 @@ runs:
           dupes)           JQ_FILE="$FALLOW_TMP/summary-dupes.jq" ;;
           health)          JQ_FILE="$FALLOW_TMP/summary-health.jq" ;;
           fix)             JQ_FILE="$FALLOW_TMP/summary-fix.jq" ;;
-          "")              JQ_FILE="$FALLOW_TMP/summary-check.jq" ;;
+          "")              JQ_FILE="$FALLOW_TMP/summary-combined.jq" ;;
           *)               echo "::error::Unexpected command: ${FALLOW_COMMAND}"; exit 2 ;;
         esac
 
-        # Generate comment body (bare invocation: extract .check sub-object for the jq script)
-        if [ -z "$FALLOW_COMMAND" ]; then
-          JQ_INPUT=$(jq -r '.check' fallow-results.json)
-        else
-          JQ_INPUT=$(cat fallow-results.json)
-        fi
-        if ! COMMENT_BODY="$(echo "$JQ_INPUT" | jq -r -f "$JQ_FILE")
+        # Generate comment body
+        if ! COMMENT_BODY="$(jq -r -f "$JQ_FILE" fallow-results.json)
 
         <!-- fallow-results -->"; then
           echo "::warning::Failed to generate PR comment body"

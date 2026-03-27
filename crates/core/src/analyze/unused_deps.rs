@@ -404,16 +404,13 @@ pub fn find_test_only_dependencies(
 
         // Check if ALL importing files are test/dev files
         let all_test_only = file_ids.iter().all(|id| {
-            graph
-                .modules
-                .get(id.0 as usize)
-                .is_some_and(|module| {
-                    let relative = module
-                        .path
-                        .strip_prefix(&config.root)
-                        .unwrap_or(&module.path);
-                    test_globs.is_match(relative)
-                })
+            graph.modules.get(id.0 as usize).is_some_and(|module| {
+                let relative = module
+                    .path
+                    .strip_prefix(&config.root)
+                    .unwrap_or(&module.path);
+                test_globs.is_match(relative)
+            })
         });
 
         if all_test_only {

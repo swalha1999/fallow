@@ -104,6 +104,7 @@
         "unlisted-dependencies": "error",
         "duplicate-exports": "error",
         "type-only-dependencies": "warn",
+        "test-only-dependencies": "warn",
         "circular-dependencies": "error"
       }
     },
@@ -532,6 +533,10 @@
           "$ref": "#/$defs/Severity",
           "default": "warn"
         },
+        "test-only-dependencies": {
+          "$ref": "#/$defs/Severity",
+          "default": "warn"
+        },
         "circular-dependencies": {
           "$ref": "#/$defs/Severity",
           "default": "error"
@@ -694,6 +699,16 @@
           ]
         },
         "type-only-dependencies": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "test-only-dependencies": {
           "anyOf": [
             {
               "$ref": "#/$defs/Severity"

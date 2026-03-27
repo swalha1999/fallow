@@ -95,11 +95,7 @@ mod tests {
     fn resolve_config_json_plugins() {
         let source = r#"{"plugins": ["prettier-plugin-svelte", "prettier-plugin-tailwindcss"]}"#;
         let plugin = PrettierPlugin;
-        let result = plugin.resolve_config(
-            Path::new(".prettierrc"),
-            source,
-            Path::new("/project"),
-        );
+        let result = plugin.resolve_config(Path::new(".prettierrc"), source, Path::new("/project"));
 
         let deps = &result.referenced_dependencies;
         assert!(deps.contains(&"prettier-plugin-svelte".to_string()));
@@ -131,11 +127,7 @@ mod tests {
     fn resolve_config_empty() {
         let source = r#"{"singleQuote": true}"#;
         let plugin = PrettierPlugin;
-        let result = plugin.resolve_config(
-            Path::new(".prettierrc"),
-            source,
-            Path::new("/project"),
-        );
+        let result = plugin.resolve_config(Path::new(".prettierrc"), source, Path::new("/project"));
 
         assert!(result.referenced_dependencies.is_empty());
     }

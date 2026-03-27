@@ -30,7 +30,7 @@
     "CheckOutput": {
       "title": "fallow dead-code --format json",
       "type": "object",
-      "required": ["schema_version", "version", "elapsed_ms", "total_issues", "unused_files", "unused_exports", "unused_types", "unused_dependencies", "unused_dev_dependencies", "unused_optional_dependencies", "unused_enum_members", "unused_class_members", "unresolved_imports", "unlisted_dependencies", "duplicate_exports", "type_only_dependencies", "circular_dependencies"],
+      "required": ["schema_version", "version", "elapsed_ms", "total_issues", "unused_files", "unused_exports", "unused_types", "unused_dependencies", "unused_dev_dependencies", "unused_optional_dependencies", "unused_enum_members", "unused_class_members", "unresolved_imports", "unlisted_dependencies", "duplicate_exports", "type_only_dependencies", "test_only_dependencies", "circular_dependencies"],
       "properties": {
         "schema_version": { "$ref": "#/definitions/SchemaVersion" },
         "version": { "$ref": "#/definitions/ToolVersion" },
@@ -86,6 +86,10 @@
         "type_only_dependencies": {
           "type": "array",
           "items": { "$ref": "#/definitions/TypeOnlyDependency" }
+        },
+        "test_only_dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TestOnlyDependency" }
         },
         "circular_dependencies": {
           "type": "array",
@@ -653,6 +657,24 @@
         "package_name": {
           "type": "string",
           "description": "Production dependency that is only used via type-only imports."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to the package.json where this dependency is listed."
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number of the dependency entry in package.json."
+        }
+      }
+    },
+    "TestOnlyDependency": {
+      "type": "object",
+      "required": ["package_name", "path", "line"],
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "description": "Production dependency that is only imported by test files — consider moving to devDependencies."
         },
         "path": {
           "type": "string",

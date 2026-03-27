@@ -56,7 +56,7 @@ fallow watch                # Re-analyze on file changes
 
 ## Dead code
 
-Finds unused files, exports, dependencies, types, enum members, class members, unresolved imports, unlisted dependencies, duplicate exports, circular dependencies, and type-only dependencies.
+Finds unused files, exports, dependencies, types, enum members, class members, unresolved imports, unlisted dependencies, duplicate exports, circular dependencies, type-only dependencies, and test-only production dependencies.
 
 ```bash
 fallow dead-code                          # All dead code issues

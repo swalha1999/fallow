@@ -1002,7 +1002,9 @@ mod tests {
         assert!(text.contains("Unlisted dependencies (1)"));
         assert!(text.contains("Duplicate exports (1)"));
         assert!(text.contains("Type-only dependencies (consider moving to devDependencies) (1)"));
-        assert!(text.contains("Test-only production dependencies (consider moving to devDependencies) (1)"));
+        assert!(text.contains(
+            "Test-only production dependencies (consider moving to devDependencies) (1)"
+        ));
         assert!(text.contains("Circular dependencies (1)"));
     }
 

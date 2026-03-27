@@ -954,4 +954,341 @@ mod tests {
         let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
         assert_eq!(keys, vec!["autoprefixer", "tailwindcss"]);
     }
+
+    // ── JSON file extension detection ────────────────────────────
+
+    fn json_path() -> PathBuf {
+        PathBuf::from("config.json")
+    }
+
+    #[test]
+    fn json_file_parsed_correctly() {
+        let source = r#"{"key": "value", "list": ["a", "b"]}"#;
+        let val = extract_config_string(source, &json_path(), &["key"]);
+        assert_eq!(val, Some("value".to_string()));
+
+        let list = extract_config_string_array(source, &json_path(), &["list"]);
+        assert_eq!(list, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn jsonc_file_parsed_correctly() {
+        let source = r#"{"key": "value"}"#;
+        let path = PathBuf::from("tsconfig.jsonc");
+        let val = extract_config_string(source, &path, &["key"]);
+        assert_eq!(val, Some("value".to_string()));
+    }
+
+    // ── defineConfig with arrow function ─────────────────────────
+
+    #[test]
+    fn extract_define_config_arrow_function() {
+        let source = r#"
+            import { defineConfig } from 'vite';
+            export default defineConfig(() => ({
+                test: {
+                    include: ["**/*.test.ts"]
+                }
+            }));
+        "#;
+        let include = extract_config_string_array(source, &ts_path(), &["test", "include"]);
+        assert_eq!(include, vec!["**/*.test.ts"]);
+    }
+
+    // ── module.exports with nested properties ────────────────────
+
+    #[test]
+    fn module_exports_nested_string() {
+        let source = r#"
+            module.exports = {
+                resolve: {
+                    alias: {
+                        "@": "./src"
+                    }
+                }
+            };
+        "#;
+        let val = extract_config_string(source, &js_path(), &["resolve", "alias", "@"]);
+        assert_eq!(val, Some("./src".to_string()));
+    }
+
+    // ── extract_config_property_strings (recursive) ──────────────
+
+    #[test]
+    fn property_strings_nested_objects() {
+        let source = r#"
+            export default {
+                plugins: {
+                    group1: { a: "val-a" },
+                    group2: { b: "val-b" }
+                }
+            };
+        "#;
+        let values = extract_config_property_strings(source, &js_path(), "plugins");
+        assert!(values.contains(&"val-a".to_string()));
+        assert!(values.contains(&"val-b".to_string()));
+    }
+
+    #[test]
+    fn property_strings_missing_key_returns_empty() {
+        let source = r#"export default { other: "value" };"#;
+        let values = extract_config_property_strings(source, &js_path(), "missing");
+        assert!(values.is_empty());
+    }
+
+    // ── extract_config_shallow_strings ────────────────────────────
+
+    #[test]
+    fn shallow_strings_tuple_array() {
+        let source = r#"
+            module.exports = {
+                reporters: ["default", ["jest-junit", { outputDirectory: "reports" }]]
+            };
+        "#;
+        let values = extract_config_shallow_strings(source, &js_path(), "reporters");
+        assert_eq!(values, vec!["default", "jest-junit"]);
+        // "reports" should NOT be extracted (it's inside an options object)
+        assert!(!values.contains(&"reports".to_string()));
+    }
+
+    #[test]
+    fn shallow_strings_single_string() {
+        let source = r#"export default { preset: "ts-jest" };"#;
+        let values = extract_config_shallow_strings(source, &js_path(), "preset");
+        assert_eq!(values, vec!["ts-jest"]);
+    }
+
+    #[test]
+    fn shallow_strings_missing_key() {
+        let source = r#"export default { other: "val" };"#;
+        let values = extract_config_shallow_strings(source, &js_path(), "missing");
+        assert!(values.is_empty());
+    }
+
+    // ── extract_config_string_or_array edge cases ────────────────
+
+    #[test]
+    fn string_or_array_missing_path() {
+        let source = r"export default {};";
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn string_or_array_non_string_values() {
+        // When values are not strings (e.g., numbers), they should be skipped
+        let source = r"export default { entry: [42, true] };";
+        let result = extract_config_string_or_array(source, &js_path(), &["entry"]);
+        assert!(result.is_empty());
+    }
+
+    // ── extract_config_array_nested_string_or_array ──────────────
+
+    #[test]
+    fn array_nested_extraction() {
+        let source = r#"
+            export default defineConfig({
+                test: {
+                    projects: [
+                        {
+                            test: {
+                                setupFiles: ["./test/setup-a.ts"]
+                            }
+                        },
+                        {
+                            test: {
+                                setupFiles: "./test/setup-b.ts"
+                            }
+                        }
+                    ]
+                }
+            });
+        "#;
+        let results = extract_config_array_nested_string_or_array(
+            source,
+            &ts_path(),
+            &["test", "projects"],
+            &["test", "setupFiles"],
+        );
+        assert!(results.contains(&"./test/setup-a.ts".to_string()));
+        assert!(results.contains(&"./test/setup-b.ts".to_string()));
+    }
+
+    #[test]
+    fn array_nested_empty_when_no_array() {
+        let source = r#"export default { test: { projects: "not-an-array" } };"#;
+        let results = extract_config_array_nested_string_or_array(
+            source,
+            &js_path(),
+            &["test", "projects"],
+            &["test", "setupFiles"],
+        );
+        assert!(results.is_empty());
+    }
+
+    // ── extract_config_object_nested_string_or_array ─────────────
+
+    #[test]
+    fn object_nested_extraction() {
+        let source = r#"{
+            "projects": {
+                "app-one": {
+                    "architect": {
+                        "build": {
+                            "options": {
+                                "styles": ["src/styles.css"]
+                            }
+                        }
+                    }
+                }
+            }
+        }"#;
+        let results = extract_config_object_nested_string_or_array(
+            source,
+            &json_path(),
+            &["projects"],
+            &["architect", "build", "options", "styles"],
+        );
+        assert_eq!(results, vec!["src/styles.css"]);
+    }
+
+    // ── extract_config_object_nested_strings ─────────────────────
+
+    #[test]
+    fn object_nested_strings_extraction() {
+        let source = r#"{
+            "targets": {
+                "build": {
+                    "executor": "@angular/build:application"
+                },
+                "test": {
+                    "executor": "@nx/vite:test"
+                }
+            }
+        }"#;
+        let results =
+            extract_config_object_nested_strings(source, &json_path(), &["targets"], &["executor"]);
+        assert!(results.contains(&"@angular/build:application".to_string()));
+        assert!(results.contains(&"@nx/vite:test".to_string()));
+    }
+
+    // ── extract_config_require_strings edge cases ────────────────
+
+    #[test]
+    fn require_strings_direct_call() {
+        let source = r"module.exports = { adapter: require('@sveltejs/adapter-node') };";
+        let deps = extract_config_require_strings(source, &js_path(), "adapter");
+        assert_eq!(deps, vec!["@sveltejs/adapter-node"]);
+    }
+
+    #[test]
+    fn require_strings_no_matching_key() {
+        let source = r"module.exports = { other: require('something') };";
+        let deps = extract_config_require_strings(source, &js_path(), "plugins");
+        assert!(deps.is_empty());
+    }
+
+    // ── extract_imports edge cases ───────────────────────────────
+
+    #[test]
+    fn extract_imports_no_imports() {
+        let source = r"export default {};";
+        let imports = extract_imports(source, &js_path());
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn extract_imports_side_effect_import() {
+        let source = r"
+            import 'polyfill';
+            import './local-setup';
+            export default {};
+        ";
+        let imports = extract_imports(source, &js_path());
+        assert_eq!(imports, vec!["polyfill", "./local-setup"]);
+    }
+
+    #[test]
+    fn extract_imports_mixed_specifiers() {
+        let source = r"
+            import defaultExport from 'module-a';
+            import { named } from 'module-b';
+            import * as ns from 'module-c';
+            export default {};
+        ";
+        let imports = extract_imports(source, &js_path());
+        assert_eq!(imports, vec!["module-a", "module-b", "module-c"]);
+    }
+
+    // ── Template literal support ─────────────────────────────────
+
+    #[test]
+    fn template_literal_in_string_or_array() {
+        let source = r"export default { entry: `./src/index.ts` };";
+        let result = extract_config_string_or_array(source, &ts_path(), &["entry"]);
+        assert_eq!(result, vec!["./src/index.ts"]);
+    }
+
+    #[test]
+    fn template_literal_in_config_string() {
+        let source = r"export default { testDir: `./tests` };";
+        let val = extract_config_string(source, &js_path(), &["testDir"]);
+        assert_eq!(val, Some("./tests".to_string()));
+    }
+
+    // ── Empty/missing path navigation ────────────────────────────
+
+    #[test]
+    fn nested_string_array_empty_path() {
+        let source = r#"export default { items: ["a", "b"] };"#;
+        let result = extract_config_string_array(source, &js_path(), &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn nested_string_empty_path() {
+        let source = r#"export default { key: "val" };"#;
+        let result = extract_config_string(source, &js_path(), &[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn object_keys_empty_path() {
+        let source = r"export default { plugins: {} };";
+        let result = extract_config_object_keys(source, &js_path(), &[]);
+        assert!(result.is_empty());
+    }
+
+    // ── No config object found ───────────────────────────────────
+
+    #[test]
+    fn no_config_object_returns_empty() {
+        // Source with no default export or module.exports
+        let source = r"const x = 42;";
+        let result = extract_config_string(source, &js_path(), &["key"]);
+        assert!(result.is_none());
+
+        let arr = extract_config_string_array(source, &js_path(), &["items"]);
+        assert!(arr.is_empty());
+
+        let keys = extract_config_object_keys(source, &js_path(), &["plugins"]);
+        assert!(keys.is_empty());
+    }
+
+    // ── String literal with string key property ──────────────────
+
+    #[test]
+    fn property_with_string_key() {
+        let source = r#"export default { "string-key": "value" };"#;
+        let val = extract_config_string(source, &js_path(), &["string-key"]);
+        assert_eq!(val, Some("value".to_string()));
+    }
+
+    #[test]
+    fn nested_navigation_through_non_object() {
+        // Trying to navigate through a string value should return None
+        let source = r#"export default { level1: "not-an-object" };"#;
+        let val = extract_config_string(source, &js_path(), &["level1", "level2"]);
+        assert!(val.is_none());
+    }
 }

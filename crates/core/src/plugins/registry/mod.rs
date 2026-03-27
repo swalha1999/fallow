@@ -8,7 +8,7 @@ use fallow_config::{ExternalPluginDef, PackageJson};
 
 use super::Plugin;
 
-mod builtin;
+pub(crate) mod builtin;
 mod helpers;
 
 use helpers::{

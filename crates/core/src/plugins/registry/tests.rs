@@ -1798,3 +1798,349 @@ fn process_external_plugins_detection_not_matched() {
     assert!(!result.active_plugins.contains(&"detect-miss".to_string()));
     assert!(result.entry_patterns.is_empty());
 }
+
+// ── Comprehensive enabler coverage ──────────────────────────
+
+#[test]
+fn all_builtin_plugins_activated_by_their_enablers() {
+    // For every plugin, verify that its enabler package(s) activate it
+    let plugins = builtin::create_builtin_plugins();
+    for plugin in &plugins {
+        let enablers = plugin.enablers();
+        for enabler in enablers {
+            let dep = if enabler.ends_with('/') {
+                // For prefix enablers like "@storybook/", create a matching dep
+                format!("{enabler}test-pkg")
+            } else {
+                enabler.to_string()
+            };
+            let deps = vec![dep.clone()];
+            assert!(
+                plugin.is_enabled_with_deps(&deps, Path::new("/nonexistent-xyz")),
+                "plugin '{}' should be enabled by dep '{}' (enabler: '{}')",
+                plugin.name(),
+                dep,
+                enabler
+            );
+        }
+    }
+}
+
+#[test]
+fn no_builtin_plugin_activated_by_random_dep() {
+    // Ensure no plugin falsely activates with an unrelated dependency
+    let plugins = builtin::create_builtin_plugins();
+    let random_dep = vec!["completely-unrelated-package-xyz-42".to_string()];
+    for plugin in &plugins {
+        // Skip plugins with custom is_enabled_with_deps that check file existence
+        // (vitest, eslint) since they won't find files at a nonexistent path
+        let name = plugin.name();
+        if name == "vitest" || name == "eslint" {
+            continue;
+        }
+        assert!(
+            !plugin.is_enabled_with_deps(&random_dep, Path::new("/nonexistent-xyz")),
+            "plugin '{name}' should NOT activate for unrelated dep"
+        );
+    }
+}
+
+// ── Comprehensive enabler patterns by category ──────────────
+
+#[test]
+fn database_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let cases = vec![
+        ("prisma", make_pkg(&["prisma"])),
+        ("drizzle", make_pkg(&["drizzle-orm"])),
+        ("typeorm", make_pkg(&["typeorm"])),
+    ];
+
+    for (expected_plugin, pkg) in cases {
+        let result = registry.run(&pkg, Path::new("/project"), &[]);
+        assert!(
+            result.active_plugins.contains(&expected_plugin.to_string()),
+            "'{expected_plugin}' plugin should activate with its deps"
+        );
+    }
+}
+
+#[test]
+fn monorepo_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let nx_pkg = make_pkg(&["nx"]);
+    let result = registry.run(&nx_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"nx".to_string()));
+
+    let turbo_pkg = make_pkg(&["turbo"]);
+    let result = registry.run(&turbo_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"turborepo".to_string()));
+}
+
+#[test]
+fn css_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let tailwind_pkg = make_pkg(&["tailwindcss"]);
+    let result = registry.run(&tailwind_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"tailwind".to_string()));
+
+    let postcss_pkg = make_pkg(&["postcss"]);
+    let result = registry.run(&postcss_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"postcss".to_string()));
+}
+
+#[test]
+fn transpiler_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let ts_pkg = make_pkg(&["typescript"]);
+    let result = registry.run(&ts_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"typescript".to_string()));
+
+    let babel_pkg = make_pkg(&["@babel/core"]);
+    let result = registry.run(&babel_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"babel".to_string()));
+
+    let swc_pkg = make_pkg(&["@swc/core"]);
+    let result = registry.run(&swc_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"swc".to_string()));
+}
+
+#[test]
+fn deployment_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let wrangler_pkg = make_pkg(&["wrangler"]);
+    let result = registry.run(&wrangler_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"wrangler".to_string()));
+
+    let sentry_pkg = make_pkg(&["@sentry/node"]);
+    let result = registry.run(&sentry_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"sentry".to_string()));
+}
+
+#[test]
+fn git_hooks_plugins_have_correct_enablers() {
+    let registry = PluginRegistry::default();
+
+    let husky_pkg = make_pkg(&["husky"]);
+    let result = registry.run(&husky_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"husky".to_string()));
+
+    let lint_staged_pkg = make_pkg(&["lint-staged"]);
+    let result = registry.run(&lint_staged_pkg, Path::new("/project"), &[]);
+    assert!(result.active_plugins.contains(&"lint-staged".to_string()));
+}
+
+// ── Aggregation correctness ─────────────────────────────────
+
+#[test]
+fn aggregated_result_default_is_empty() {
+    let result = AggregatedPluginResult::default();
+    assert!(result.entry_patterns.is_empty());
+    assert!(result.config_patterns.is_empty());
+    assert!(result.always_used.is_empty());
+    assert!(result.used_exports.is_empty());
+    assert!(result.referenced_dependencies.is_empty());
+    assert!(result.discovered_always_used.is_empty());
+    assert!(result.setup_files.is_empty());
+    assert!(result.tooling_dependencies.is_empty());
+    assert!(result.script_used_packages.is_empty());
+    assert!(result.virtual_module_prefixes.is_empty());
+    assert!(result.path_aliases.is_empty());
+    assert!(result.active_plugins.is_empty());
+}
+
+#[test]
+fn full_stack_project_activates_expected_plugins() {
+    // Simulate a typical Next.js + Vitest + Tailwind + Prisma project
+    let registry = PluginRegistry::default();
+    let pkg = make_pkg(&[
+        "next",
+        "react",
+        "vitest",
+        "typescript",
+        "tailwindcss",
+        "prisma",
+        "eslint",
+        "@storybook/react",
+    ]);
+    let result = registry.run(&pkg, Path::new("/project"), &[]);
+
+    let expected_plugins = [
+        "nextjs",
+        "vitest",
+        "typescript",
+        "tailwind",
+        "prisma",
+        "eslint",
+        "storybook",
+    ];
+    for expected in &expected_plugins {
+        assert!(
+            result.active_plugins.contains(&expected.to_string()),
+            "full stack project should activate '{expected}' plugin"
+        );
+    }
+
+    // Verify aggregated patterns are non-empty
+    assert!(!result.entry_patterns.is_empty());
+    assert!(!result.tooling_dependencies.is_empty());
+    assert!(!result.always_used.is_empty());
+}
+
+// ── precompile_config_matchers ──────────────────────────────
+
+#[test]
+fn precompile_config_matchers_covers_plugins_with_configs() {
+    let registry = PluginRegistry::default();
+    let matchers = registry.precompile_config_matchers();
+
+    // Should include matchers for plugins that have config_patterns
+    let names: Vec<&str> = matchers.iter().map(|(p, _)| p.name()).collect();
+    assert!(
+        names.contains(&"jest"),
+        "precompiled matchers should include jest"
+    );
+    assert!(
+        names.contains(&"typescript"),
+        "precompiled matchers should include typescript"
+    );
+    assert!(
+        names.contains(&"nextjs"),
+        "precompiled matchers should include nextjs"
+    );
+
+    // Should NOT include plugins without config_patterns
+    assert!(
+        !names.contains(&"msw"),
+        "precompiled matchers should not include msw (no config_patterns)"
+    );
+}
+
+#[test]
+fn precompile_config_matchers_all_have_non_empty_matchers() {
+    let registry = PluginRegistry::default();
+    let matchers = registry.precompile_config_matchers();
+
+    for (plugin, matcher_list) in &matchers {
+        assert!(
+            !matcher_list.is_empty(),
+            "plugin '{}' has config_patterns but compiled to zero matchers",
+            plugin.name()
+        );
+    }
+}
+
+// ── Config file resolution with Jest config ──────────────────
+
+#[test]
+fn run_with_jest_config_extracts_setup_and_transform() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    std::fs::write(
+        root.join("jest.config.js"),
+        r#"
+            module.exports = {
+                preset: "ts-jest",
+                setupFilesAfterEnv: ["./test/setup.ts"],
+                transform: { "^.+\\.tsx?$": "ts-jest" },
+                reporters: ["default", "jest-junit"]
+            };
+        "#,
+    )
+    .unwrap();
+
+    let registry = PluginRegistry::default();
+    let pkg = make_pkg(&["jest"]);
+    let config_path = root.join("jest.config.js");
+    let discovered = vec![config_path];
+    let result = registry.run(&pkg, root, &discovered);
+
+    assert!(result.active_plugins.contains(&"jest".to_string()));
+
+    // Verify referenced dependencies from config parsing
+    assert!(
+        result
+            .referenced_dependencies
+            .contains(&"ts-jest".to_string()),
+        "jest config should extract preset as referenced dependency"
+    );
+    assert!(
+        result
+            .referenced_dependencies
+            .contains(&"jest-junit".to_string()),
+        "jest config should extract reporters as referenced dependency"
+    );
+
+    // Verify setup files
+    assert!(
+        result
+            .setup_files
+            .iter()
+            .any(|(p, _)| p.ends_with("test/setup.ts")),
+        "jest config should extract setupFilesAfterEnv"
+    );
+}
+
+// ── Config file resolution with Storybook config ─────────────
+
+#[test]
+fn run_with_storybook_config_extracts_addons() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join(".storybook")).unwrap();
+    std::fs::write(
+        root.join(".storybook/main.ts"),
+        r#"
+            export default {
+                stories: ["../src/**/*.stories.tsx"],
+                addons: [
+                    "@storybook/addon-essentials",
+                    ["@storybook/addon-a11y", { level: "AA" }]
+                ],
+                framework: { name: "@storybook/react-vite" }
+            };
+        "#,
+    )
+    .unwrap();
+
+    let registry = PluginRegistry::default();
+    let pkg = make_pkg(&["storybook"]);
+    let config_path = root.join(".storybook/main.ts");
+    let discovered = vec![config_path];
+    let result = registry.run(&pkg, root, &discovered);
+
+    assert!(result.active_plugins.contains(&"storybook".to_string()));
+    assert!(
+        result
+            .referenced_dependencies
+            .contains(&"@storybook/addon-essentials".to_string()),
+        "storybook config should extract addons"
+    );
+    assert!(
+        result
+            .referenced_dependencies
+            .contains(&"@storybook/addon-a11y".to_string()),
+        "storybook config should extract addons from tuples"
+    );
+    assert!(
+        result
+            .referenced_dependencies
+            .contains(&"@storybook/react-vite".to_string()),
+        "storybook config should extract framework.name"
+    );
+    // stories patterns should be added as entry patterns
+    assert!(
+        result
+            .entry_patterns
+            .iter()
+            .any(|(p, _)| p.contains("stories")),
+        "storybook config should extract stories as entry patterns"
+    );
+}

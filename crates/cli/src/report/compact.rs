@@ -107,6 +107,9 @@ pub fn build_compact_lines(results: &AnalysisResults, root: &Path) -> Vec<String
 }
 
 pub(super) fn print_health_compact(report: &crate::health_types::HealthReport, root: &Path) {
+    if let Some(ref hs) = report.health_score {
+        println!("health-score:{:.1}:{}", hs.score, hs.grade);
+    }
     if let Some(ref vs) = report.vital_signs {
         let mut parts = Vec::new();
         parts.push(format!("avg_cyclomatic={:.1}", vs.avg_cyclomatic));

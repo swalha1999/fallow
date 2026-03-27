@@ -77,11 +77,22 @@ impl Plugin for StorybookPlugin {
             result.referenced_dependencies.push(dep);
         }
 
-        // addons → referenced dependencies (shallow to avoid options objects)
+        // addons → referenced dependencies
+        // Handles both string form ("@storybook/addon-essentials") and
+        // object form ({ name: "@storybook/addon-essentials", options: {} })
         let addons = config_parser::extract_config_shallow_strings(source, config_path, "addons");
         for addon in &addons {
             let dep = crate::resolve::extract_package_name(addon);
             result.referenced_dependencies.push(dep);
+        }
+        // Second pass: extract all string values from addons (catches object { name: "..." } form)
+        let addon_strings =
+            config_parser::extract_config_property_strings(source, config_path, "addons");
+        for s in &addon_strings {
+            let dep = crate::resolve::extract_package_name(s);
+            if !result.referenced_dependencies.contains(&dep) {
+                result.referenced_dependencies.push(dep);
+            }
         }
 
         // framework → referenced dependency
@@ -171,6 +182,61 @@ mod tests {
             result
                 .referenced_dependencies
                 .contains(&"react-docgen-typescript".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_config_addons_string_form() {
+        let source = r#"
+            export default {
+                addons: ["@storybook/addon-essentials", "@storybook/addon-a11y"]
+            };
+        "#;
+        let plugin = StorybookPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new(".storybook/main.ts"),
+            source,
+            std::path::Path::new("/project"),
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"@storybook/addon-essentials".to_string())
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"@storybook/addon-a11y".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_config_addons_object_form() {
+        let source = r#"
+            export default {
+                addons: [
+                    { name: "@storybook/addon-essentials", options: { docs: false } },
+                    "@storybook/addon-a11y"
+                ]
+            };
+        "#;
+        let plugin = StorybookPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new(".storybook/main.ts"),
+            source,
+            std::path::Path::new("/project"),
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"@storybook/addon-essentials".to_string()),
+            "should find addon in object form via name property"
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"@storybook/addon-a11y".to_string()),
+            "should find addon in string form"
         );
     }
 

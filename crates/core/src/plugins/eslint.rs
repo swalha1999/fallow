@@ -181,10 +181,21 @@ fn read_package_entry(root: &Path, pkg_name: &str) -> Option<(String, std::path:
     let pkg_json_str = std::fs::read_to_string(pkg_dir.join("package.json")).ok()?;
     let pkg_json: serde_json::Value = serde_json::from_str(&pkg_json_str).ok()?;
 
-    // Prefer "module" (ESM) over "main" (CJS), fall back to "index.js"
+    // Resolve entry point: "exports"."." → "module" → "main" → "index.js"
     let entry_rel = pkg_json
-        .get("module")
-        .and_then(|v| v.as_str())
+        .get("exports")
+        .and_then(|e| {
+            // "exports": "./index.js" (string shorthand)
+            e.as_str().or_else(|| {
+                // "exports": { ".": "./index.js" } or { ".": { "import": "./index.mjs" } }
+                e.get(".").and_then(|dot| {
+                    dot.as_str()
+                        .or_else(|| dot.get("import").and_then(|v| v.as_str()))
+                        .or_else(|| dot.get("default").and_then(|v| v.as_str()))
+                })
+            })
+        })
+        .or_else(|| pkg_json.get("module").and_then(|v| v.as_str()))
         .or_else(|| pkg_json.get("main").and_then(|v| v.as_str()))
         .unwrap_or("index.js");
 
@@ -378,5 +389,106 @@ mod tests {
         let deps = &result.referenced_dependencies;
         assert!(deps.contains(&"eslint-plugin-react".to_string()));
         assert!(deps.contains(&"typescript-eslint".to_string()));
+    }
+
+    // ── Shared config following ─────────────────────────────────────
+
+    #[test]
+    fn shared_config_following_discovers_peer_deps() {
+        // Create a temp dir with a mock shared config in node_modules
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create node_modules/@mock/eslint-config with a package.json and index.js
+        let pkg_dir = root.join("node_modules/@mock/eslint-config");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name": "@mock/eslint-config", "main": "index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pkg_dir.join("index.js"),
+            r"
+                import js from '@eslint/js';
+                import ts from 'typescript-eslint';
+                import svelte from 'eslint-plugin-svelte';
+                export default [js.configs.recommended, ...ts.configs.recommended];
+            ",
+        )
+        .unwrap();
+
+        let source = r"
+            import config from '@mock/eslint-config';
+            export default [...config];
+        ";
+        let plugin = EslintPlugin;
+        let result = plugin.resolve_config(std::path::Path::new("eslint.config.js"), source, root);
+
+        let deps = &result.referenced_dependencies;
+        // Direct import
+        assert!(
+            deps.contains(&"@mock/eslint-config".to_string()),
+            "should find direct import"
+        );
+        // Peer deps from shared config's entry point
+        assert!(
+            deps.contains(&"@eslint/js".to_string()),
+            "should find @eslint/js from shared config"
+        );
+        assert!(
+            deps.contains(&"typescript-eslint".to_string()),
+            "should find typescript-eslint from shared config"
+        );
+        assert!(
+            deps.contains(&"eslint-plugin-svelte".to_string()),
+            "should find eslint-plugin-svelte from shared config"
+        );
+    }
+
+    #[test]
+    fn shared_config_missing_node_modules_graceful() {
+        // When node_modules doesn't exist, should not panic
+        let source = r"
+            import config from 'some-nonexistent-config';
+            export default [...config];
+        ";
+        let plugin = EslintPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new("eslint.config.js"),
+            source,
+            std::path::Path::new("/nonexistent"),
+        );
+
+        // Should still find the direct import
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"some-nonexistent-config".to_string())
+        );
+    }
+
+    #[test]
+    fn read_package_entry_exports_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let pkg_dir = root.join("node_modules/modern-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name": "modern-pkg", "exports": { ".": { "import": "./dist/index.mjs" } }}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(pkg_dir.join("dist")).unwrap();
+        std::fs::write(
+            pkg_dir.join("dist/index.mjs"),
+            "import foo from 'some-dep'; export default foo;",
+        )
+        .unwrap();
+
+        let (source, path) = super::read_package_entry(root, "modern-pkg").unwrap();
+        assert!(source.contains("some-dep"));
+        assert!(path.ends_with("dist/index.mjs"));
     }
 }

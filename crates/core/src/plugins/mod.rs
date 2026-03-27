@@ -792,11 +792,11 @@ mod tests {
     #[test]
     fn macro_generated_plugin_imports_only_resolve_config() {
         let plugin = cypress::CypressPlugin;
-        let source = r#"
+        let source = r"
             import { defineConfig } from 'cypress';
             import coveragePlugin from '@cypress/code-coverage';
             export default defineConfig({});
-        "#;
+        ";
         let result = plugin.resolve_config(Path::new("cypress.config.ts"), source, Path::new("/project"));
         assert!(result.referenced_dependencies.contains(&"cypress".to_string()));
         assert!(result.referenced_dependencies.contains(&"@cypress/code-coverage".to_string()));

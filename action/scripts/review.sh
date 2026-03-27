@@ -65,6 +65,31 @@ esac
 # Post-process: group unused exports, dedup clones, drop refactoring targets, merge same-line
 MERGED=$(echo "$COMMENTS" | jq --argjson max "$MAX" -f "${ACTION_JQ_DIR}/merge-comments.jq" 2>&1) && COMMENTS="$MERGED" || echo "Merge warning: $MERGED"
 
+# Add suggestion blocks for unused exports by reading source files
+ENRICHED=$(echo "$COMMENTS" | jq -c '.[]' | while IFS= read -r comment; do
+  TYPE=$(echo "$comment" | jq -r '.type // ""')
+  if [ "$TYPE" = "unused-export" ]; then
+    FILE_PATH=$(echo "$comment" | jq -r '.path')
+    LINE_NUM=$(echo "$comment" | jq -r '.line')
+    if [ -f "$FILE_PATH" ] && [ "$LINE_NUM" -gt 0 ] 2>/dev/null; then
+      SOURCE_LINE=$(sed -n "${LINE_NUM}p" "$FILE_PATH")
+      if [ -n "$SOURCE_LINE" ]; then
+        # Strip "export " or "export default " from the line
+        FIXED_LINE=$(echo "$SOURCE_LINE" | sed 's/^export default //' | sed 's/^export //')
+        if [ "$FIXED_LINE" != "$SOURCE_LINE" ]; then
+          SUGGESTION="\n\n\`\`\`suggestion\n${FIXED_LINE}\n\`\`\`"
+          echo "$comment" | jq --arg sug "$SUGGESTION" '.body = .body + $sug'
+          continue
+        fi
+      fi
+    fi
+  fi
+  echo "$comment"
+done | jq -s '.')
+if [ -n "$ENRICHED" ] && echo "$ENRICHED" | jq -e '.' > /dev/null 2>&1; then
+  COMMENTS="$ENRICHED"
+fi
+
 TOTAL=$(echo "$COMMENTS" | jq 'length')
 if [ "$TOTAL" -eq 0 ]; then
   echo "No review comments to post"

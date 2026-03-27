@@ -64,9 +64,10 @@ The extension looks for the `fallow-lsp` binary in this order:
 
 ```sh
 cd editors/vscode
-npm install
-npm run build        # Production build
-npm run watch        # Watch mode for development
-npm run lint         # Type check
-npm run package      # Package as .vsix
+pnpm install
+pnpm build           # Production build
+pnpm watch           # Watch mode for development
+pnpm lint            # Type check
+pnpm test            # Unit + extension-host tests
+pnpm package         # Package as .vsix
 ```

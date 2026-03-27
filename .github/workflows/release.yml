@@ -351,12 +351,18 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: 10.17.1
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: '22'
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: cd editors/vscode && npm ci
+        run: cd editors/vscode && pnpm install --frozen-lockfile
 
       - name: Update extension version
         run: |
@@ -371,16 +377,16 @@ jobs:
       - name: Build and package extension
         run: |
           cd editors/vscode
-          npm run build
-          npm run package
+          pnpm build
+          pnpm package
 
       - name: Publish to VS Code Marketplace
-        run: cd editors/vscode && npx vsce publish --no-dependencies
+        run: cd editors/vscode && pnpm exec vsce publish --no-dependencies
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX (Cursor, VSCodium)
-        run: cd editors/vscode && npx ovsx publish --no-dependencies
+        run: cd editors/vscode && pnpm exec ovsx publish --no-dependencies
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
 

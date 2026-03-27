@@ -1,8 +1,12 @@
 import * as fs from "node:fs";
+import type { IncomingMessage } from "node:http";
 import * as https from "node:https";
 import * as os from "node:os";
 import * as path from "node:path";
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
+import { getExecutableExtension } from "./binary-utils.js";
 
 const GITHUB_REPO = "fallow-rs/fallow";
 const LSP_BINARY_NAME = "fallow-lsp";
@@ -15,6 +19,8 @@ interface GithubRelease {
     readonly browser_download_url: string;
   }>;
 }
+
+const REQUEST_HEADERS = { "User-Agent": "fallow-vscode" };
 
 const getPlatformTarget = (): string | null => {
   const arch = os.arch();
@@ -29,11 +35,14 @@ const getPlatformTarget = (): string | null => {
   return null;
 };
 
-const httpsGet = (url: string): Promise<string> =>
+const withRedirects = <T>(
+  url: string,
+  handleResponse: (response: IncomingMessage) => Promise<T>
+): Promise<T> =>
   new Promise((resolve, reject) => {
     const request = https.get(
       url,
-      { headers: { "User-Agent": "fallow-vscode" } },
+      { headers: REQUEST_HEADERS },
       (response) => {
         if (
           response.statusCode &&
@@ -41,45 +50,43 @@ const httpsGet = (url: string): Promise<string> =>
           response.statusCode < 400 &&
           response.headers.location
         ) {
-          httpsGet(response.headers.location).then(resolve, reject);
+          response.resume();
+          withRedirects(response.headers.location, handleResponse).then(
+            resolve,
+            reject
+          );
           return;
         }
 
         if (response.statusCode && response.statusCode >= 400) {
+          response.resume();
           reject(new Error(`HTTP ${response.statusCode}`));
           return;
         }
 
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
-        response.on("end", () => resolve(Buffer.concat(chunks).toString()));
-        response.on("error", reject);
+        void handleResponse(response).then(resolve, reject);
       }
     );
+
     request.on("error", reject);
   });
 
+const httpsGet = (url: string): Promise<string> =>
+  withRedirects(url, async (response) => {
+    const chunks: Buffer[] = [];
+
+    return await new Promise<string>((resolve, reject) => {
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve(Buffer.concat(chunks).toString()));
+      response.on("error", reject);
+    });
+  });
+
 const httpsDownload = (url: string, dest: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const request = https.get(
-      url,
-      { headers: { "User-Agent": "fallow-vscode" } },
-      (response) => {
-        if (
-          response.statusCode &&
-          response.statusCode >= 300 &&
-          response.statusCode < 400 &&
-          response.headers.location
-        ) {
-          httpsDownload(response.headers.location, dest).then(resolve, reject);
-          return;
-        }
-
-        if (response.statusCode && response.statusCode >= 400) {
-          reject(new Error(`HTTP ${response.statusCode}`));
-          return;
-        }
-
+  withRedirects(
+    url,
+    async (response) =>
+      await new Promise<void>((resolve, reject) => {
         const file = fs.createWriteStream(dest);
         response.pipe(file);
         file.on("finish", () => {
@@ -90,12 +97,10 @@ const httpsDownload = (url: string, dest: string): Promise<void> =>
           fs.unlink(dest, () => {});
           reject(err);
         });
-      }
-    );
-    request.on("error", reject);
-  });
+      })
+  );
 
-export const getInstallDir = (context: vscode.ExtensionContext): string => {
+const getInstallDir = (context: vscode.ExtensionContext): string => {
   const dir = path.join(context.globalStorageUri.fsPath, "bin");
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -107,8 +112,10 @@ export const getInstalledBinaryPath = (
   context: vscode.ExtensionContext
 ): string | null => {
   const dir = getInstallDir(context);
-  const ext = os.platform() === "win32" ? ".exe" : "";
-  const binaryPath = path.join(dir, `${LSP_BINARY_NAME}${ext}`);
+  const binaryPath = path.join(
+    dir,
+    `${LSP_BINARY_NAME}${getExecutableExtension()}`
+  );
   return fs.existsSync(binaryPath) ? binaryPath : null;
 };
 
@@ -119,15 +126,15 @@ const downloadAsset = async (
   target: string,
   dir: string
 ): Promise<string | null> => {
-  const ext = os.platform() === "win32" ? ".exe" : "";
-  const assetName = `${binaryName}-${target}${ext}`;
+  const extension = getExecutableExtension();
+  const assetName = `${binaryName}-${target}${extension}`;
   const asset = release.assets.find((a) => a.name === assetName);
 
   if (!asset) {
     return null;
   }
 
-  const destPath = path.join(dir, `${binaryName}${ext}`);
+  const destPath = path.join(dir, `${binaryName}${extension}`);
   await httpsDownload(asset.browser_download_url, destPath);
 
   if (os.platform() !== "win32") {

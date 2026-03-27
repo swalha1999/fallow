@@ -1,25 +1,15 @@
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
+import { countCheckIssues } from "./analysis-utils.js";
+import {
+  buildStatusBarPartsFromLsp,
+  buildStatusBarTooltipMarkdown,
+  getStatusBarSeverityKey,
+} from "./statusBar-utils.js";
 import type { FallowCheckResult, FallowDupesResult } from "./types.js";
-
-/** Summary stats pushed by the LSP server via fallow/analysisComplete. */
-export interface AnalysisCompleteParams {
-  totalIssues: number;
-  unusedFiles: number;
-  unusedExports: number;
-  unusedTypes: number;
-  unusedDependencies: number;
-  unusedDevDependencies: number;
-  unusedOptionalDependencies: number;
-  unusedEnumMembers: number;
-  unusedClassMembers: number;
-  unresolvedImports: number;
-  unlistedDependencies: number;
-  duplicateExports: number;
-  typeOnlyDependencies: number;
-  circularDependencies: number;
-  duplicationPercentage: number;
-  cloneGroups: number;
-}
+export type { AnalysisCompleteParams } from "./statusBar-utils.js";
+import type { AnalysisCompleteParams } from "./statusBar-utils.js";
 
 let statusBarItem: vscode.StatusBarItem | null = null;
 
@@ -46,21 +36,7 @@ export const updateStatusBar = (
   const parts: string[] = [];
 
   if (checkResult) {
-    const issueCount =
-      checkResult.unused_files.length +
-      checkResult.unused_exports.length +
-      checkResult.unused_types.length +
-      checkResult.unused_dependencies.length +
-      checkResult.unused_dev_dependencies.length +
-      checkResult.unused_enum_members.length +
-      checkResult.unused_class_members.length +
-      checkResult.unresolved_imports.length +
-      checkResult.unlisted_dependencies.length +
-      checkResult.duplicate_exports.length +
-      (checkResult.type_only_dependencies?.length ?? 0) +
-      (checkResult.circular_dependencies?.length ?? 0);
-
-    parts.push(`${issueCount} issues`);
+    parts.push(`${countCheckIssues(checkResult)} issues`);
   }
 
   if (dupesResult) {
@@ -77,88 +53,18 @@ export const updateStatusBarFromLsp = (params: AnalysisCompleteParams): void => 
     return;
   }
 
-  const dupPct = Number.isFinite(params.duplicationPercentage)
-    ? params.duplicationPercentage
-    : 0;
+  const severity = getStatusBarSeverityKey(params);
+  statusBarItem.backgroundColor = severity
+    ? new vscode.ThemeColor(severity)
+    : undefined;
 
-  const parts: string[] = [];
-  parts.push(`${params.totalIssues} issues`);
-  parts.push(`${dupPct.toFixed(1)}% duplication`);
-
-  // Color-code by severity
-  const hasErrors = params.unresolvedImports > 0;
-  const hasWarnings = params.totalIssues > 0;
-
-  if (hasErrors) {
-    statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground"
-    );
-  } else if (hasWarnings) {
-    statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground"
-    );
-  } else {
-    statusBarItem.backgroundColor = undefined;
-  }
-
-  // Build rich markdown tooltip with breakdown
-  const lines: string[] = ["**Fallow** — Analysis Results\n"];
-
-  if (params.unresolvedImports > 0) {
-    lines.push(`$(error) ${params.unresolvedImports} unresolved imports`);
-  }
-  if (params.unusedFiles > 0) {
-    lines.push(`$(warning) ${params.unusedFiles} unused files`);
-  }
-  if (params.unusedExports > 0) {
-    lines.push(`$(warning) ${params.unusedExports} unused exports`);
-  }
-  if (params.unusedTypes > 0) {
-    lines.push(`$(info) ${params.unusedTypes} unused types`);
-  }
-  if (params.unusedDependencies > 0) {
-    lines.push(`$(warning) ${params.unusedDependencies} unused dependencies`);
-  }
-  if (params.unusedDevDependencies > 0) {
-    lines.push(`$(warning) ${params.unusedDevDependencies} unused dev dependencies`);
-  }
-  if (params.unusedOptionalDependencies > 0) {
-    lines.push(`$(warning) ${params.unusedOptionalDependencies} unused optional dependencies`);
-  }
-  if (params.unusedEnumMembers > 0) {
-    lines.push(`$(info) ${params.unusedEnumMembers} unused enum members`);
-  }
-  if (params.unusedClassMembers > 0) {
-    lines.push(`$(info) ${params.unusedClassMembers} unused class members`);
-  }
-  if (params.unlistedDependencies > 0) {
-    lines.push(`$(warning) ${params.unlistedDependencies} unlisted dependencies`);
-  }
-  if (params.duplicateExports > 0) {
-    lines.push(`$(warning) ${params.duplicateExports} duplicate exports`);
-  }
-  if (params.typeOnlyDependencies > 0) {
-    lines.push(`$(info) ${params.typeOnlyDependencies} type-only dependencies`);
-  }
-  if (params.circularDependencies > 0) {
-    lines.push(`$(warning) ${params.circularDependencies} circular dependencies`);
-  }
-  if (params.cloneGroups > 0) {
-    lines.push(`$(copy) ${params.cloneGroups} clone groups (${dupPct.toFixed(1)}% duplication)`);
-  }
-
-  if (params.totalIssues === 0 && params.cloneGroups === 0) {
-    lines.push("$(check) No issues found");
-  }
-
-  lines.push("\n---\n");
-  lines.push("[$(play) Run Analysis](command:fallow.analyze) · [$(wrench) Auto-Fix](command:fallow.fix) · [$(output) Output](command:fallow.showOutput)");
-
-  const tooltip = new vscode.MarkdownString(lines.join("\n\n"));
+  const tooltip = new vscode.MarkdownString(
+    buildStatusBarTooltipMarkdown(params)
+  );
   tooltip.isTrusted = true;
   statusBarItem.tooltip = tooltip;
 
-  applyStatusBarText(parts);
+  applyStatusBarText(buildStatusBarPartsFromLsp(params));
 };
 
 const applyStatusBarText = (parts: string[]): void => {

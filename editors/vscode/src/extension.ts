@@ -1,4 +1,7 @@
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
+import { countCheckIssues } from "./analysis-utils.js";
 import { startClient, stopClient, restartClient } from "./client.js";
 import { onConfigChange } from "./config.js";
 import { runAnalysis, runFix } from "./commands.js";
@@ -18,9 +21,14 @@ let outputChannel: vscode.OutputChannel;
 let lastCheckResult: FallowCheckResult | null = null;
 let lastDupesResult: FallowDupesResult | null = null;
 
+export interface ExtensionApi {
+  readonly runAnalysis: typeof runAnalysis;
+  readonly runFix: typeof runFix;
+}
+
 export const activate = async (
   context: vscode.ExtensionContext
-): Promise<void> => {
+): Promise<ExtensionApi> => {
   outputChannel = vscode.window.createOutputChannel("Fallow");
   context.subscriptions.push(outputChannel);
 
@@ -55,20 +63,7 @@ export const activate = async (
             true
           );
 
-          const issueCount = check
-            ? check.unused_files.length +
-              check.unused_exports.length +
-              check.unused_types.length +
-              check.unused_dependencies.length +
-              check.unused_dev_dependencies.length +
-              check.unused_enum_members.length +
-              check.unused_class_members.length +
-              check.unresolved_imports.length +
-              check.unlisted_dependencies.length +
-              check.duplicate_exports.length +
-              (check.type_only_dependencies?.length ?? 0) +
-              (check.circular_dependencies?.length ?? 0)
-            : 0;
+          const issueCount = countCheckIssues(check);
 
           if (issueCount > 0) {
             void vscode.window.showInformationMessage(
@@ -251,6 +246,11 @@ export const activate = async (
       false
     );
   }
+
+  return {
+    runAnalysis,
+    runFix,
+  };
 };
 
 export const deactivate = async (): Promise<void> => {

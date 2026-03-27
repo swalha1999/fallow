@@ -1,40 +1,43 @@
 import * as child_process from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
 import { getLspPath, getProduction, getDuplicationMode, getDuplicationThreshold, getIssueTypes } from "./config.js";
+import { findBinaryInPath, getExecutableExtension } from "./binary-utils.js";
 import { getInstalledBinaryPath } from "./download.js";
+import {
+  buildFixArgs,
+  createFixPreviewItems,
+  resolveFixLocation,
+} from "./fix-utils.js";
 import type {
   FallowCheckResult,
   FallowDupesResult,
   FallowFixResult,
+  FixAction,
 } from "./types.js";
 
 const findCliBinary = (context: vscode.ExtensionContext): string | null => {
   const lspPath = getLspPath();
   if (lspPath) {
     const dir = path.dirname(lspPath);
-    const ext = os.platform() === "win32" ? ".exe" : "";
-    const cliPath = path.join(dir, `fallow${ext}`);
+    const cliPath = path.join(dir, `fallow${getExecutableExtension()}`);
     if (fs.existsSync(cliPath)) {
       return cliPath;
     }
   }
 
-  const ext = os.platform() === "win32" ? ".exe" : "";
-  const pathDirs = (process.env["PATH"] ?? "").split(path.delimiter);
-  for (const dir of pathDirs) {
-    const candidate = path.join(dir, `fallow${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
+  const inPath = findBinaryInPath("fallow");
+  if (inPath) {
+    return inPath;
   }
 
   const installed = getInstalledBinaryPath(context);
   if (installed) {
     const dir = path.dirname(installed);
-    const cliPath = path.join(dir, `fallow${ext}`);
+    const cliPath = path.join(dir, `fallow${getExecutableExtension()}`);
     if (fs.existsSync(cliPath)) {
       return cliPath;
     }
@@ -102,6 +105,91 @@ const getWorkspaceRoot = (): string | null => {
   return folders[0].uri.fsPath;
 };
 
+interface FixQuickPickItem extends vscode.QuickPickItem {
+  readonly action: "navigate" | "apply-all";
+  readonly fix?: FixAction;
+}
+
+const confirmApplyFixes = async (): Promise<boolean> => {
+  const confirm = await vscode.window.showWarningMessage(
+    "Fallow: This will unexport unused exports (keeps the code) and remove unused dependencies from package.json. Continue?",
+    "Yes",
+    "No"
+  );
+
+  return confirm === "Yes";
+};
+
+const openFixLocation = async (
+  root: string,
+  fix: FixAction | undefined
+): Promise<void> => {
+  if (!fix) {
+    return;
+  }
+
+  const location = resolveFixLocation(root, fix);
+  if (!location) {
+    return;
+  }
+
+  await vscode.window.showTextDocument(vscode.Uri.file(location.absolutePath), {
+    selection: new vscode.Range(location.line, 0, location.line, 0),
+  });
+};
+
+const showDryRunPreview = async (
+  root: string,
+  result: FallowFixResult
+): Promise<void> => {
+  if (result.fixes.length === 0) {
+    void vscode.window.showInformationMessage("Fallow: no fixes available.");
+    return;
+  }
+
+  const quickPickItems: FixQuickPickItem[] = [];
+  for (const item of createFixPreviewItems(result.fixes)) {
+    if (item.action === "apply-all") {
+      quickPickItems.push({
+        label: "",
+        kind: vscode.QuickPickItemKind.Separator,
+        action: "navigate",
+      });
+      quickPickItems.push({
+        label: "$(play) Apply all fixes",
+        description: item.description,
+        action: item.action,
+      });
+      continue;
+    }
+
+    quickPickItems.push({
+      label: `$(wrench) ${item.label}`,
+      description: item.description,
+      detail: item.detail,
+      action: item.action,
+      fix: item.fix,
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(quickPickItems, {
+    title: `Fallow: ${result.fixes.length} fix${result.fixes.length === 1 ? "" : "es"} available`,
+    placeHolder:
+      "Review fixes — select 'Apply all fixes' to apply, or click a fix to navigate",
+  });
+
+  if (!picked) {
+    return;
+  }
+
+  if (picked.action === "apply-all") {
+    void vscode.commands.executeCommand("fallow.fix");
+    return;
+  }
+
+  await openFixLocation(root, picked.fix);
+};
+
 export const runAnalysis = async (
   context: vscode.ExtensionContext
 ): Promise<{
@@ -161,83 +249,20 @@ export const runFix = async (
     return null;
   }
 
-  const args = dryRun
-    ? ["fix", "--dry-run", "--format", "json", "--quiet"]
-    : ["fix", "--yes", "--format", "json", "--quiet"];
-
-  if (getProduction()) {
-    args.push("--production");
-  }
-
-  if (!dryRun) {
-    const confirm = await vscode.window.showWarningMessage(
-      "Fallow: This will unexport unused exports (keeps the code) and remove unused dependencies from package.json. Continue?",
-      "Yes",
-      "No"
-    );
-    if (confirm !== "Yes") {
-      return null;
-    }
+  if (!dryRun && !(await confirmApplyFixes())) {
+    return null;
   }
 
   try {
-    const output = await execFallow(context, args, root);
+    const output = await execFallow(
+      context,
+      buildFixArgs(dryRun, getProduction()),
+      root
+    );
     const result = JSON.parse(output) as FallowFixResult;
 
     if (dryRun) {
-      if (result.fixes.length === 0) {
-        void vscode.window.showInformationMessage("Fallow: no fixes available.");
-      } else {
-        const items: vscode.QuickPickItem[] = result.fixes.map((fix) => {
-          const label = fix.name ?? fix.package ?? fix.file ?? "unknown";
-          const detail = fix.path
-            ? `${fix.path}${fix.line ? `:${fix.line}` : ""}`
-            : fix.location ?? "";
-          return {
-            label: `$(wrench) ${label}`,
-            description: fix.type.replace(/_/g, " "),
-            detail,
-          };
-        });
-
-        items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
-        items.push({
-          label: "$(play) Apply all fixes",
-          description: `${result.fixes.length} fix${result.fixes.length === 1 ? "" : "es"}`,
-        });
-
-        // Map items to their fix data for navigation
-        const fixByLabel = new Map(
-          result.fixes.map((fix) => {
-            const label = `$(wrench) ${fix.name ?? fix.package ?? fix.file ?? "unknown"}`;
-            return [label, fix] as const;
-          })
-        );
-
-        const picked = await vscode.window.showQuickPick(items, {
-          title: `Fallow: ${result.fixes.length} fix${result.fixes.length === 1 ? "" : "es"} available`,
-          placeHolder: "Review fixes — select 'Apply all fixes' to apply, or click a fix to navigate",
-        });
-
-        if (!picked) {
-          // cancelled
-        } else if (picked.label === "$(play) Apply all fixes") {
-          void vscode.commands.executeCommand("fallow.fix");
-        } else {
-          // Navigate to the fix location
-          const fix = fixByLabel.get(picked.label);
-          const filePath = fix?.path ?? fix?.file;
-          if (filePath) {
-            const absolutePath = root && !path.isAbsolute(filePath)
-              ? path.resolve(root, filePath)
-              : filePath;
-            const line = Math.max(0, (fix?.line ?? 1) - 1);
-            void vscode.window.showTextDocument(vscode.Uri.file(absolutePath), {
-              selection: new vscode.Range(line, 0, line, 0),
-            });
-          }
-        }
-      }
+      await showDryRunPreview(root, result);
     } else {
       const fixCount = result.fixes.length;
       void vscode.window.showInformationMessage(

@@ -32,23 +32,23 @@ export interface FallowCheckResult {
   readonly circular_dependencies?: ReadonlyArray<CircularDependency>;
 }
 
-export interface UnusedFile {
+interface UnusedFile {
   readonly path: string;
 }
 
-export interface UnusedExport {
+interface UnusedExport {
   readonly path: string;
   readonly export_name: string;
   readonly line: number;
   readonly col: number;
 }
 
-export interface UnusedDependency {
+interface UnusedDependency {
   readonly package_name: string;
   readonly path: string;
 }
 
-export interface UnusedMember {
+interface UnusedMember {
   readonly path: string;
   readonly parent_name: string;
   readonly member_name: string;
@@ -56,35 +56,35 @@ export interface UnusedMember {
   readonly col: number;
 }
 
-export interface UnresolvedImport {
+interface UnresolvedImport {
   readonly path: string;
   readonly specifier: string;
   readonly line: number;
   readonly col: number;
 }
 
-export interface UnlistedDependency {
+interface UnlistedDependency {
   readonly package_name: string;
   readonly path: string;
 }
 
-export interface DuplicateLocation {
+interface DuplicateLocation {
   readonly path: string;
   readonly line: number;
   readonly col: number;
 }
 
-export interface DuplicateExport {
+interface DuplicateExport {
   readonly export_name: string;
   readonly locations: ReadonlyArray<DuplicateLocation>;
 }
 
-export interface TypeOnlyDependency {
+interface TypeOnlyDependency {
   readonly package_name: string;
   readonly path: string;
 }
 
-export interface CircularDependency {
+interface CircularDependency {
   readonly files: ReadonlyArray<string>;
   readonly length: number;
 }
@@ -101,7 +101,7 @@ export interface CloneGroup {
   readonly line_count: number;
 }
 
-export interface CloneInstance {
+interface CloneInstance {
   readonly file: string;
   readonly start_line: number;
   readonly end_line: number;
@@ -110,7 +110,7 @@ export interface CloneInstance {
   readonly fragment: string;
 }
 
-export interface CloneFamily {
+interface CloneFamily {
   readonly files: ReadonlyArray<string>;
   readonly groups: ReadonlyArray<CloneGroup>;
   readonly total_duplicated_lines: number;
@@ -118,13 +118,13 @@ export interface CloneFamily {
   readonly suggestions: ReadonlyArray<RefactoringSuggestion>;
 }
 
-export interface RefactoringSuggestion {
+interface RefactoringSuggestion {
   readonly kind: "ExtractFunction" | "ExtractModule";
   readonly description: string;
   readonly estimated_savings: number;
 }
 
-export interface DupesStats {
+interface DupesStats {
   readonly total_files: number;
   readonly files_with_clones: number;
   readonly total_lines: number;

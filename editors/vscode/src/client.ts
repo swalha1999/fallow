@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
 import {
   LanguageClient,
@@ -10,25 +10,13 @@ import {
 } from "vscode-languageclient/node.js";
 import { Trace } from "vscode-languageserver-protocol";
 import { getLspPath, getTraceLevel, getAutoDownload, getIssueTypes } from "./config.js";
+import { findBinaryInPath } from "./binary-utils.js";
 import {
   downloadBinary,
   getInstalledBinaryPath,
 } from "./download.js";
 
 let client: LanguageClient | null = null;
-
-const findBinaryInPath = (name: string): string | null => {
-  const ext = os.platform() === "win32" ? ".exe" : "";
-  const pathDirs = (process.env["PATH"] ?? "").split(path.delimiter);
-
-  for (const dir of pathDirs) {
-    const candidate = path.join(dir, `${name}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-};
 
 const resolveBinaryPath = async (
   context: vscode.ExtensionContext
@@ -159,5 +147,3 @@ export const restartClient = async (
   await stopClient();
   return startClient(context, outputChannel);
 };
-
-export const getClient = (): LanguageClient | null => client;

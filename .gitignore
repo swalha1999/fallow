@@ -38,6 +38,7 @@ npm/win32-x64-msvc/fallow.exe
 
 # VS Code extension build artifacts
 *.vsix
+editors/vscode/.test-dist/
 
 # IDE
 .vscode/

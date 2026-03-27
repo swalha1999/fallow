@@ -1,5 +1,10 @@
 import * as path from "node:path";
+// VS Code calls TreeDataProvider members through the registered provider.
+// fallow-ignore-file unused-class-member
+// VS Code injects this module into the extension host at runtime.
+// fallow-ignore-next-line unlisted-dependency
 import * as vscode from "vscode";
+import { countCheckIssues } from "./analysis-utils.js";
 import type {
   CloneGroup,
   FallowCheckResult,
@@ -136,19 +141,7 @@ export class DeadCodeTreeProvider
       this.view.badge = undefined;
       return;
     }
-    const count =
-      this.result.unused_files.length +
-      this.result.unused_exports.length +
-      this.result.unused_types.length +
-      this.result.unused_dependencies.length +
-      this.result.unused_dev_dependencies.length +
-      this.result.unused_enum_members.length +
-      this.result.unused_class_members.length +
-      this.result.unresolved_imports.length +
-      this.result.unlisted_dependencies.length +
-      this.result.duplicate_exports.length +
-      (this.result.type_only_dependencies?.length ?? 0) +
-      (this.result.circular_dependencies?.length ?? 0);
+    const count = countCheckIssues(this.result);
 
     this.view.badge = count > 0
       ? { value: count, tooltip: `${count} issue${count === 1 ? "" : "s"}` }

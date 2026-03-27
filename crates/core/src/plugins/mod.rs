@@ -426,4 +426,503 @@ mod tests {
         };
         assert!(!r.is_empty());
     }
+
+    #[test]
+    fn plugin_result_not_empty_with_always_used_files() {
+        let r = PluginResult {
+            always_used_files: vec!["config.ts".to_string()],
+            ..Default::default()
+        };
+        assert!(!r.is_empty());
+    }
+
+    // ── is_enabled_with_deps prefix matching ─────────────────────
+
+    #[test]
+    fn is_enabled_with_deps_prefix_match() {
+        let plugin = storybook::StorybookPlugin;
+        let deps = vec!["@storybook/react".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps, Path::new("/project")));
+    }
+
+    #[test]
+    fn is_enabled_with_deps_prefix_no_false_positive() {
+        let plugin = storybook::StorybookPlugin;
+        // "@storybookish" should NOT match "@storybook/" prefix
+        let deps = vec!["@storybookish".to_string()];
+        assert!(!plugin.is_enabled_with_deps(&deps, Path::new("/project")));
+    }
+
+    #[test]
+    fn is_enabled_with_deps_exact_and_prefix_both_work() {
+        // Storybook has both "storybook" (exact) and "@storybook/" (prefix)
+        let plugin = storybook::StorybookPlugin;
+
+        let deps_exact = vec!["storybook".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps_exact, Path::new("/project")));
+
+        let deps_prefix = vec!["@storybook/vue3".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps_prefix, Path::new("/project")));
+    }
+
+    #[test]
+    fn is_enabled_with_deps_multiple_enablers() {
+        // Remix has multiple enablers
+        let plugin = remix::RemixPlugin;
+        let deps_node = vec!["@remix-run/node".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps_node, Path::new("/project")));
+
+        let deps_react = vec!["@remix-run/react".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps_react, Path::new("/project")));
+
+        let deps_cf = vec!["@remix-run/cloudflare".to_string()];
+        assert!(plugin.is_enabled_with_deps(&deps_cf, Path::new("/project")));
+    }
+
+    // ── Plugin trait default implementations ──────────────────────
+
+    /// A minimal plugin with no overrides to test defaults.
+    struct MinimalPlugin;
+    impl Plugin for MinimalPlugin {
+        fn name(&self) -> &'static str {
+            "minimal"
+        }
+    }
+
+    #[test]
+    fn default_enablers_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.enablers().is_empty());
+    }
+
+    #[test]
+    fn default_entry_patterns_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.entry_patterns().is_empty());
+    }
+
+    #[test]
+    fn default_config_patterns_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.config_patterns().is_empty());
+    }
+
+    #[test]
+    fn default_always_used_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.always_used().is_empty());
+    }
+
+    #[test]
+    fn default_used_exports_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.used_exports().is_empty());
+    }
+
+    #[test]
+    fn default_tooling_dependencies_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.tooling_dependencies().is_empty());
+    }
+
+    #[test]
+    fn default_virtual_module_prefixes_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.virtual_module_prefixes().is_empty());
+    }
+
+    #[test]
+    fn default_path_aliases_is_empty() {
+        let p = MinimalPlugin;
+        assert!(p.path_aliases(Path::new("/")).is_empty());
+    }
+
+    #[test]
+    fn default_resolve_config_returns_empty() {
+        let p = MinimalPlugin;
+        let r = p.resolve_config(Path::new("config.js"), "export default {}", Path::new("/"));
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn default_package_json_config_key_is_none() {
+        let p = MinimalPlugin;
+        assert!(p.package_json_config_key().is_none());
+    }
+
+    #[test]
+    fn default_is_enabled_returns_false_when_no_enablers() {
+        let p = MinimalPlugin;
+        let deps = vec!["anything".to_string()];
+        assert!(!p.is_enabled_with_deps(&deps, Path::new("/")));
+    }
+
+    // ── All built-in plugins have unique names ───────────────────
+
+    #[test]
+    fn all_builtin_plugin_names_are_unique() {
+        let plugins = registry::builtin::create_builtin_plugins();
+        let mut seen = std::collections::BTreeSet::new();
+        for p in &plugins {
+            let name = p.name();
+            assert!(seen.insert(name), "duplicate plugin name: {name}");
+        }
+    }
+
+    // ── All built-in plugins have non-empty enablers ─────────────
+
+    #[test]
+    fn all_builtin_plugins_have_enablers() {
+        let plugins = registry::builtin::create_builtin_plugins();
+        for p in &plugins {
+            assert!(
+                !p.enablers().is_empty(),
+                "plugin '{}' has no enablers",
+                p.name()
+            );
+        }
+    }
+
+    // ── All built-in plugins that have config_patterns also have always_used ──
+
+    #[test]
+    fn plugins_with_config_patterns_have_always_used() {
+        let plugins = registry::builtin::create_builtin_plugins();
+        for p in &plugins {
+            if !p.config_patterns().is_empty() {
+                assert!(
+                    !p.always_used().is_empty(),
+                    "plugin '{}' has config_patterns but no always_used — config files should be marked always used",
+                    p.name()
+                );
+            }
+        }
+    }
+
+    // ── Enabler patterns for all categories ──────────────────────
+
+    #[test]
+    fn framework_plugins_enablers() {
+        // Verify key frameworks detect on the expected package names
+        let cases: Vec<(&dyn Plugin, &[&str])> = vec![
+            (&nextjs::NextJsPlugin, &["next"]),
+            (&nuxt::NuxtPlugin, &["nuxt"]),
+            (&angular::AngularPlugin, &["@angular/core"]),
+            (&sveltekit::SvelteKitPlugin, &["@sveltejs/kit"]),
+            (&gatsby::GatsbyPlugin, &["gatsby"]),
+        ];
+
+        for (plugin, expected_enablers) in cases {
+            let enablers = plugin.enablers();
+            for expected in expected_enablers {
+                assert!(
+                    enablers.contains(expected),
+                    "plugin '{}' should have '{}' as an enabler",
+                    plugin.name(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn testing_plugins_enablers() {
+        let cases: Vec<(&dyn Plugin, &str)> = vec![
+            (&jest::JestPlugin, "jest"),
+            (&vitest::VitestPlugin, "vitest"),
+            (&playwright::PlaywrightPlugin, "@playwright/test"),
+            (&cypress::CypressPlugin, "cypress"),
+            (&mocha::MochaPlugin, "mocha"),
+        ];
+
+        for (plugin, enabler) in cases {
+            assert!(
+                plugin.enablers().contains(&enabler),
+                "plugin '{}' should have '{}' as enabler",
+                plugin.name(),
+                enabler
+            );
+        }
+    }
+
+    #[test]
+    fn bundler_plugins_enablers() {
+        let cases: Vec<(&dyn Plugin, &str)> = vec![
+            (&vite::VitePlugin, "vite"),
+            (&webpack::WebpackPlugin, "webpack"),
+            (&rollup::RollupPlugin, "rollup"),
+        ];
+
+        for (plugin, enabler) in cases {
+            assert!(
+                plugin.enablers().contains(&enabler),
+                "plugin '{}' should have '{}' as enabler",
+                plugin.name(),
+                enabler
+            );
+        }
+    }
+
+    // ── Entry pattern validation ─────────────────────────────────
+
+    #[test]
+    fn test_plugins_have_test_entry_patterns() {
+        let test_plugins: Vec<&dyn Plugin> = vec![
+            &jest::JestPlugin,
+            &vitest::VitestPlugin,
+            &mocha::MochaPlugin,
+        ];
+
+        for plugin in test_plugins {
+            let patterns = plugin.entry_patterns();
+            assert!(
+                !patterns.is_empty(),
+                "test plugin '{}' should have entry patterns",
+                plugin.name()
+            );
+            assert!(
+                patterns
+                    .iter()
+                    .any(|p| p.contains("test") || p.contains("spec") || p.contains("__tests__")),
+                "test plugin '{}' should have test/spec patterns in entry patterns",
+                plugin.name()
+            );
+        }
+    }
+
+    #[test]
+    fn framework_plugins_have_entry_patterns() {
+        let framework_plugins: Vec<&dyn Plugin> = vec![
+            &nextjs::NextJsPlugin,
+            &nuxt::NuxtPlugin,
+            &angular::AngularPlugin,
+            &sveltekit::SvelteKitPlugin,
+        ];
+
+        for plugin in framework_plugins {
+            assert!(
+                !plugin.entry_patterns().is_empty(),
+                "framework plugin '{}' should have entry patterns",
+                plugin.name()
+            );
+        }
+    }
+
+    // ── Config file pattern validation ───────────────────────────
+
+    #[test]
+    fn plugins_with_resolve_config_have_config_patterns() {
+        // Plugins that override resolve_config should have config_patterns
+        // so the registry knows which files to pass to them
+        let plugins_with_configs: Vec<&dyn Plugin> = vec![
+            &jest::JestPlugin,
+            &vitest::VitestPlugin,
+            &babel::BabelPlugin,
+            &eslint::EslintPlugin,
+            &webpack::WebpackPlugin,
+            &storybook::StorybookPlugin,
+            &typescript::TypeScriptPlugin,
+            &postcss::PostCssPlugin,
+            &nextjs::NextJsPlugin,
+            &nuxt::NuxtPlugin,
+            &angular::AngularPlugin,
+            &nx::NxPlugin,
+            &rollup::RollupPlugin,
+            &sveltekit::SvelteKitPlugin,
+        ];
+
+        for plugin in plugins_with_configs {
+            assert!(
+                !plugin.config_patterns().is_empty(),
+                "plugin '{}' with resolve_config should have config_patterns",
+                plugin.name()
+            );
+        }
+    }
+
+    // ── Tooling dependencies validation ──────────────────────────
+
+    #[test]
+    fn plugin_tooling_deps_include_enabler_package() {
+        // For most plugins, the enabler package should also be a tooling dependency
+        let plugins: Vec<&dyn Plugin> = vec![
+            &jest::JestPlugin,
+            &vitest::VitestPlugin,
+            &webpack::WebpackPlugin,
+            &typescript::TypeScriptPlugin,
+            &eslint::EslintPlugin,
+            &prettier::PrettierPlugin,
+        ];
+
+        for plugin in plugins {
+            let tooling = plugin.tooling_dependencies();
+            let enablers = plugin.enablers();
+            // At least one enabler should be in tooling deps
+            assert!(
+                enablers
+                    .iter()
+                    .any(|e| !e.ends_with('/') && tooling.contains(e)),
+                "plugin '{}': at least one non-prefix enabler should be in tooling_dependencies",
+                plugin.name()
+            );
+        }
+    }
+
+    // ── used_exports validation ──────────────────────────────────
+
+    #[test]
+    fn nextjs_has_used_exports_for_pages() {
+        let plugin = nextjs::NextJsPlugin;
+        let exports = plugin.used_exports();
+        assert!(!exports.is_empty(), "nextjs should have used_exports");
+        // Should include 'default' for page files
+        assert!(
+            exports.iter().any(|(_, names)| names.contains(&"default")),
+            "nextjs used_exports should include 'default'"
+        );
+    }
+
+    #[test]
+    fn remix_has_used_exports_for_routes() {
+        let plugin = remix::RemixPlugin;
+        let exports = plugin.used_exports();
+        assert!(!exports.is_empty());
+        let route_entry = exports.iter().find(|(pat, _)| pat.contains("routes"));
+        assert!(
+            route_entry.is_some(),
+            "remix should have used_exports for routes"
+        );
+        let (_, names) = route_entry.unwrap();
+        assert!(names.contains(&"loader"));
+        assert!(names.contains(&"action"));
+        assert!(names.contains(&"default"));
+    }
+
+    #[test]
+    fn sveltekit_has_used_exports_for_routes() {
+        let plugin = sveltekit::SvelteKitPlugin;
+        let exports = plugin.used_exports();
+        assert!(!exports.is_empty(), "sveltekit should have used_exports");
+        // Should have server route exports
+        assert!(
+            exports.iter().any(|(_, names)| names.contains(&"GET")),
+            "sveltekit should have GET in server route used_exports"
+        );
+    }
+
+    // ── virtual_module_prefixes validation ───────────────────────
+
+    #[test]
+    fn nuxt_has_hash_virtual_prefix() {
+        let plugin = nuxt::NuxtPlugin;
+        assert!(plugin.virtual_module_prefixes().contains(&"#"));
+    }
+
+    #[test]
+    fn sveltekit_has_dollar_virtual_prefixes() {
+        let plugin = sveltekit::SvelteKitPlugin;
+        let prefixes = plugin.virtual_module_prefixes();
+        assert!(prefixes.contains(&"$app/"));
+        assert!(prefixes.contains(&"$env/"));
+        assert!(prefixes.contains(&"$lib/"));
+    }
+
+    // ── path_aliases validation ──────────────────────────────────
+
+    #[test]
+    fn sveltekit_has_lib_path_alias() {
+        let plugin = sveltekit::SvelteKitPlugin;
+        let aliases = plugin.path_aliases(Path::new("/project"));
+        assert!(
+            aliases.iter().any(|(prefix, _)| *prefix == "$lib/"),
+            "sveltekit should have $lib/ path alias"
+        );
+    }
+
+    #[test]
+    fn nuxt_has_tilde_path_alias() {
+        let plugin = nuxt::NuxtPlugin;
+        let aliases = plugin.path_aliases(Path::new("/nonexistent"));
+        assert!(
+            aliases.iter().any(|(prefix, _)| *prefix == "~/"),
+            "nuxt should have ~/ path alias"
+        );
+        assert!(
+            aliases.iter().any(|(prefix, _)| *prefix == "~~/"),
+            "nuxt should have ~~/ path alias"
+        );
+    }
+
+    // ── package_json_config_key validation ────────────────────────
+
+    #[test]
+    fn jest_has_package_json_config_key() {
+        let plugin = jest::JestPlugin;
+        assert_eq!(plugin.package_json_config_key(), Some("jest"));
+    }
+
+    // ── Macro-generated plugin validation ────────────────────────
+
+    #[test]
+    fn macro_generated_plugin_basic_properties() {
+        // Test a simple macro-generated plugin (MSW)
+        let plugin = msw::MswPlugin;
+        assert_eq!(plugin.name(), "msw");
+        assert!(plugin.enablers().contains(&"msw"));
+        assert!(!plugin.entry_patterns().is_empty());
+        assert!(plugin.config_patterns().is_empty()); // MSW has no config
+        assert!(!plugin.always_used().is_empty());
+        assert!(!plugin.tooling_dependencies().is_empty());
+    }
+
+    #[test]
+    fn macro_generated_plugin_with_used_exports() {
+        // Test a macro-generated plugin with used_exports (Remix)
+        let plugin = remix::RemixPlugin;
+        assert_eq!(plugin.name(), "remix");
+        let exports = plugin.used_exports();
+        assert!(!exports.is_empty());
+    }
+
+    #[test]
+    fn macro_generated_plugin_imports_only_resolve_config() {
+        // Cypress uses resolve_config: imports_only
+        let plugin = cypress::CypressPlugin;
+        let source = r"
+            import { defineConfig } from 'cypress';
+            import coveragePlugin from '@cypress/code-coverage';
+            export default defineConfig({});
+        ";
+        let result = plugin.resolve_config(
+            Path::new("cypress.config.ts"),
+            source,
+            Path::new("/project"),
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"cypress".to_string()),
+            "imports_only should extract import sources"
+        );
+        assert!(
+            result
+                .referenced_dependencies
+                .contains(&"@cypress/code-coverage".to_string()),
+            "imports_only should extract scoped import sources"
+        );
+    }
+
+    // ── Total plugin count ───────────────────────────────────────
+
+    #[test]
+    fn builtin_plugin_count_is_expected() {
+        let plugins = registry::builtin::create_builtin_plugins();
+        // Ensure we have a reasonable number of plugins and don't accidentally lose any.
+        // Update this number when adding/removing plugins.
+        assert!(
+            plugins.len() >= 80,
+            "expected at least 80 built-in plugins, got {}",
+            plugins.len()
+        );
+    }
 }

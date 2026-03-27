@@ -63,6 +63,10 @@ inputs:
     description: 'Emit findings as inline PR annotations via workflow commands (no Advanced Security required)'
     required: false
     default: 'true'
+  review-comments:
+    description: 'Post findings as inline PR review comments with rich markdown formatting (code blocks, tables, links, suggestions). Creates a single review per run. Automatically disables plain-text annotations when enabled.'
+    required: false
+    default: 'false'
   max-annotations:
     description: 'Maximum number of inline annotations to emit (default: 50)'
     required: false

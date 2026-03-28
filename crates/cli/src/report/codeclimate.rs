@@ -71,6 +71,35 @@ fn cc_issue(
     })
 }
 
+/// Push CodeClimate issues for unused dependencies with a shared structure.
+fn push_dep_cc_issues(
+    issues: &mut Vec<serde_json::Value>,
+    deps: &[fallow_core::results::UnusedDependency],
+    root: &Path,
+    rule_id: &str,
+    location_label: &str,
+    severity: Severity,
+) {
+    let level = severity_to_codeclimate(severity);
+    for dep in deps {
+        let path = cc_path(&dep.path, root);
+        let line = if dep.line > 0 { Some(dep.line) } else { None };
+        let fp = fingerprint_hash(&[rule_id, &dep.package_name]);
+        issues.push(cc_issue(
+            rule_id,
+            &format!(
+                "Package '{}' is in {location_label} but never imported",
+                dep.package_name
+            ),
+            level,
+            "Bug Risk",
+            &path,
+            line,
+            &fp,
+        ));
+    }
+}
+
 /// Build CodeClimate JSON array from dead-code analysis results.
 pub fn build_codeclimate(
     results: &AnalysisResults,
@@ -150,49 +179,27 @@ pub fn build_codeclimate(
         ));
     }
 
-    // Unused dependencies (shared closure for all dep locations)
-    let push_deps = |issues: &mut Vec<serde_json::Value>,
-                     deps: &[fallow_core::results::UnusedDependency],
-                     rule_id: &str,
-                     location_label: &str,
-                     severity: Severity| {
-        let level = severity_to_codeclimate(severity);
-        for dep in deps {
-            let path = cc_path(&dep.path, root);
-            let line = if dep.line > 0 { Some(dep.line) } else { None };
-            let fp = fingerprint_hash(&[rule_id, &dep.package_name]);
-            issues.push(cc_issue(
-                rule_id,
-                &format!(
-                    "Package '{}' is in {location_label} but never imported",
-                    dep.package_name
-                ),
-                level,
-                "Bug Risk",
-                &path,
-                line,
-                &fp,
-            ));
-        }
-    };
-
-    push_deps(
+    // Unused dependencies
+    push_dep_cc_issues(
         &mut issues,
         &results.unused_dependencies,
+        root,
         "fallow/unused-dependency",
         "dependencies",
         rules.unused_dependencies,
     );
-    push_deps(
+    push_dep_cc_issues(
         &mut issues,
         &results.unused_dev_dependencies,
+        root,
         "fallow/unused-dev-dependency",
         "devDependencies",
         rules.unused_dev_dependencies,
     );
-    push_deps(
+    push_dep_cc_issues(
         &mut issues,
         &results.unused_optional_dependencies,
+        root,
         "fallow/unused-optional-dependency",
         "optionalDependencies",
         rules.unused_optional_dependencies,

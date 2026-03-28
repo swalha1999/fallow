@@ -95,6 +95,155 @@ fn sarif_rule(id: &str, fallback_short: &str, level: &str) -> serde_json::Value 
     }
 }
 
+/// Extract SARIF fields for an unused export or type export.
+fn sarif_export_fields(
+    export: &UnusedExport,
+    root: &Path,
+    rule_id: &'static str,
+    level: &'static str,
+    kind: &str,
+    re_kind: &str,
+) -> SarifFields {
+    let label = if export.is_re_export { re_kind } else { kind };
+    SarifFields {
+        rule_id,
+        level,
+        message: format!(
+            "{} '{}' is never imported by other modules",
+            label, export.export_name
+        ),
+        uri: relative_uri(&export.path, root),
+        region: Some((export.line, export.col + 1)),
+        properties: if export.is_re_export {
+            Some(serde_json::json!({ "is_re_export": true }))
+        } else {
+            None
+        },
+    }
+}
+
+/// Extract SARIF fields for an unused dependency.
+fn sarif_dep_fields(
+    dep: &UnusedDependency,
+    root: &Path,
+    rule_id: &'static str,
+    level: &'static str,
+    section: &str,
+) -> SarifFields {
+    SarifFields {
+        rule_id,
+        level,
+        message: format!(
+            "Package '{}' is in {} but never imported",
+            dep.package_name, section
+        ),
+        uri: relative_uri(&dep.path, root),
+        region: if dep.line > 0 {
+            Some((dep.line, 1))
+        } else {
+            None
+        },
+        properties: None,
+    }
+}
+
+/// Extract SARIF fields for an unused enum or class member.
+fn sarif_member_fields(
+    member: &UnusedMember,
+    root: &Path,
+    rule_id: &'static str,
+    level: &'static str,
+    kind: &str,
+) -> SarifFields {
+    SarifFields {
+        rule_id,
+        level,
+        message: format!(
+            "{} member '{}.{}' is never referenced",
+            kind, member.parent_name, member.member_name
+        ),
+        uri: relative_uri(&member.path, root),
+        region: Some((member.line, member.col + 1)),
+        properties: None,
+    }
+}
+
+/// Build the SARIF rules list from the current rules configuration.
+fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
+    vec![
+        sarif_rule(
+            "fallow/unused-file",
+            "File is not reachable from any entry point",
+            severity_to_sarif_level(rules.unused_files),
+        ),
+        sarif_rule(
+            "fallow/unused-export",
+            "Export is never imported",
+            severity_to_sarif_level(rules.unused_exports),
+        ),
+        sarif_rule(
+            "fallow/unused-type",
+            "Type export is never imported",
+            severity_to_sarif_level(rules.unused_types),
+        ),
+        sarif_rule(
+            "fallow/unused-dependency",
+            "Dependency listed but never imported",
+            severity_to_sarif_level(rules.unused_dependencies),
+        ),
+        sarif_rule(
+            "fallow/unused-dev-dependency",
+            "Dev dependency listed but never imported",
+            severity_to_sarif_level(rules.unused_dev_dependencies),
+        ),
+        sarif_rule(
+            "fallow/unused-optional-dependency",
+            "Optional dependency listed but never imported",
+            severity_to_sarif_level(rules.unused_optional_dependencies),
+        ),
+        sarif_rule(
+            "fallow/type-only-dependency",
+            "Production dependency only used via type-only imports",
+            severity_to_sarif_level(rules.type_only_dependencies),
+        ),
+        sarif_rule(
+            "fallow/test-only-dependency",
+            "Production dependency only imported by test files",
+            severity_to_sarif_level(rules.test_only_dependencies),
+        ),
+        sarif_rule(
+            "fallow/unused-enum-member",
+            "Enum member is never referenced",
+            severity_to_sarif_level(rules.unused_enum_members),
+        ),
+        sarif_rule(
+            "fallow/unused-class-member",
+            "Class member is never referenced",
+            severity_to_sarif_level(rules.unused_class_members),
+        ),
+        sarif_rule(
+            "fallow/unresolved-import",
+            "Import could not be resolved",
+            severity_to_sarif_level(rules.unresolved_imports),
+        ),
+        sarif_rule(
+            "fallow/unlisted-dependency",
+            "Dependency used but not in package.json",
+            severity_to_sarif_level(rules.unlisted_dependencies),
+        ),
+        sarif_rule(
+            "fallow/duplicate-export",
+            "Export name appears in multiple modules",
+            severity_to_sarif_level(rules.duplicate_exports),
+        ),
+        sarif_rule(
+            "fallow/circular-dependency",
+            "Circular dependency chain detected",
+            severity_to_sarif_level(rules.circular_dependencies),
+        ),
+    ]
+}
+
 pub fn build_sarif(
     results: &AnalysisResults,
     root: &Path,
@@ -113,33 +262,10 @@ pub fn build_sarif(
         }
     });
 
-    let sarif_export = |export: &UnusedExport,
-                        rule_id: &'static str,
-                        level: &'static str,
-                        kind: &str,
-                        re_kind: &str|
-     -> SarifFields {
-        let label = if export.is_re_export { re_kind } else { kind };
-        SarifFields {
-            rule_id,
-            level,
-            message: format!(
-                "{} '{}' is never imported by other modules",
-                label, export.export_name
-            ),
-            uri: relative_uri(&export.path, root),
-            region: Some((export.line, export.col + 1)),
-            properties: if export.is_re_export {
-                Some(serde_json::json!({ "is_re_export": true }))
-            } else {
-                None
-            },
-        }
-    };
-
     push_sarif_results(&mut sarif_results, &results.unused_exports, |export| {
-        sarif_export(
+        sarif_export_fields(
             export,
+            root,
             "fallow/unused-export",
             severity_to_sarif_level(rules.unused_exports),
             "Export",
@@ -148,8 +274,9 @@ pub fn build_sarif(
     });
 
     push_sarif_results(&mut sarif_results, &results.unused_types, |export| {
-        sarif_export(
+        sarif_export_fields(
             export,
+            root,
             "fallow/unused-type",
             severity_to_sarif_level(rules.unused_types),
             "Type export",
@@ -157,31 +284,10 @@ pub fn build_sarif(
         )
     });
 
-    let sarif_dep = |dep: &UnusedDependency,
-                     rule_id: &'static str,
-                     level: &'static str,
-                     section: &str|
-     -> SarifFields {
-        SarifFields {
-            rule_id,
-            level,
-            message: format!(
-                "Package '{}' is in {} but never imported",
-                dep.package_name, section
-            ),
-            uri: relative_uri(&dep.path, root),
-            region: if dep.line > 0 {
-                Some((dep.line, 1))
-            } else {
-                None
-            },
-            properties: None,
-        }
-    };
-
     push_sarif_results(&mut sarif_results, &results.unused_dependencies, |dep| {
-        sarif_dep(
+        sarif_dep_fields(
             dep,
+            root,
             "fallow/unused-dependency",
             severity_to_sarif_level(rules.unused_dependencies),
             "dependencies",
@@ -192,8 +298,9 @@ pub fn build_sarif(
         &mut sarif_results,
         &results.unused_dev_dependencies,
         |dep| {
-            sarif_dep(
+            sarif_dep_fields(
                 dep,
+                root,
                 "fallow/unused-dev-dependency",
                 severity_to_sarif_level(rules.unused_dev_dependencies),
                 "devDependencies",
@@ -205,8 +312,9 @@ pub fn build_sarif(
         &mut sarif_results,
         &results.unused_optional_dependencies,
         |dep| {
-            sarif_dep(
+            sarif_dep_fields(
                 dep,
+                root,
                 "fallow/unused-optional-dependency",
                 severity_to_sarif_level(rules.unused_optional_dependencies),
                 "optionalDependencies",
@@ -250,27 +358,10 @@ pub fn build_sarif(
         }
     });
 
-    let sarif_member = |member: &UnusedMember,
-                        rule_id: &'static str,
-                        level: &'static str,
-                        kind: &str|
-     -> SarifFields {
-        SarifFields {
-            rule_id,
-            level,
-            message: format!(
-                "{} member '{}.{}' is never referenced",
-                kind, member.parent_name, member.member_name
-            ),
-            uri: relative_uri(&member.path, root),
-            region: Some((member.line, member.col + 1)),
-            properties: None,
-        }
-    };
-
     push_sarif_results(&mut sarif_results, &results.unused_enum_members, |member| {
-        sarif_member(
+        sarif_member_fields(
             member,
+            root,
             "fallow/unused-enum-member",
             severity_to_sarif_level(rules.unused_enum_members),
             "Enum",
@@ -281,8 +372,9 @@ pub fn build_sarif(
         &mut sarif_results,
         &results.unused_class_members,
         |member| {
-            sarif_member(
+            sarif_member_fields(
                 member,
+                root,
                 "fallow/unused-class-member",
                 severity_to_sarif_level(rules.unused_class_members),
                 "Class",
@@ -355,79 +447,6 @@ pub fn build_sarif(
         },
     );
 
-    let sarif_rules = vec![
-        sarif_rule(
-            "fallow/unused-file",
-            "File is not reachable from any entry point",
-            severity_to_sarif_level(rules.unused_files),
-        ),
-        sarif_rule(
-            "fallow/unused-export",
-            "Export is never imported",
-            severity_to_sarif_level(rules.unused_exports),
-        ),
-        sarif_rule(
-            "fallow/unused-type",
-            "Type export is never imported",
-            severity_to_sarif_level(rules.unused_types),
-        ),
-        sarif_rule(
-            "fallow/unused-dependency",
-            "Dependency listed but never imported",
-            severity_to_sarif_level(rules.unused_dependencies),
-        ),
-        sarif_rule(
-            "fallow/unused-dev-dependency",
-            "Dev dependency listed but never imported",
-            severity_to_sarif_level(rules.unused_dev_dependencies),
-        ),
-        sarif_rule(
-            "fallow/unused-optional-dependency",
-            "Optional dependency listed but never imported",
-            severity_to_sarif_level(rules.unused_optional_dependencies),
-        ),
-        sarif_rule(
-            "fallow/type-only-dependency",
-            "Production dependency only used via type-only imports",
-            severity_to_sarif_level(rules.type_only_dependencies),
-        ),
-        sarif_rule(
-            "fallow/test-only-dependency",
-            "Production dependency only imported by test files",
-            severity_to_sarif_level(rules.test_only_dependencies),
-        ),
-        sarif_rule(
-            "fallow/unused-enum-member",
-            "Enum member is never referenced",
-            severity_to_sarif_level(rules.unused_enum_members),
-        ),
-        sarif_rule(
-            "fallow/unused-class-member",
-            "Class member is never referenced",
-            severity_to_sarif_level(rules.unused_class_members),
-        ),
-        sarif_rule(
-            "fallow/unresolved-import",
-            "Import could not be resolved",
-            severity_to_sarif_level(rules.unresolved_imports),
-        ),
-        sarif_rule(
-            "fallow/unlisted-dependency",
-            "Dependency used but not in package.json",
-            severity_to_sarif_level(rules.unlisted_dependencies),
-        ),
-        sarif_rule(
-            "fallow/duplicate-export",
-            "Export name appears in multiple modules",
-            severity_to_sarif_level(rules.duplicate_exports),
-        ),
-        sarif_rule(
-            "fallow/circular-dependency",
-            "Circular dependency chain detected",
-            severity_to_sarif_level(rules.circular_dependencies),
-        ),
-    ];
-
     serde_json::json!({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -437,7 +456,7 @@ pub fn build_sarif(
                     "name": "fallow",
                     "version": env!("CARGO_PKG_VERSION"),
                     "informationUri": "https://github.com/fallow-rs/fallow",
-                    "rules": sarif_rules
+                    "rules": build_sarif_rules(rules)
                 }
             },
             "results": sarif_results

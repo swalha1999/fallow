@@ -80,154 +80,177 @@ pub(in crate::report) fn build_health_human_lines(
     root: &Path,
 ) -> Vec<String> {
     let mut lines = Vec::new();
+    render_health_score(&mut lines, report);
+    render_vital_signs(&mut lines, report);
+    render_findings(&mut lines, report, root);
+    render_file_scores(&mut lines, report, root);
+    render_hotspots(&mut lines, report, root);
+    render_refactoring_targets(&mut lines, report, root);
+    lines
+}
 
-    // Health score (shown first when available)
-    if let Some(ref hs) = report.health_score {
-        let score_str = format!("{:.0}", hs.score);
-        let grade_str = hs.grade;
-        let score_colored = if hs.score >= 85.0 {
-            format!("{score_str} {grade_str}")
-                .green()
-                .bold()
-                .to_string()
-        } else if hs.score >= 70.0 {
-            format!("{score_str} {grade_str}")
-                .yellow()
-                .bold()
-                .to_string()
-        } else if hs.score >= 55.0 {
-            format!("{score_str} {grade_str}").yellow().to_string()
-        } else {
-            format!("{score_str} {grade_str}").red().bold().to_string()
-        };
-        lines.push(format!(
-            "{} {} {}",
-            "\u{25cf}".cyan(),
-            "Health score:".cyan().bold(),
-            score_colored,
-        ));
+// ── Section renderers ────
 
-        // Penalty breakdown (dimmed, one line)
-        let p = &hs.penalties;
-        let mut parts = Vec::new();
-        if let Some(df) = p.dead_files
-            && df > 0.0
-        {
-            parts.push(format!("dead files -{df:.1}"));
-        }
-        if let Some(de) = p.dead_exports
-            && de > 0.0
-        {
-            parts.push(format!("dead exports -{de:.1}"));
-        }
-        if p.complexity > 0.0 {
-            parts.push(format!("complexity -{:.1}", p.complexity));
-        }
-        if p.p90_complexity > 0.0 {
-            parts.push(format!("p90 -{:.1}", p.p90_complexity));
-        }
-        if let Some(mi) = p.maintainability
-            && mi > 0.0
-        {
-            parts.push(format!("MI -{mi:.1}"));
-        }
-        if let Some(hp) = p.hotspots
-            && hp > 0.0
-        {
-            parts.push(format!("hotspots -{hp:.1}"));
-        }
-        if let Some(ud) = p.unused_deps
-            && ud > 0.0
-        {
-            parts.push(format!("unused deps -{ud:.1}"));
-        }
-        if let Some(cd) = p.circular_deps
-            && cd > 0.0
-        {
-            parts.push(format!("circular deps -{cd:.1}"));
-        }
-        if !parts.is_empty() {
-            lines.push(format!("  {}", parts.join(" \u{00b7} ").dimmed()));
-        }
-        // Check for N/A components
-        let mut na_parts = Vec::new();
-        if p.dead_files.is_none() {
-            na_parts.push("dead code");
-        }
-        if p.maintainability.is_none() {
-            na_parts.push("MI");
-        }
-        if p.hotspots.is_none() {
-            na_parts.push("hotspots");
-        }
-        if !na_parts.is_empty() {
-            lines.push(format!(
-                "  {}",
-                format!(
-                    "N/A: {} (run --score for full pipeline)",
-                    na_parts.join(", ")
-                )
-                .dimmed()
-            ));
-        }
-        lines.push(String::new());
-    }
+fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::HealthReport) {
+    let Some(ref hs) = report.health_score else {
+        return;
+    };
 
-    // Vital signs summary line (always shown when available)
-    if let Some(ref vs) = report.vital_signs {
-        let mut parts = Vec::new();
-        if let Some(dfp) = vs.dead_file_pct {
-            parts.push(format!("dead files {dfp:.1}%"));
-        }
-        if let Some(dep) = vs.dead_export_pct {
-            parts.push(format!("dead exports {dep:.1}%"));
-        }
-        parts.push(format!("avg cyclomatic {:.1}", vs.avg_cyclomatic));
-        parts.push(format!("p90 cyclomatic {}", vs.p90_cyclomatic));
-        if let Some(mi) = vs.maintainability_avg {
-            parts.push(format!("MI {mi:.1}"));
-        }
-        if let Some(hc) = vs.hotspot_count {
-            parts.push(format!("{hc} hotspot{}", plural(hc as usize)));
-        }
-        if let Some(cd) = vs.circular_dep_count
-            && cd > 0
-        {
-            parts.push(format!("{cd} circular dep{}", plural(cd as usize)));
-        }
-        if let Some(ud) = vs.unused_dep_count
-            && ud > 0
-        {
-            parts.push(format!("{ud} unused dep{}", plural(ud as usize)));
-        }
-        lines.push(format!(
-            "{} {}",
-            "\u{25a0}".dimmed(),
-            parts.join(" \u{00b7} ").dimmed()
-        ));
-        lines.push(String::new());
-    }
-
-    if !report.findings.is_empty() {
-        lines.push(format!(
-            "{} {}",
-            "\u{25cf}".red(),
-            if report.findings.len() < report.summary.functions_above_threshold {
-                format!(
-                    "High complexity functions ({} shown, {} total)",
-                    report.findings.len(),
-                    report.summary.functions_above_threshold
-                )
-            } else {
-                format!(
-                    "High complexity functions ({})",
-                    report.summary.functions_above_threshold
-                )
-            }
-            .red()
+    let score_str = format!("{:.0}", hs.score);
+    let grade_str = hs.grade;
+    let score_colored = if hs.score >= 85.0 {
+        format!("{score_str} {grade_str}")
+            .green()
             .bold()
+            .to_string()
+    } else if hs.score >= 70.0 {
+        format!("{score_str} {grade_str}")
+            .yellow()
+            .bold()
+            .to_string()
+    } else if hs.score >= 55.0 {
+        format!("{score_str} {grade_str}").yellow().to_string()
+    } else {
+        format!("{score_str} {grade_str}").red().bold().to_string()
+    };
+    lines.push(format!(
+        "{} {} {}",
+        "\u{25cf}".cyan(),
+        "Health score:".cyan().bold(),
+        score_colored,
+    ));
+
+    // Penalty breakdown (dimmed, one line)
+    let p = &hs.penalties;
+    let mut parts = Vec::new();
+    if let Some(df) = p.dead_files
+        && df > 0.0
+    {
+        parts.push(format!("dead files -{df:.1}"));
+    }
+    if let Some(de) = p.dead_exports
+        && de > 0.0
+    {
+        parts.push(format!("dead exports -{de:.1}"));
+    }
+    if p.complexity > 0.0 {
+        parts.push(format!("complexity -{:.1}", p.complexity));
+    }
+    if p.p90_complexity > 0.0 {
+        parts.push(format!("p90 -{:.1}", p.p90_complexity));
+    }
+    if let Some(mi) = p.maintainability
+        && mi > 0.0
+    {
+        parts.push(format!("MI -{mi:.1}"));
+    }
+    if let Some(hp) = p.hotspots
+        && hp > 0.0
+    {
+        parts.push(format!("hotspots -{hp:.1}"));
+    }
+    if let Some(ud) = p.unused_deps
+        && ud > 0.0
+    {
+        parts.push(format!("unused deps -{ud:.1}"));
+    }
+    if let Some(cd) = p.circular_deps
+        && cd > 0.0
+    {
+        parts.push(format!("circular deps -{cd:.1}"));
+    }
+    if !parts.is_empty() {
+        lines.push(format!("  {}", parts.join(" \u{00b7} ").dimmed()));
+    }
+    // Check for N/A components
+    let mut na_parts = Vec::new();
+    if p.dead_files.is_none() {
+        na_parts.push("dead code");
+    }
+    if p.maintainability.is_none() {
+        na_parts.push("MI");
+    }
+    if p.hotspots.is_none() {
+        na_parts.push("hotspots");
+    }
+    if !na_parts.is_empty() {
+        lines.push(format!(
+            "  {}",
+            format!(
+                "N/A: {} (run --score for full pipeline)",
+                na_parts.join(", ")
+            )
+            .dimmed()
         ));
     }
+    lines.push(String::new());
+}
+
+fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::HealthReport) {
+    let Some(ref vs) = report.vital_signs else {
+        return;
+    };
+
+    let mut parts = Vec::new();
+    if let Some(dfp) = vs.dead_file_pct {
+        parts.push(format!("dead files {dfp:.1}%"));
+    }
+    if let Some(dep) = vs.dead_export_pct {
+        parts.push(format!("dead exports {dep:.1}%"));
+    }
+    parts.push(format!("avg cyclomatic {:.1}", vs.avg_cyclomatic));
+    parts.push(format!("p90 cyclomatic {}", vs.p90_cyclomatic));
+    if let Some(mi) = vs.maintainability_avg {
+        parts.push(format!("MI {mi:.1}"));
+    }
+    if let Some(hc) = vs.hotspot_count {
+        parts.push(format!("{hc} hotspot{}", plural(hc as usize)));
+    }
+    if let Some(cd) = vs.circular_dep_count
+        && cd > 0
+    {
+        parts.push(format!("{cd} circular dep{}", plural(cd as usize)));
+    }
+    if let Some(ud) = vs.unused_dep_count
+        && ud > 0
+    {
+        parts.push(format!("{ud} unused dep{}", plural(ud as usize)));
+    }
+    lines.push(format!(
+        "{} {}",
+        "\u{25a0}".dimmed(),
+        parts.join(" \u{00b7} ").dimmed()
+    ));
+    lines.push(String::new());
+}
+
+fn render_findings(
+    lines: &mut Vec<String>,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    if report.findings.is_empty() {
+        return;
+    }
+
+    lines.push(format!(
+        "{} {}",
+        "\u{25cf}".red(),
+        if report.findings.len() < report.summary.functions_above_threshold {
+            format!(
+                "High complexity functions ({} shown, {} total)",
+                report.findings.len(),
+                report.summary.functions_above_threshold
+            )
+        } else {
+            format!(
+                "High complexity functions ({})",
+                report.summary.functions_above_threshold
+            )
+        }
+        .red()
+        .bold()
+    ));
 
     let mut last_file = String::new();
     for finding in &report.findings {
@@ -265,286 +288,301 @@ pub(in crate::report) fn build_health_human_lines(
             format!("{:>3}", finding.line_count).dimmed(),
         ));
     }
-    if !report.findings.is_empty() {
-        lines.push(format!(
-            "  {}",
-            format!(
-                "Functions exceeding cyclomatic or cognitive complexity thresholds \u{2014} {DOCS_HEALTH}#complexity-metrics"
-            )
-            .dimmed()
-        ));
-        lines.push(String::new());
+    lines.push(format!(
+        "  {}",
+        format!(
+            "Functions exceeding cyclomatic or cognitive complexity thresholds \u{2014} {DOCS_HEALTH}#complexity-metrics"
+        )
+        .dimmed()
+    ));
+    lines.push(String::new());
+}
+
+fn render_file_scores(
+    lines: &mut Vec<String>,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    if report.file_scores.is_empty() {
+        return;
     }
 
-    // File health scores (truncated)
-    if !report.file_scores.is_empty() {
-        lines.push(format!(
-            "{} {}",
-            "\u{25cf}".cyan(),
-            format!("File health scores ({} files)", report.file_scores.len())
-                .cyan()
-                .bold()
-        ));
-        lines.push(String::new());
+    lines.push(format!(
+        "{} {}",
+        "\u{25cf}".cyan(),
+        format!("File health scores ({} files)", report.file_scores.len())
+            .cyan()
+            .bold()
+    ));
+    lines.push(String::new());
 
-        let shown_scores = report.file_scores.len().min(MAX_FLAT_ITEMS);
-        for score in &report.file_scores[..shown_scores] {
-            let file_str = relative_path(&score.path, root).display().to_string();
-            let mi = score.maintainability_index;
+    let shown_scores = report.file_scores.len().min(MAX_FLAT_ITEMS);
+    for score in &report.file_scores[..shown_scores] {
+        let file_str = relative_path(&score.path, root).display().to_string();
+        let mi = score.maintainability_index;
 
-            // MI score: color-coded by quality
-            let mi_str = format!("{mi:>5.1}");
-            let mi_colored = if mi >= 80.0 {
-                mi_str.green().to_string()
-            } else if mi >= 50.0 {
-                mi_str.yellow().to_string()
-            } else {
-                mi_str.red().bold().to_string()
-            };
-
-            // Path: dim directory, normal filename
-            let (dir, filename) = split_dir_filename(&file_str);
-
-            // Line 1: MI score + path
-            lines.push(format!("  {}    {}{}", mi_colored, dir.dimmed(), filename,));
-
-            // Line 2: metrics (indented, dimmed)
-            lines.push(format!(
-                "         {} fan-in  {} fan-out  {} dead  {} density",
-                format!("{:>3}", score.fan_in).dimmed(),
-                format!("{:>3}", score.fan_out).dimmed(),
-                format!("{:>3.0}%", score.dead_code_ratio * 100.0).dimmed(),
-                format!("{:.2}", score.complexity_density).dimmed(),
-            ));
-
-            // Blank line between entries
-            lines.push(String::new());
-        }
-        if report.file_scores.len() > MAX_FLAT_ITEMS {
-            lines.push(format!(
-                "  {}",
-                format!(
-                    "... and {} more files",
-                    report.file_scores.len() - MAX_FLAT_ITEMS
-                )
-                .dimmed()
-            ));
-            lines.push(String::new());
-        }
-        lines.push(format!(
-            "  {}",
-            format!("Composite file quality scores based on complexity, coupling, and dead code \u{2014} {DOCS_HEALTH}#file-health-scores").dimmed()
-        ));
-        lines.push(String::new());
-    }
-
-    // Hotspots
-    if !report.hotspots.is_empty() {
-        let header = if let Some(ref summary) = report.hotspot_summary {
-            format!(
-                "Hotspots ({} files, since {})",
-                report.hotspots.len(),
-                summary.since,
-            )
+        // MI score: color-coded by quality
+        let mi_str = format!("{mi:>5.1}");
+        let mi_colored = if mi >= 80.0 {
+            mi_str.green().to_string()
+        } else if mi >= 50.0 {
+            mi_str.yellow().to_string()
         } else {
-            format!("Hotspots ({} files)", report.hotspots.len())
+            mi_str.red().bold().to_string()
         };
-        lines.push(format!("{} {}", "\u{25cf}".red(), header.red().bold()));
+
+        // Path: dim directory, normal filename
+        let (dir, filename) = split_dir_filename(&file_str);
+
+        // Line 1: MI score + path
+        lines.push(format!("  {}    {}{}", mi_colored, dir.dimmed(), filename,));
+
+        // Line 2: metrics (indented, dimmed)
+        lines.push(format!(
+            "         {} fan-in  {} fan-out  {} dead  {} density",
+            format!("{:>3}", score.fan_in).dimmed(),
+            format!("{:>3}", score.fan_out).dimmed(),
+            format!("{:>3.0}%", score.dead_code_ratio * 100.0).dimmed(),
+            format!("{:.2}", score.complexity_density).dimmed(),
+        ));
+
+        // Blank line between entries
         lines.push(String::new());
-
-        for entry in &report.hotspots {
-            let file_str = relative_path(&entry.path, root).display().to_string();
-
-            // Score: color-coded by severity
-            let score_str = format!("{:>5.1}", entry.score);
-            let score_colored = if entry.score >= 70.0 {
-                score_str.red().bold().to_string()
-            } else if entry.score >= 30.0 {
-                score_str.yellow().to_string()
-            } else {
-                score_str.green().to_string()
-            };
-
-            // Trend: symbol + color
-            let (trend_symbol, trend_colored) = match entry.trend {
-                fallow_core::churn::ChurnTrend::Accelerating => {
-                    ("\u{25b2}", "\u{25b2} accelerating".red().to_string())
-                }
-                fallow_core::churn::ChurnTrend::Cooling => {
-                    ("\u{25bc}", "\u{25bc} cooling".green().to_string())
-                }
-                fallow_core::churn::ChurnTrend::Stable => {
-                    ("\u{2500}", "\u{2500} stable".dimmed().to_string())
-                }
-            };
-
-            // Path: dim directory, normal filename
-            let (dir, filename) = split_dir_filename(&file_str);
-
-            // Line 1: score + trend symbol + path
-            lines.push(format!(
-                "  {} {}  {}{}",
-                score_colored,
-                match entry.trend {
-                    fallow_core::churn::ChurnTrend::Accelerating => trend_symbol.red().to_string(),
-                    fallow_core::churn::ChurnTrend::Cooling => trend_symbol.green().to_string(),
-                    fallow_core::churn::ChurnTrend::Stable => trend_symbol.dimmed().to_string(),
-                },
-                dir.dimmed(),
-                filename,
-            ));
-
-            // Line 2: metrics (indented, dimmed) + trend label
-            lines.push(format!(
-                "         {} commits  {} churn  {} density  {} fan-in  {}",
-                format!("{:>3}", entry.commits).dimmed(),
-                format!("{:>5}", entry.lines_added + entry.lines_deleted).dimmed(),
-                format!("{:.2}", entry.complexity_density).dimmed(),
-                format!("{:>2}", entry.fan_in).dimmed(),
-                trend_colored,
-            ));
-
-            // Blank line between entries
-            lines.push(String::new());
-        }
-
-        if let Some(ref summary) = report.hotspot_summary
-            && summary.files_excluded > 0
-        {
-            lines.push(format!(
-                "  {}",
-                format!(
-                    "{} file{} excluded (< {} commits)",
-                    summary.files_excluded,
-                    plural(summary.files_excluded),
-                    summary.min_commits,
-                )
-                .dimmed()
-            ));
-            lines.push(String::new());
-        }
+    }
+    if report.file_scores.len() > MAX_FLAT_ITEMS {
         lines.push(format!(
             "  {}",
             format!(
-                "Files with high churn and high complexity \u{2014} {DOCS_HEALTH}#hotspot-metrics"
+                "... and {} more files",
+                report.file_scores.len() - MAX_FLAT_ITEMS
             )
             .dimmed()
         ));
         lines.push(String::new());
     }
+    lines.push(format!(
+        "  {}",
+        format!("Composite file quality scores based on complexity, coupling, and dead code \u{2014} {DOCS_HEALTH}#file-health-scores").dimmed()
+    ));
+    lines.push(String::new());
+}
 
-    // Refactoring targets (last section — synthesis of data above)
-    if !report.targets.is_empty() {
+fn render_hotspots(
+    lines: &mut Vec<String>,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    if report.hotspots.is_empty() {
+        return;
+    }
+
+    let header = if let Some(ref summary) = report.hotspot_summary {
+        format!(
+            "Hotspots ({} files, since {})",
+            report.hotspots.len(),
+            summary.since,
+        )
+    } else {
+        format!("Hotspots ({} files)", report.hotspots.len())
+    };
+    lines.push(format!("{} {}", "\u{25cf}".red(), header.red().bold()));
+    lines.push(String::new());
+
+    for entry in &report.hotspots {
+        let file_str = relative_path(&entry.path, root).display().to_string();
+
+        // Score: color-coded by severity
+        let score_str = format!("{:>5.1}", entry.score);
+        let score_colored = if entry.score >= 70.0 {
+            score_str.red().bold().to_string()
+        } else if entry.score >= 30.0 {
+            score_str.yellow().to_string()
+        } else {
+            score_str.green().to_string()
+        };
+
+        // Trend: symbol + color
+        let (trend_symbol, trend_colored) = match entry.trend {
+            fallow_core::churn::ChurnTrend::Accelerating => {
+                ("\u{25b2}", "\u{25b2} accelerating".red().to_string())
+            }
+            fallow_core::churn::ChurnTrend::Cooling => {
+                ("\u{25bc}", "\u{25bc} cooling".green().to_string())
+            }
+            fallow_core::churn::ChurnTrend::Stable => {
+                ("\u{2500}", "\u{2500} stable".dimmed().to_string())
+            }
+        };
+
+        // Path: dim directory, normal filename
+        let (dir, filename) = split_dir_filename(&file_str);
+
+        // Line 1: score + trend symbol + path
         lines.push(format!(
-            "{} {}",
-            "\u{25cf}".cyan(),
-            format!("Refactoring targets ({})", report.targets.len())
-                .cyan()
-                .bold()
+            "  {} {}  {}{}",
+            score_colored,
+            match entry.trend {
+                fallow_core::churn::ChurnTrend::Accelerating => trend_symbol.red().to_string(),
+                fallow_core::churn::ChurnTrend::Cooling => trend_symbol.green().to_string(),
+                fallow_core::churn::ChurnTrend::Stable => trend_symbol.dimmed().to_string(),
+            },
+            dir.dimmed(),
+            filename,
         ));
 
-        // Effort summary: "3 low effort · 5 medium effort · 2 high effort"
-        let low = report
-            .targets
-            .iter()
-            .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::Low))
-            .count();
-        let medium = report
-            .targets
-            .iter()
-            .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::Medium))
-            .count();
-        let high = report
-            .targets
-            .iter()
-            .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::High))
-            .count();
-        let mut effort_parts = Vec::new();
-        if low > 0 {
-            effort_parts.push(format!("{low} low effort"));
-        }
-        if medium > 0 {
-            effort_parts.push(format!("{medium} medium"));
-        }
-        if high > 0 {
-            effort_parts.push(format!("{high} high"));
-        }
-        lines.push(format!("  {}", effort_parts.join(" \u{00b7} ").dimmed()));
+        // Line 2: metrics (indented, dimmed) + trend label
+        lines.push(format!(
+            "         {} commits  {} churn  {} density  {} fan-in  {}",
+            format!("{:>3}", entry.commits).dimmed(),
+            format!("{:>5}", entry.lines_added + entry.lines_deleted).dimmed(),
+            format!("{:.2}", entry.complexity_density).dimmed(),
+            format!("{:>2}", entry.fan_in).dimmed(),
+            trend_colored,
+        ));
+
+        // Blank line between entries
         lines.push(String::new());
+    }
 
-        let shown_targets = report.targets.len().min(MAX_FLAT_ITEMS);
-        for target in &report.targets[..shown_targets] {
-            let file_str = relative_path(&target.path, root).display().to_string();
-
-            // Efficiency score (sort key): color-coded by quick-win value
-            let eff_str = format!("{:>5.1}", target.efficiency);
-            let eff_colored = if target.efficiency >= 40.0 {
-                eff_str.green().to_string()
-            } else if target.efficiency >= 20.0 {
-                eff_str.yellow().to_string()
-            } else {
-                eff_str.dimmed().to_string()
-            };
-
-            // Path: dim directory, normal filename
-            let (dir, filename) = split_dir_filename(&file_str);
-
-            // Line 1: efficiency (sort key) + priority (secondary) + path
-            lines.push(format!(
-                "  {}  {}    {}{}",
-                eff_colored,
-                format!("pri:{:.1}", target.priority).dimmed(),
-                dir.dimmed(),
-                filename,
-            ));
-
-            // Line 2: category (yellow) + effort:label (colored) + confidence:label + recommendation (dimmed)
-            let label = target.category.label();
-            let effort = target.effort.label();
-            let effort_colored = match target.effort {
-                crate::health_types::EffortEstimate::Low => effort.green().to_string(),
-                crate::health_types::EffortEstimate::Medium => effort.yellow().to_string(),
-                crate::health_types::EffortEstimate::High => effort.red().to_string(),
-            };
-            let confidence = target.confidence.label();
-            let confidence_colored = match target.confidence {
-                crate::health_types::Confidence::High => confidence.green().to_string(),
-                crate::health_types::Confidence::Medium => confidence.yellow().to_string(),
-                crate::health_types::Confidence::Low => confidence.dimmed().to_string(),
-            };
-            lines.push(format!(
-                "         {} \u{00b7} effort:{} \u{00b7} confidence:{}  {}",
-                label.yellow(),
-                effort_colored,
-                confidence_colored,
-                target.recommendation.dimmed(),
-            ));
-
-            // Blank line between entries
-            lines.push(String::new());
-        }
-        if report.targets.len() > MAX_FLAT_ITEMS {
-            lines.push(format!(
-                "  {}",
-                format!(
-                    "... and {} more targets",
-                    report.targets.len() - MAX_FLAT_ITEMS
-                )
-                .dimmed()
-            ));
-            lines.push(String::new());
-        }
+    if let Some(ref summary) = report.hotspot_summary
+        && summary.files_excluded > 0
+    {
         lines.push(format!(
             "  {}",
             format!(
-                "Prioritized refactoring recommendations based on complexity, churn, and coupling signals \u{2014} {DOCS_HEALTH}#refactoring-targets"
+                "{} file{} excluded (< {} commits)",
+                summary.files_excluded,
+                plural(summary.files_excluded),
+                summary.min_commits,
             )
             .dimmed()
         ));
         lines.push(String::new());
     }
+    lines.push(format!(
+        "  {}",
+        format!("Files with high churn and high complexity \u{2014} {DOCS_HEALTH}#hotspot-metrics")
+            .dimmed()
+    ));
+    lines.push(String::new());
+}
 
-    lines
+fn render_refactoring_targets(
+    lines: &mut Vec<String>,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    if report.targets.is_empty() {
+        return;
+    }
+
+    lines.push(format!(
+        "{} {}",
+        "\u{25cf}".cyan(),
+        format!("Refactoring targets ({})", report.targets.len())
+            .cyan()
+            .bold()
+    ));
+
+    // Effort summary: "3 low effort · 5 medium effort · 2 high effort"
+    let low = report
+        .targets
+        .iter()
+        .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::Low))
+        .count();
+    let medium = report
+        .targets
+        .iter()
+        .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::Medium))
+        .count();
+    let high = report
+        .targets
+        .iter()
+        .filter(|t| matches!(t.effort, crate::health_types::EffortEstimate::High))
+        .count();
+    let mut effort_parts = Vec::new();
+    if low > 0 {
+        effort_parts.push(format!("{low} low effort"));
+    }
+    if medium > 0 {
+        effort_parts.push(format!("{medium} medium"));
+    }
+    if high > 0 {
+        effort_parts.push(format!("{high} high"));
+    }
+    lines.push(format!("  {}", effort_parts.join(" \u{00b7} ").dimmed()));
+    lines.push(String::new());
+
+    let shown_targets = report.targets.len().min(MAX_FLAT_ITEMS);
+    for target in &report.targets[..shown_targets] {
+        let file_str = relative_path(&target.path, root).display().to_string();
+
+        // Efficiency score (sort key): color-coded by quick-win value
+        let eff_str = format!("{:>5.1}", target.efficiency);
+        let eff_colored = if target.efficiency >= 40.0 {
+            eff_str.green().to_string()
+        } else if target.efficiency >= 20.0 {
+            eff_str.yellow().to_string()
+        } else {
+            eff_str.dimmed().to_string()
+        };
+
+        // Path: dim directory, normal filename
+        let (dir, filename) = split_dir_filename(&file_str);
+
+        // Line 1: efficiency (sort key) + priority (secondary) + path
+        lines.push(format!(
+            "  {}  {}    {}{}",
+            eff_colored,
+            format!("pri:{:.1}", target.priority).dimmed(),
+            dir.dimmed(),
+            filename,
+        ));
+
+        // Line 2: category (yellow) + effort:label (colored) + confidence:label + recommendation (dimmed)
+        let label = target.category.label();
+        let effort = target.effort.label();
+        let effort_colored = match target.effort {
+            crate::health_types::EffortEstimate::Low => effort.green().to_string(),
+            crate::health_types::EffortEstimate::Medium => effort.yellow().to_string(),
+            crate::health_types::EffortEstimate::High => effort.red().to_string(),
+        };
+        let confidence = target.confidence.label();
+        let confidence_colored = match target.confidence {
+            crate::health_types::Confidence::High => confidence.green().to_string(),
+            crate::health_types::Confidence::Medium => confidence.yellow().to_string(),
+            crate::health_types::Confidence::Low => confidence.dimmed().to_string(),
+        };
+        lines.push(format!(
+            "         {} \u{00b7} effort:{} \u{00b7} confidence:{}  {}",
+            label.yellow(),
+            effort_colored,
+            confidence_colored,
+            target.recommendation.dimmed(),
+        ));
+
+        // Blank line between entries
+        lines.push(String::new());
+    }
+    if report.targets.len() > MAX_FLAT_ITEMS {
+        lines.push(format!(
+            "  {}",
+            format!(
+                "... and {} more targets",
+                report.targets.len() - MAX_FLAT_ITEMS
+            )
+            .dimmed()
+        ));
+        lines.push(String::new());
+    }
+    lines.push(format!(
+        "  {}",
+        format!(
+            "Prioritized refactoring recommendations based on complexity, churn, and coupling signals \u{2014} {DOCS_HEALTH}#refactoring-targets"
+        )
+        .dimmed()
+    ));
+    lines.push(String::new());
 }
 
 #[cfg(test)]

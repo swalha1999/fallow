@@ -652,6 +652,33 @@ fn apply_ci_defaults(
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────
+
+fn build_regression_opts<'a>(
+    fail_on_regression: bool,
+    tolerance: regression::Tolerance,
+    regression_baseline: Option<&'a std::path::Path>,
+    save_regression_file: Option<&'a std::path::PathBuf>,
+    save_to_config: bool,
+    scoped: bool,
+    quiet: bool,
+) -> regression::RegressionOpts<'a> {
+    regression::RegressionOpts {
+        fail_on_regression,
+        tolerance,
+        regression_baseline_file: regression_baseline,
+        save_target: if let Some(path) = save_regression_file {
+            regression::SaveRegressionTarget::File(path)
+        } else if save_to_config {
+            regression::SaveRegressionTarget::Config
+        } else {
+            regression::SaveRegressionTarget::None
+        },
+        scoped,
+        quiet,
+    }
+}
+
 // ── Main ─────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
@@ -764,20 +791,15 @@ fn main() -> ExitCode {
                 run_check,
                 run_dupes,
                 run_health,
-                regression_opts: regression::RegressionOpts {
-                    fail_on_regression: cli.fail_on_regression,
+                regression_opts: build_regression_opts(
+                    cli.fail_on_regression,
                     tolerance,
-                    regression_baseline_file: cli.regression_baseline.as_deref(),
-                    save_target: if let Some(ref path) = save_regression_file {
-                        regression::SaveRegressionTarget::File(path)
-                    } else if save_to_config {
-                        regression::SaveRegressionTarget::Config
-                    } else {
-                        regression::SaveRegressionTarget::None
-                    },
-                    scoped: cli.changed_since.is_some() || cli.workspace.is_some(),
+                    cli.regression_baseline.as_deref(),
+                    save_regression_file.as_ref(),
+                    save_to_config,
+                    cli.changed_since.is_some() || cli.workspace.is_some(),
                     quiet,
-                },
+                ),
             })
         }
         Some(command) => match command {
@@ -840,20 +862,15 @@ fn main() -> ExitCode {
                     include_dupes,
                     trace_opts: &trace_opts,
                     explain: cli.explain,
-                    regression_opts: regression::RegressionOpts {
-                        fail_on_regression: cli.fail_on_regression,
+                    regression_opts: build_regression_opts(
+                        cli.fail_on_regression,
                         tolerance,
-                        regression_baseline_file: cli.regression_baseline.as_deref(),
-                        save_target: if let Some(ref path) = save_regression_file {
-                            regression::SaveRegressionTarget::File(path)
-                        } else if save_to_config {
-                            regression::SaveRegressionTarget::Config
-                        } else {
-                            regression::SaveRegressionTarget::None
-                        },
-                        scoped: cli.changed_since.is_some() || cli.workspace.is_some(),
+                        cli.regression_baseline.as_deref(),
+                        save_regression_file.as_ref(),
+                        save_to_config,
+                        cli.changed_since.is_some() || cli.workspace.is_some(),
                         quiet,
-                    },
+                    ),
                 })
             }
             Command::Watch { no_clear } => watch::run_watch(&watch::WatchOptions {

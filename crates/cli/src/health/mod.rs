@@ -127,22 +127,11 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
 
     // Load baseline for filtering (save happens after targets are computed)
     let loaded_baseline = if let Some(load_path) = opts.baseline {
-        match std::fs::read_to_string(load_path) {
-            Ok(json) => match serde_json::from_str::<HealthBaselineData>(&json) {
-                Ok(baseline) => {
-                    findings = filter_new_health_findings(findings, &baseline, &config.root);
-                    Some(baseline)
-                }
-                Err(e) => {
-                    eprintln!("Error: failed to parse health baseline: {e}");
-                    return Err(ExitCode::from(2));
-                }
-            },
-            Err(e) => {
-                eprintln!("Error: failed to read health baseline: {e}");
-                return Err(ExitCode::from(2));
-            }
-        }
+        Some(load_health_baseline(
+            load_path,
+            &mut findings,
+            &config.root,
+        )?)
     } else {
         None
     };
@@ -465,6 +454,24 @@ fn save_health_baseline(
             Err(ExitCode::from(2))
         }
     }
+}
+
+/// Load and apply a health baseline, filtering findings to show only new ones.
+fn load_health_baseline(
+    baseline_path: &std::path::Path,
+    findings: &mut Vec<HealthFinding>,
+    root: &std::path::Path,
+) -> Result<HealthBaselineData, ExitCode> {
+    let json = std::fs::read_to_string(baseline_path).map_err(|e| {
+        eprintln!("Error: failed to read health baseline: {e}");
+        ExitCode::from(2)
+    })?;
+    let baseline: HealthBaselineData = serde_json::from_str(&json).map_err(|e| {
+        eprintln!("Error: failed to parse health baseline: {e}");
+        ExitCode::from(2)
+    })?;
+    *findings = filter_new_health_findings(std::mem::take(findings), &baseline, root);
+    Ok(baseline)
 }
 
 /// Run health analysis, print results, and return exit code.

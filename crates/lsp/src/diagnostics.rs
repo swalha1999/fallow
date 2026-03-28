@@ -33,13 +33,24 @@ pub fn build_diagnostics(
     duplication: &DuplicationReport,
     root: &Path,
 ) -> FxHashMap<Url, Vec<Diagnostic>> {
-    let mut diagnostics_by_file: FxHashMap<Url, Vec<Diagnostic>> = FxHashMap::default();
+    let mut map: FxHashMap<Url, Vec<Diagnostic>> = FxHashMap::default();
+    let package_json_uri = Url::from_file_path(root.join("package.json")).ok();
 
-    // Helper: get the package.json URI for dependency-related diagnostics
-    let package_json_path = root.join("package.json");
-    let package_json_uri = Url::from_file_path(&package_json_path).ok();
+    push_export_diagnostics(&mut map, results);
+    push_file_diagnostics(&mut map, results);
+    push_import_diagnostics(&mut map, results);
+    push_dep_diagnostics(&mut map, results, package_json_uri.as_ref());
+    push_member_diagnostics(&mut map, results);
+    push_duplicate_export_diagnostics(&mut map, results);
+    push_duplication_diagnostics(&mut map, duplication);
+    push_circular_dep_diagnostics(&mut map, results);
 
-    // Export-like issues: unused exports and unused types
+    map
+}
+
+// ── Diagnostic builders per issue category ────────────────────────────────────
+
+fn push_export_diagnostics(map: &mut FxHashMap<Url, Vec<Diagnostic>>, results: &AnalysisResults) {
     for (exports, code, anchor, msg_prefix) in [
         (
             &results.unused_exports,
@@ -57,152 +68,126 @@ pub fn build_diagnostics(
         for export in exports {
             if let Ok(uri) = Url::from_file_path(&export.path) {
                 let line = export.line.saturating_sub(1);
-                diagnostics_by_file
-                    .entry(uri)
-                    .or_default()
-                    .push(Diagnostic {
-                        range: Range {
-                            start: Position {
-                                line,
-                                character: export.col,
-                            },
-                            end: Position {
-                                line,
-                                character: export.col + export.export_name.len() as u32,
-                            },
+                map.entry(uri).or_default().push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line,
+                            character: export.col,
                         },
-                        severity: Some(DiagnosticSeverity::HINT),
-                        source: Some("fallow".to_string()),
-                        code: Some(NumberOrString::String(code.to_string())),
-                        code_description: doc_link(anchor),
-                        message: format!("{msg_prefix} '{}' is unused", export.export_name),
-                        tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                        ..Default::default()
-                    });
+                        end: Position {
+                            line,
+                            character: export.col + export.export_name.len() as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("fallow".to_string()),
+                    code: Some(NumberOrString::String(code.to_string())),
+                    code_description: doc_link(anchor),
+                    message: format!("{msg_prefix} '{}' is unused", export.export_name),
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+}
+
+fn push_file_diagnostics(map: &mut FxHashMap<Url, Vec<Diagnostic>>, results: &AnalysisResults) {
+    for file in &results.unused_files {
+        if let Ok(uri) = Url::from_file_path(&file.path) {
+            map.entry(uri).or_default().push(Diagnostic {
+                range: FIRST_LINE_RANGE,
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("fallow".to_string()),
+                code: Some(NumberOrString::String("unused-file".to_string())),
+                code_description: doc_link("unused-files"),
+                message: "File is not reachable from any entry point".to_string(),
+                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+fn push_import_diagnostics(map: &mut FxHashMap<Url, Vec<Diagnostic>>, results: &AnalysisResults) {
+    for import in &results.unresolved_imports {
+        if let Ok(uri) = Url::from_file_path(&import.path) {
+            let line = import.line.saturating_sub(1);
+            map.entry(uri).or_default().push(Diagnostic {
+                range: Range {
+                    start: Position {
+                        line,
+                        character: import.specifier_col,
+                    },
+                    end: Position {
+                        line,
+                        // +2 accounts for the surrounding quotes on the string literal
+                        character: import.specifier_col + import.specifier.len() as u32 + 2,
+                    },
+                },
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("fallow".to_string()),
+                code: Some(NumberOrString::String("unresolved-import".to_string())),
+                code_description: doc_link("unresolved-imports"),
+                message: format!("Cannot find module '{}'", import.specifier),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+fn push_dep_diagnostics(
+    map: &mut FxHashMap<Url, Vec<Diagnostic>>,
+    results: &AnalysisResults,
+    package_json_uri: Option<&Url>,
+) {
+    // Unused deps: dependencies, devDependencies, optionalDependencies
+    for (deps, code, anchor, msg_prefix) in [
+        (
+            &results.unused_dependencies,
+            "unused-dependency",
+            "unused-dependencies",
+            "Unused dependency" as &str,
+        ),
+        (
+            &results.unused_dev_dependencies,
+            "unused-dev-dependency",
+            "unused-devdependencies",
+            "Unused devDependency",
+        ),
+        (
+            &results.unused_optional_dependencies,
+            "unused-optional-dependency",
+            "unused-optionaldependencies",
+            "Unused optionalDependency",
+        ),
+    ] {
+        for dep in deps {
+            if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
+                let line = dep.line.saturating_sub(1);
+                map.entry(dep_uri).or_default().push(Diagnostic {
+                    range: Range {
+                        start: Position { line, character: 0 },
+                        end: Position {
+                            line,
+                            character: u32::MAX,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("fallow".to_string()),
+                    code: Some(NumberOrString::String(code.to_string())),
+                    code_description: doc_link(anchor),
+                    message: format!("{msg_prefix}: {}", dep.package_name),
+                    ..Default::default()
+                });
             }
         }
     }
 
-    // Unused files: file-level diagnostic on first line
-    for file in &results.unused_files {
-        if let Ok(uri) = Url::from_file_path(&file.path) {
-            diagnostics_by_file
-                .entry(uri)
-                .or_default()
-                .push(Diagnostic {
-                    range: FIRST_LINE_RANGE,
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    source: Some("fallow".to_string()),
-                    code: Some(NumberOrString::String("unused-file".to_string())),
-                    code_description: doc_link("unused-files"),
-                    message: "File is not reachable from any entry point".to_string(),
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                    ..Default::default()
-                });
-        }
-    }
-
-    // Unresolved imports
-    for import in &results.unresolved_imports {
-        if let Ok(uri) = Url::from_file_path(&import.path) {
-            let line = import.line.saturating_sub(1);
-            diagnostics_by_file
-                .entry(uri)
-                .or_default()
-                .push(Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line,
-                            character: import.specifier_col,
-                        },
-                        end: Position {
-                            line,
-                            // +2 accounts for the surrounding quotes on the string literal
-                            character: import.specifier_col + import.specifier.len() as u32 + 2,
-                        },
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("fallow".to_string()),
-                    code: Some(NumberOrString::String("unresolved-import".to_string())),
-                    code_description: doc_link("unresolved-imports"),
-                    message: format!("Cannot find module '{}'", import.specifier),
-                    ..Default::default()
-                });
-        }
-    }
-
-    // Dependency issues: unused deps, unused dev deps (routed to their respective package.json)
-    // Place diagnostic on the line where the dependency is declared.
-    for dep in &results.unused_dependencies {
-        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
-            let line = dep.line.saturating_sub(1);
-            let entry = diagnostics_by_file.entry(dep_uri).or_default();
-            entry.push(Diagnostic {
-                range: Range {
-                    start: Position { line, character: 0 },
-                    end: Position {
-                        line,
-                        character: u32::MAX,
-                    },
-                },
-                severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String("unused-dependency".to_string())),
-                code_description: doc_link("unused-dependencies"),
-                message: format!("Unused dependency: {}", dep.package_name),
-                ..Default::default()
-            });
-        }
-    }
-    for dep in &results.unused_dev_dependencies {
-        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
-            let line = dep.line.saturating_sub(1);
-            let entry = diagnostics_by_file.entry(dep_uri).or_default();
-            entry.push(Diagnostic {
-                range: Range {
-                    start: Position { line, character: 0 },
-                    end: Position {
-                        line,
-                        character: u32::MAX,
-                    },
-                },
-                severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String("unused-dev-dependency".to_string())),
-                code_description: doc_link("unused-devdependencies"),
-                message: format!("Unused devDependency: {}", dep.package_name),
-                ..Default::default()
-            });
-        }
-    }
-    for dep in &results.unused_optional_dependencies {
-        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
-            let line = dep.line.saturating_sub(1);
-            let entry = diagnostics_by_file.entry(dep_uri).or_default();
-            entry.push(Diagnostic {
-                range: Range {
-                    start: Position { line, character: 0 },
-                    end: Position {
-                        line,
-                        character: u32::MAX,
-                    },
-                },
-                severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String(
-                    "unused-optional-dependency".to_string(),
-                )),
-                code_description: doc_link("unused-optionaldependencies"),
-                message: format!("Unused optionalDependency: {}", dep.package_name),
-                ..Default::default()
-            });
-        }
-    }
     // Unlisted deps still use root package.json
-    if let Some(ref uri) = package_json_uri {
+    if let Some(uri) = package_json_uri {
         for dep in &results.unlisted_dependencies {
-            let entry = diagnostics_by_file.entry(uri.clone()).or_default();
-            entry.push(Diagnostic {
+            map.entry(uri.clone()).or_default().push(Diagnostic {
                 range: FIRST_LINE_RANGE,
                 severity: Some(DiagnosticSeverity::WARNING),
                 source: Some("fallow".to_string()),
@@ -217,7 +202,58 @@ pub fn build_diagnostics(
         }
     }
 
-    // Member issues: unused enum members and unused class members
+    // Type-only dependencies: could be moved to devDependencies
+    for dep in &results.type_only_dependencies {
+        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
+            let line = dep.line.saturating_sub(1);
+            map.entry(dep_uri).or_default().push(Diagnostic {
+                range: Range {
+                    start: Position { line, character: 0 },
+                    end: Position {
+                        line,
+                        character: u32::MAX,
+                    },
+                },
+                severity: Some(DiagnosticSeverity::INFORMATION),
+                source: Some("fallow".to_string()),
+                code: Some(NumberOrString::String("type-only-dependency".to_string())),
+                code_description: doc_link("type-only-dependencies"),
+                message: format!(
+                    "Type-only dependency: {} (only used via type imports, could be a devDependency)",
+                    dep.package_name
+                ),
+                ..Default::default()
+            });
+        }
+    }
+
+    // Test-only dependencies: could be moved to devDependencies
+    for dep in &results.test_only_dependencies {
+        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
+            let line = dep.line.saturating_sub(1);
+            map.entry(dep_uri).or_default().push(Diagnostic {
+                range: Range {
+                    start: Position { line, character: 0 },
+                    end: Position {
+                        line,
+                        character: u32::MAX,
+                    },
+                },
+                severity: Some(DiagnosticSeverity::INFORMATION),
+                source: Some("fallow".to_string()),
+                code: Some(NumberOrString::String("test-only-dependency".to_string())),
+                code_description: doc_link("test-only-dependencies"),
+                message: format!(
+                    "Production dependency '{}' is only imported by test files — consider moving to devDependencies",
+                    dep.package_name
+                ),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+fn push_member_diagnostics(map: &mut FxHashMap<Url, Vec<Diagnostic>>, results: &AnalysisResults) {
     for (members, code, anchor, kind_label) in [
         (
             &results.unused_enum_members,
@@ -235,36 +271,37 @@ pub fn build_diagnostics(
         for member in members {
             if let Ok(uri) = Url::from_file_path(&member.path) {
                 let line = member.line.saturating_sub(1);
-                diagnostics_by_file
-                    .entry(uri)
-                    .or_default()
-                    .push(Diagnostic {
-                        range: Range {
-                            start: Position {
-                                line,
-                                character: member.col,
-                            },
-                            end: Position {
-                                line,
-                                character: member.col + member.member_name.len() as u32,
-                            },
+                map.entry(uri).or_default().push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line,
+                            character: member.col,
                         },
-                        severity: Some(DiagnosticSeverity::HINT),
-                        source: Some("fallow".to_string()),
-                        code: Some(NumberOrString::String(code.to_string())),
-                        code_description: doc_link(anchor),
-                        message: format!(
-                            "{kind_label} '{}.{}' is unused",
-                            member.parent_name, member.member_name
-                        ),
-                        tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                        ..Default::default()
-                    });
+                        end: Position {
+                            line,
+                            character: member.col + member.member_name.len() as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("fallow".to_string()),
+                    code: Some(NumberOrString::String(code.to_string())),
+                    code_description: doc_link(anchor),
+                    message: format!(
+                        "{kind_label} '{}.{}' is unused",
+                        member.parent_name, member.member_name
+                    ),
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    ..Default::default()
+                });
             }
         }
     }
+}
 
-    // Duplicate exports: WARNING on each file that has the duplicate
+fn push_duplicate_export_diagnostics(
+    map: &mut FxHashMap<Url, Vec<Diagnostic>>,
+    results: &AnalysisResults,
+) {
     for dup in &results.duplicate_exports {
         // Build related information linking all duplicate locations together
         for loc in &dup.locations {
@@ -294,37 +331,38 @@ pub fn build_diagnostics(
                     })
                     .collect();
                 let line = loc.line.saturating_sub(1);
-                diagnostics_by_file
-                    .entry(uri)
-                    .or_default()
-                    .push(Diagnostic {
-                        range: Range {
-                            start: Position {
-                                line,
-                                character: loc.col,
-                            },
-                            end: Position {
-                                line,
-                                character: loc.col + dup.export_name.len() as u32,
-                            },
+                map.entry(uri).or_default().push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line,
+                            character: loc.col,
                         },
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        source: Some("fallow".to_string()),
-                        code: Some(NumberOrString::String("duplicate-export".to_string())),
-                        code_description: doc_link("duplicate-exports"),
-                        message: format!("Duplicate export '{}'", dup.export_name,),
-                        related_information: if related_info.is_empty() {
-                            None
-                        } else {
-                            Some(related_info)
+                        end: Position {
+                            line,
+                            character: loc.col + dup.export_name.len() as u32,
                         },
-                        ..Default::default()
-                    });
+                    },
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("fallow".to_string()),
+                    code: Some(NumberOrString::String("duplicate-export".to_string())),
+                    code_description: doc_link("duplicate-exports"),
+                    message: format!("Duplicate export '{}'", dup.export_name,),
+                    related_information: if related_info.is_empty() {
+                        None
+                    } else {
+                        Some(related_info)
+                    },
+                    ..Default::default()
+                });
             }
         }
     }
+}
 
-    // Code duplication diagnostics
+fn push_duplication_diagnostics(
+    map: &mut FxHashMap<Url, Vec<Diagnostic>>,
+    duplication: &DuplicationReport,
+) {
     for group in &duplication.clone_groups {
         for instance in &group.instances {
             let Ok(inst_uri) = Url::from_file_path(&instance.file) else {
@@ -362,45 +400,44 @@ pub fn build_diagnostics(
                 })
                 .collect();
 
-            diagnostics_by_file
-                .entry(inst_uri)
-                .or_default()
-                .push(Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line: start_line,
-                            character: instance.start_col as u32,
-                        },
-                        end: Position {
-                            line: end_line,
-                            // Extend to end of last line to ensure full block is underlined
-                            character: u32::MAX,
-                        },
+            map.entry(inst_uri).or_default().push(Diagnostic {
+                range: Range {
+                    start: Position {
+                        line: start_line,
+                        character: instance.start_col as u32,
                     },
-                    severity: Some(DiagnosticSeverity::INFORMATION),
-                    source: Some("fallow".to_string()),
-                    code: Some(NumberOrString::String("code-duplication".to_string())),
-                    code_description: Url::parse(
-                        "https://docs.fallow.tools/explanations/duplication",
-                    )
+                    end: Position {
+                        line: end_line,
+                        // Extend to end of last line to ensure full block is underlined
+                        character: u32::MAX,
+                    },
+                },
+                severity: Some(DiagnosticSeverity::INFORMATION),
+                source: Some("fallow".to_string()),
+                code: Some(NumberOrString::String("code-duplication".to_string())),
+                code_description: Url::parse("https://docs.fallow.tools/explanations/duplication")
                     .ok()
                     .map(|href| CodeDescription { href }),
-                    message: format!(
-                        "Duplicated code block ({} lines, {} instances)",
-                        group.line_count,
-                        group.instances.len()
-                    ),
-                    related_information: if related_info.is_empty() {
-                        None
-                    } else {
-                        Some(related_info)
-                    },
-                    ..Default::default()
-                });
+                message: format!(
+                    "Duplicated code block ({} lines, {} instances)",
+                    group.line_count,
+                    group.instances.len()
+                ),
+                related_information: if related_info.is_empty() {
+                    None
+                } else {
+                    Some(related_info)
+                },
+                ..Default::default()
+            });
         }
     }
+}
 
-    // Circular dependency diagnostics: one diagnostic per cycle on the first file
+fn push_circular_dep_diagnostics(
+    map: &mut FxHashMap<Url, Vec<Diagnostic>>,
+    results: &AnalysisResults,
+) {
     for cycle in &results.circular_dependencies {
         if let Some(first_file) = cycle.files.first()
             && let Ok(uri) = Url::from_file_path(first_file)
@@ -440,88 +477,31 @@ pub fn build_diagnostics(
                 })
                 .collect();
 
-            diagnostics_by_file
-                .entry(uri)
-                .or_default()
-                .push(Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line,
-                            character: cycle.col,
-                        },
-                        end: Position {
-                            line,
-                            character: u32::MAX,
-                        },
-                    },
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    source: Some("fallow".to_string()),
-                    code: Some(NumberOrString::String("circular-dependency".to_string())),
-                    code_description: doc_link("circular-dependencies"),
-                    message,
-                    related_information: if related_info.is_empty() {
-                        None
-                    } else {
-                        Some(related_info)
-                    },
-                    ..Default::default()
-                });
-        }
-    }
-
-    // Type-only dependencies: could be moved to devDependencies
-    for dep in &results.type_only_dependencies {
-        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
-            let line = dep.line.saturating_sub(1);
-            let entry = diagnostics_by_file.entry(dep_uri).or_default();
-            entry.push(Diagnostic {
+            map.entry(uri).or_default().push(Diagnostic {
                 range: Range {
-                    start: Position { line, character: 0 },
+                    start: Position {
+                        line,
+                        character: cycle.col,
+                    },
                     end: Position {
                         line,
                         character: u32::MAX,
                     },
                 },
-                severity: Some(DiagnosticSeverity::INFORMATION),
+                severity: Some(DiagnosticSeverity::WARNING),
                 source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String("type-only-dependency".to_string())),
-                code_description: doc_link("type-only-dependencies"),
-                message: format!(
-                    "Type-only dependency: {} (only used via type imports, could be a devDependency)",
-                    dep.package_name
-                ),
-                ..Default::default()
-            });
-        }
-    }
-
-    // Test-only dependencies: could be moved to devDependencies
-    for dep in &results.test_only_dependencies {
-        if let Ok(dep_uri) = Url::from_file_path(&dep.path) {
-            let line = dep.line.saturating_sub(1);
-            let entry = diagnostics_by_file.entry(dep_uri).or_default();
-            entry.push(Diagnostic {
-                range: Range {
-                    start: Position { line, character: 0 },
-                    end: Position {
-                        line,
-                        character: u32::MAX,
-                    },
+                code: Some(NumberOrString::String("circular-dependency".to_string())),
+                code_description: doc_link("circular-dependencies"),
+                message,
+                related_information: if related_info.is_empty() {
+                    None
+                } else {
+                    Some(related_info)
                 },
-                severity: Some(DiagnosticSeverity::INFORMATION),
-                source: Some("fallow".to_string()),
-                code: Some(NumberOrString::String("test-only-dependency".to_string())),
-                code_description: doc_link("test-only-dependencies"),
-                message: format!(
-                    "Production dependency '{}' is only imported by test files — consider moving to devDependencies",
-                    dep.package_name
-                ),
                 ..Default::default()
             });
         }
     }
-
-    diagnostics_by_file
 }
 
 #[cfg(test)]

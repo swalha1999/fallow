@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.5] - 2026-03-28
+
+### Fixed
+
+- **Stale cache caused type-level enum detection to not take effect** -- bumped cache version to invalidate entries from v2.5.3/v2.5.4 that were missing the new type-level `whole_object_uses` extraction data
+
 ## [2.5.4] - 2026-03-28
 
 ### Fixed
@@ -604,7 +610,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.5.4...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.5.5...HEAD
+[2.5.5]: https://github.com/fallow-rs/fallow/compare/v2.5.4...v2.5.5
 [2.5.4]: https://github.com/fallow-rs/fallow/compare/v2.5.3...v2.5.4
 [2.5.3]: https://github.com/fallow-rs/fallow/compare/v2.5.2...v2.5.3
 [2.5.2]: https://github.com/fallow-rs/fallow/compare/v2.5.1...v2.5.2

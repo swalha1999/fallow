@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-03-28
+
+### Fixed
+
+- **Vitest reporter false positives** -- packages referenced as strings in `test.reporters` (e.g., `vitest-sonar-reporter`) are now detected as used dependencies
+- **Vitest coverage/typecheck/browser false positives** -- `test.coverage.provider`, `test.typecheck.checker`, and `test.browser.provider` values are now resolved to their corresponding packages
+- **ESLint import resolver false positives** -- packages referenced via `settings["import/resolver"]` (e.g., `eslint-import-resolver-typescript`) are now detected in string, array, and object key formats
+- **CI pipeline dependency false positives** -- binaries invoked via `npx` in `.gitlab-ci.yml` and `.github/workflows/*.yml` are now detected as used dependencies
+
 ## [2.5.1] - 2026-03-28
 
 ### Fixed
@@ -580,7 +589,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.5.2...HEAD
+[2.5.2]: https://github.com/fallow-rs/fallow/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/fallow-rs/fallow/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/fallow-rs/fallow/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/fallow-rs/fallow/compare/v2.3.1...v2.4.0

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-03-30
+
+### Fixed
+
+- **SvelteKit `$app` and `$env` no longer reported as unlisted dependencies** -- virtual module prefix matching failed when the extracted package name (e.g., `$app`) was compared against a prefix with a trailing slash (`$app/`). Also fixes the same latent bug for Docusaurus virtual prefixes (`@theme/`, `@docusaurus/`, etc.)
+- **SvelteKit `./$types` imports no longer reported as unresolved** -- added `generated_import_patterns()` to the Plugin trait so frameworks can declare build-time generated import suffixes. SvelteKit uses this to suppress `./$types`, `./$types.js`, and `./$types.ts` route type imports that are generated at build time and don't exist on disk during static analysis.
+
 ## [2.7.0] - 2026-03-30
 
 ### Added
@@ -623,7 +630,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/fallow-rs/fallow/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/fallow-rs/fallow/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/fallow-rs/fallow/compare/v2.5.5...v2.6.0
 [2.5.5]: https://github.com/fallow-rs/fallow/compare/v2.5.4...v2.5.5

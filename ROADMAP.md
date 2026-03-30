@@ -14,7 +14,7 @@ Fallow is the counterbalance: fast, framework-aware dead code detection that wor
 
 **Code duplication** -- 4 detection modes (strict, mild, weak, semantic) with cross-language TS/JS matching and cross-directory filtering.
 
-**Health analysis** -- function complexity (cyclomatic + cognitive), per-file maintainability scores, git-churn hotspot analysis, ranked refactoring targets with effort estimation and adaptive thresholds. Vital signs snapshots for trend tracking.
+**Health analysis** -- function complexity (cyclomatic + cognitive), per-file maintainability scores, git-churn hotspot analysis, ranked refactoring targets with effort estimation and adaptive thresholds. Vital signs snapshots with trend reporting (`--trend` compares against saved snapshots with directional indicators).
 
 **CI/CD integration** -- GitHub Action with SARIF upload, inline PR annotations, review comments with suggestion blocks, and auto-changed-since for PR scoping. GitLab CI template with Code Quality reports, MR comments, and inline discussions. Baseline support for incremental adoption.
 
@@ -62,7 +62,7 @@ Catch unused exports and unresolved imports before they reach CI. Scoped to chan
 
 - **Incremental analysis** -- finer-grained caching for faster watch mode and CI on large monorepos
 - **Plugin ecosystem** -- more framework coverage, better external plugin authoring, community-contributed plugins
-- **Health trend tracking** -- regression detection in CI, vital signs diffs between snapshots
+- **Health intelligence** -- trend reporting and regression detection are shipped; next up: structured fix suggestions, audit command, HTML report cards
 - **Agent integration** -- richer MCP tool responses, Claude Code hooks, Cursor integration, agent skill packages
 
 ---

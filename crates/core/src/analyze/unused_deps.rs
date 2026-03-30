@@ -7,7 +7,10 @@ use fallow_config::{PackageJson, ResolvedConfig};
 use crate::discover::FileId;
 use crate::graph::ModuleGraph;
 use crate::resolve::ResolvedModule;
-use crate::results::*;
+use crate::results::{
+    DependencyLocation, ImportSite, TestOnlyDependency, TypeOnlyDependency, UnlistedDependency,
+    UnresolvedImport, UnusedDependency,
+};
 use crate::suppress::{self, IssueKind, Suppression};
 
 use super::package_json_utils::{find_dep_line_in_json, read_pkg_json_content};

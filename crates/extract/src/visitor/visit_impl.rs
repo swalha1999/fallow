@@ -2,6 +2,7 @@
 //!
 //! Handles all AST node types: imports, exports, expressions, statements.
 
+#[allow(clippy::wildcard_imports)] // many AST types used
 use oxc_ast::ast::*;
 use oxc_ast_visit::Visit;
 use oxc_ast_visit::walk;

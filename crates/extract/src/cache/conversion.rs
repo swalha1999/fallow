@@ -4,7 +4,11 @@ use oxc_span::Span;
 
 use crate::ExportName;
 
-use super::types::*;
+use super::types::{
+    CachedDynamicImport, CachedDynamicImportPattern, CachedExport, CachedImport, CachedMember,
+    CachedModule, CachedReExport, CachedRequireCall, CachedSuppression, IMPORT_KIND_DEFAULT,
+    IMPORT_KIND_NAMED, IMPORT_KIND_NAMESPACE, IMPORT_KIND_SIDE_EFFECT,
+};
 
 /// Reconstruct a [`ModuleInfo`](crate::ModuleInfo) from a [`CachedModule`].
 #[must_use]
@@ -12,7 +16,10 @@ pub fn cached_to_module(
     cached: &CachedModule,
     file_id: fallow_types::discover::FileId,
 ) -> crate::ModuleInfo {
-    use crate::*;
+    use crate::{
+        DynamicImportInfo, ExportInfo, ImportInfo, ImportedName, MemberInfo, ModuleInfo,
+        ReExportInfo, RequireCallInfo,
+    };
 
     let exports = cached
         .exports

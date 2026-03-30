@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tower_lsp::lsp_types::*;
+use tower_lsp::lsp_types::{CodeLens, Command, Position, Range, Url};
 
 use fallow_core::results::AnalysisResults;
 

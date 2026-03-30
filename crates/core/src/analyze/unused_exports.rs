@@ -4,7 +4,9 @@ use fallow_config::ResolvedConfig;
 
 use crate::discover::FileId;
 use crate::graph::{ModuleGraph, ModuleNode};
-use crate::results::*;
+use crate::results::{
+    DuplicateExport, DuplicateLocation, ExportUsage, ReferenceLocation, UnusedExport,
+};
 use crate::suppress::{self, IssueKind, Suppression};
 
 use super::{LineOffsetsMap, byte_offset_to_line_col, read_source};

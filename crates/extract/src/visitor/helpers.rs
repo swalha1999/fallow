@@ -2,7 +2,7 @@
 //!
 //! These functions don't require visitor state and operate purely on AST nodes.
 
-use oxc_ast::ast::*;
+use oxc_ast::ast::{Argument, BinaryExpression, Class, ClassElement, Expression};
 
 use crate::{MemberInfo, MemberKind};
 

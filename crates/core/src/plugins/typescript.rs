@@ -120,7 +120,7 @@ impl Plugin for TypeScriptPlugin {
 /// Extract `compilerOptions.plugins[].name` from a tsconfig as referenced dependencies.
 fn parse_tsconfig_plugins(source: &str, path: &Path, result: &mut PluginResult) {
     use oxc_allocator::Allocator;
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
@@ -191,7 +191,7 @@ fn parse_tsconfig_plugins(source: &str, path: &Path, result: &mut PluginResult) 
 /// Extract `references[].path` from a tsconfig and add them as setup files.
 fn parse_tsconfig_references(source: &str, path: &Path, root: &Path, result: &mut PluginResult) {
     use oxc_allocator::Allocator;
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 

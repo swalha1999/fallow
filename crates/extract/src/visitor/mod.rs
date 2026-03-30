@@ -4,7 +4,7 @@ mod declarations;
 mod helpers;
 mod visit_impl;
 
-use oxc_ast::ast::*;
+use oxc_ast::ast::{Argument, CallExpression, Expression, ImportExpression, ObjectPattern};
 use oxc_span::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
 

@@ -379,7 +379,10 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
 fn bench_cache_round_trip(c: &mut Criterion) {
     use fallow_core::cache::{cached_to_module, module_to_cached};
     use fallow_core::discover::FileId;
-    use fallow_core::extract::*;
+    use fallow_core::extract::{
+        DynamicImportInfo, ExportInfo, ExportName, ImportInfo, ImportedName, MemberAccess,
+        MemberInfo, MemberKind, ModuleInfo, ReExportInfo, RequireCallInfo,
+    };
 
     // Build a representative ModuleInfo with realistic data:
     // imports, exports (including enums and classes with members), re-exports,

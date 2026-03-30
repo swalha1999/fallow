@@ -3,7 +3,10 @@
 //! These are inherent methods that extract export information from
 //! declaration AST nodes, binding patterns, and require/import patterns.
 
-use oxc_ast::ast::*;
+use oxc_ast::ast::{
+    BindingPattern, CallExpression, Declaration, ImportExpression, TSEnumMemberName,
+    TSModuleDeclarationName, VariableDeclarator,
+};
 
 use crate::{DynamicImportInfo, ExportInfo, ExportName, MemberInfo, MemberKind, RequireCallInfo};
 

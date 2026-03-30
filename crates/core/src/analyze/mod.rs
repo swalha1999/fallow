@@ -13,7 +13,7 @@ use crate::discover::FileId;
 use crate::extract::ModuleInfo;
 use crate::graph::ModuleGraph;
 use crate::resolve::ResolvedModule;
-use crate::results::*;
+use crate::results::{AnalysisResults, CircularDependency};
 use crate::suppress::{self, IssueKind, Suppression};
 
 use unused_deps::{

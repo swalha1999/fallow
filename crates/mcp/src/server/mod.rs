@@ -1,9 +1,11 @@
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::*;
+use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_router};
 
-use crate::params::*;
+use crate::params::{
+    AnalyzeParams, CheckChangedParams, FindDupesParams, FixParams, HealthParams, ProjectInfoParams,
+};
 use crate::tools::{
     build_analyze_args, build_check_changed_args, build_find_dupes_args, build_fix_apply_args,
     build_fix_preview_args, build_health_args, build_project_info_args, run_fallow,

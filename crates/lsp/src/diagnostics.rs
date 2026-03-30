@@ -1,7 +1,10 @@
 use rustc_hash::FxHashMap;
 use std::path::Path;
 
-use tower_lsp::lsp_types::*;
+use tower_lsp::lsp_types::{
+    CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DiagnosticTag,
+    Location, NumberOrString, Position, Range, Url,
+};
 
 use fallow_core::duplicates::DuplicationReport;
 use fallow_core::results::AnalysisResults;

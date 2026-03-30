@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::discover::FileId;
 use crate::graph::ModuleGraph;
-use crate::results::*;
+use crate::results::UnusedFile;
 use crate::suppress::{self, IssueKind, Suppression};
 
 use super::predicates::{is_barrel_with_reachable_sources, is_config_file, is_declaration_file};

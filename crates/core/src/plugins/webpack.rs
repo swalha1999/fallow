@@ -105,7 +105,7 @@ impl Plugin for WebpackPlugin {
 /// - `{ oneOf: [...rules] }`
 pub(super) fn parse_webpack_loaders(source: &str, path: &Path, result: &mut PluginResult) {
     use oxc_allocator::Allocator;
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::Expression;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
@@ -138,7 +138,7 @@ fn find_obj_prop<'a>(
     obj: &'a oxc_ast::ast::ObjectExpression<'a>,
     key: &str,
 ) -> Option<&'a oxc_ast::ast::ObjectProperty<'a>> {
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::{ObjectPropertyKind, PropertyKey};
     for prop in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(p) = prop {
             let is_match = match &p.key {
@@ -155,7 +155,7 @@ fn find_obj_prop<'a>(
 }
 
 fn walk_rules(rules: &oxc_ast::ast::ArrayExpression, result: &mut PluginResult) {
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::Expression;
     for el in &rules.elements {
         if let Some(Expression::ObjectExpression(rule_obj)) = el.as_expression() {
             walk_rule(rule_obj, result);
@@ -164,7 +164,7 @@ fn walk_rules(rules: &oxc_ast::ast::ArrayExpression, result: &mut PluginResult) 
 }
 
 fn walk_rule(rule: &oxc_ast::ast::ObjectExpression, result: &mut PluginResult) {
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
 
     for prop in &rule.properties {
         let ObjectPropertyKind::ObjectProperty(p) = prop else {

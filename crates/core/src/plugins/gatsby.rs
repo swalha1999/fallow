@@ -112,7 +112,7 @@ impl Plugin for GatsbyPlugin {
 /// Handles: `plugins: [{ resolve: "gatsby-plugin-x", options: {} }]`
 fn extract_gatsby_plugin_resolves(source: &str, path: &Path, result: &mut PluginResult) {
     use oxc_allocator::Allocator;
-    use oxc_ast::ast::*;
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 

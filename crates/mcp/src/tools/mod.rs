@@ -15,7 +15,7 @@ pub use project_info::build_project_info_args;
 use std::process::Stdio;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::*;
+use rmcp::model::{CallToolResult, Content};
 use tokio::process::Command;
 
 /// Issue type flag names mapped to their CLI flags.

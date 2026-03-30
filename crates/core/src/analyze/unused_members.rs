@@ -4,7 +4,7 @@ use crate::discover::FileId;
 use crate::extract::MemberKind;
 use crate::graph::ModuleGraph;
 use crate::resolve::ResolvedModule;
-use crate::results::*;
+use crate::results::UnusedMember;
 use crate::suppress::{self, IssueKind, Suppression};
 
 use super::predicates::{is_angular_lifecycle_method, is_react_lifecycle_method};

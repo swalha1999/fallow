@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-#[expect(clippy::wildcard_imports, reason = "many LSP types used")]
+#[allow(clippy::wildcard_imports, reason = "many LSP types used")]
 use tower_lsp::lsp_types::*;
 
 use fallow_core::results::AnalysisResults;

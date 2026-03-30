@@ -353,7 +353,7 @@ fallow schema
 ### GitHub Actions
 
 ```yaml
-- uses: fallow-rs/fallow@v1
+- uses: fallow-rs/fallow@v2
   with:
     format: sarif
     fail-on-issues: true

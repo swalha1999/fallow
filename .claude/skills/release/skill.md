@@ -104,8 +104,17 @@ For the first release, use:
 Ask the user for confirmation, then:
 
 ```bash
-git push && git push --tags
+git push && git push origin v{version}
 ```
+
+Then update the floating major version tag so `fallow-rs/fallow@v2` always points to the latest release:
+
+```bash
+git tag -f v{major} v{version}
+git push origin v{major} --force
+```
+
+Where `{major}` is the major version number (e.g., `2` for `v2.6.0`).
 
 Pushing the tag triggers the CI release workflow (`.github/workflows/release.yml`) which automatically:
 - Publishes Rust crates to crates.io in dependency order (fallow-types → fallow-config → fallow-extract → fallow-graph → fallow-core → fallow-cli → fallow-mcp)
@@ -131,7 +140,13 @@ Note: The CI workflow also creates a release with auto-generated notes. The `gh 
 gh release edit v{version} --title "v{version} — {short_summary}" --notes "{changelog}"
 ```
 
-### 10. Monitor CI
+### 10. Update GitHub Marketplace listing
+
+Remind the user to manually update the Marketplace listing:
+
+> **Manual step:** Go to https://github.com/marketplace/actions/fallow-codebase-health, click "Edit listing", select the new release (`v{version}`), and publish. The `gh` CLI does not support this — it must be done through the web UI.
+
+### 11. Monitor CI
 
 After the release is created, check that the CI release workflow is running:
 

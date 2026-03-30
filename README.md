@@ -99,7 +99,7 @@ fallow health --changed-since main        # Only changed files
 
 ```yaml
 # GitHub Action
-- uses: fallow-rs/fallow@v1
+- uses: fallow-rs/fallow@v2
 
 # GitLab CI — include the template and extend
 include:

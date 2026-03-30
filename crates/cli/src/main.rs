@@ -696,7 +696,7 @@ fn build_regression_opts<'a>(
 // ── Main ─────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // Handle schema commands before tracing setup (no side effects)
     if matches!(cli.command, Some(Command::Schema)) {
@@ -774,9 +774,115 @@ fn main() -> ExitCode {
         });
     let save_to_config = cli.save_regression_baseline.is_some() && save_regression_file.is_none();
 
-    match cli.command {
-        // Bare `fallow` — run all analyses (check + dupes + health)
-        None => {
+    let command = cli.command.take();
+    match command {
+        None => dispatch_bare_command(
+            &cli,
+            &root,
+            output,
+            quiet,
+            cli_format_was_explicit,
+            threads,
+            tolerance,
+            save_regression_file.as_ref(),
+            save_to_config,
+        ),
+        Some(cmd) => dispatch_subcommand(
+            cmd,
+            &cli,
+            &root,
+            output,
+            quiet,
+            cli_format_was_explicit,
+            threads,
+            tolerance,
+            save_regression_file.as_ref(),
+            save_to_config,
+        ),
+    }
+}
+
+#[expect(clippy::too_many_arguments)]
+fn dispatch_bare_command(
+    cli: &Cli,
+    root: &std::path::Path,
+    output: fallow_config::OutputFormat,
+    quiet: bool,
+    cli_format_was_explicit: bool,
+    threads: usize,
+    tolerance: regression::Tolerance,
+    save_regression_file: Option<&std::path::PathBuf>,
+    save_to_config: bool,
+) -> ExitCode {
+    let (output, quiet, fail_on_issues) = apply_ci_defaults(
+        cli.ci,
+        cli.fail_on_issues,
+        output,
+        quiet,
+        cli_format_was_explicit,
+    );
+    let (run_check, run_dupes, run_health) = combined::resolve_analyses(&cli.only, &cli.skip);
+    combined::run_combined(&combined::CombinedOptions {
+        root,
+        config_path: &cli.config,
+        output,
+        no_cache: cli.no_cache,
+        threads,
+        quiet,
+        fail_on_issues,
+        sarif_file: cli.sarif_file.as_deref(),
+        changed_since: cli.changed_since.as_deref(),
+        baseline: cli.baseline.as_deref(),
+        save_baseline: cli.save_baseline.as_deref(),
+        production: cli.production,
+        workspace: cli.workspace.as_deref(),
+        explain: cli.explain,
+        performance: cli.performance,
+        run_check,
+        run_dupes,
+        run_health,
+        regression_opts: build_regression_opts(
+            cli.fail_on_regression,
+            tolerance,
+            cli.regression_baseline.as_deref(),
+            save_regression_file,
+            save_to_config,
+            cli.changed_since.is_some() || cli.workspace.is_some(),
+            quiet,
+        ),
+    })
+}
+
+#[expect(clippy::too_many_arguments)]
+fn dispatch_subcommand(
+    command: Command,
+    cli: &Cli,
+    root: &std::path::Path,
+    output: fallow_config::OutputFormat,
+    quiet: bool,
+    cli_format_was_explicit: bool,
+    threads: usize,
+    tolerance: regression::Tolerance,
+    save_regression_file: Option<&std::path::PathBuf>,
+    save_to_config: bool,
+) -> ExitCode {
+    match command {
+        Command::Check {
+            unused_files,
+            unused_exports,
+            unused_deps,
+            unused_types,
+            unused_enum_members,
+            unused_class_members,
+            unresolved_imports,
+            unlisted_deps,
+            duplicate_exports,
+            circular_deps,
+            include_dupes,
+            trace,
+            trace_file,
+            trace_dependency,
+        } => {
             let (output, quiet, fail_on_issues) = apply_ci_defaults(
                 cli.ci,
                 cli.fail_on_issues,
@@ -784,40 +890,7 @@ fn main() -> ExitCode {
                 quiet,
                 cli_format_was_explicit,
             );
-            let (run_check, run_dupes, run_health) =
-                combined::resolve_analyses(&cli.only, &cli.skip);
-            combined::run_combined(&combined::CombinedOptions {
-                root: &root,
-                config_path: &cli.config,
-                output,
-                no_cache: cli.no_cache,
-                threads,
-                quiet,
-                fail_on_issues,
-                sarif_file: cli.sarif_file.as_deref(),
-                changed_since: cli.changed_since.as_deref(),
-                baseline: cli.baseline.as_deref(),
-                save_baseline: cli.save_baseline.as_deref(),
-                production: cli.production,
-                workspace: cli.workspace.as_deref(),
-                explain: cli.explain,
-                performance: cli.performance,
-                run_check,
-                run_dupes,
-                run_health,
-                regression_opts: build_regression_opts(
-                    cli.fail_on_regression,
-                    tolerance,
-                    cli.regression_baseline.as_deref(),
-                    save_regression_file.as_ref(),
-                    save_to_config,
-                    cli.changed_since.is_some() || cli.workspace.is_some(),
-                    quiet,
-                ),
-            })
-        }
-        Some(command) => match command {
-            Command::Check {
+            let filters = IssueFilters {
                 unused_files,
                 unused_exports,
                 unused_deps,
@@ -828,111 +901,111 @@ fn main() -> ExitCode {
                 unlisted_deps,
                 duplicate_exports,
                 circular_deps,
-                include_dupes,
-                trace,
+            };
+            let trace_opts = TraceOptions {
+                trace_export: trace,
                 trace_file,
                 trace_dependency,
-            } => {
-                let (output, quiet, fail_on_issues) = apply_ci_defaults(
-                    cli.ci,
-                    cli.fail_on_issues,
-                    output,
-                    quiet,
-                    cli_format_was_explicit,
-                );
-                let filters = IssueFilters {
-                    unused_files,
-                    unused_exports,
-                    unused_deps,
-                    unused_types,
-                    unused_enum_members,
-                    unused_class_members,
-                    unresolved_imports,
-                    unlisted_deps,
-                    duplicate_exports,
-                    circular_deps,
-                };
-                let trace_opts = TraceOptions {
-                    trace_export: trace,
-                    trace_file,
-                    trace_dependency,
-                    performance: cli.performance,
-                };
-                check::run_check(&CheckOptions {
-                    root: &root,
-                    config_path: &cli.config,
-                    output,
-                    no_cache: cli.no_cache,
-                    threads,
-                    quiet,
-                    fail_on_issues,
-                    filters: &filters,
-                    changed_since: cli.changed_since.as_deref(),
-                    baseline: cli.baseline.as_deref(),
-                    save_baseline: cli.save_baseline.as_deref(),
-                    sarif_file: cli.sarif_file.as_deref(),
-                    production: cli.production,
-                    workspace: cli.workspace.as_deref(),
-                    include_dupes,
-                    trace_opts: &trace_opts,
-                    explain: cli.explain,
-                    regression_opts: build_regression_opts(
-                        cli.fail_on_regression,
-                        tolerance,
-                        cli.regression_baseline.as_deref(),
-                        save_regression_file.as_ref(),
-                        save_to_config,
-                        cli.changed_since.is_some() || cli.workspace.is_some(),
-                        quiet,
-                    ),
-                })
-            }
-            Command::Watch { no_clear } => watch::run_watch(&watch::WatchOptions {
-                root: &root,
+                performance: cli.performance,
+            };
+            check::run_check(&CheckOptions {
+                root,
                 config_path: &cli.config,
                 output,
                 no_cache: cli.no_cache,
                 threads,
                 quiet,
+                fail_on_issues,
+                filters: &filters,
+                changed_since: cli.changed_since.as_deref(),
+                baseline: cli.baseline.as_deref(),
+                save_baseline: cli.save_baseline.as_deref(),
+                sarif_file: cli.sarif_file.as_deref(),
                 production: cli.production,
-                clear_screen: !no_clear,
+                workspace: cli.workspace.as_deref(),
+                include_dupes,
+                trace_opts: &trace_opts,
                 explain: cli.explain,
-            }),
-            Command::Fix { dry_run, yes } => fix::run_fix(&fix::FixOptions {
-                root: &root,
+                regression_opts: build_regression_opts(
+                    cli.fail_on_regression,
+                    tolerance,
+                    cli.regression_baseline.as_deref(),
+                    save_regression_file,
+                    save_to_config,
+                    cli.changed_since.is_some() || cli.workspace.is_some(),
+                    quiet,
+                ),
+            })
+        }
+        Command::Watch { no_clear } => watch::run_watch(&watch::WatchOptions {
+            root,
+            config_path: &cli.config,
+            output,
+            no_cache: cli.no_cache,
+            threads,
+            quiet,
+            production: cli.production,
+            clear_screen: !no_clear,
+            explain: cli.explain,
+        }),
+        Command::Fix { dry_run, yes } => fix::run_fix(&fix::FixOptions {
+            root,
+            config_path: &cli.config,
+            output,
+            no_cache: cli.no_cache,
+            threads,
+            quiet,
+            dry_run,
+            yes,
+            production: cli.production,
+        }),
+        Command::Init { toml, hooks, base } => init::run_init(&init::InitOptions {
+            root,
+            use_toml: toml,
+            hooks,
+            base: base.as_deref(),
+        }),
+        Command::ConfigSchema => init::run_config_schema(),
+        Command::PluginSchema => init::run_plugin_schema(),
+        Command::List {
+            entry_points,
+            files,
+            plugins,
+        } => list::run_list(&ListOptions {
+            root,
+            config_path: &cli.config,
+            output,
+            threads,
+            no_cache: cli.no_cache,
+            entry_points,
+            files,
+            plugins,
+            production: cli.production,
+        }),
+        Command::Dupes {
+            mode,
+            min_tokens,
+            min_lines,
+            threshold,
+            skip_local,
+            cross_language,
+            top,
+            trace,
+        } => {
+            let (output, quiet, _fail_on_issues) = apply_ci_defaults(
+                cli.ci,
+                cli.fail_on_issues,
+                output,
+                quiet,
+                cli_format_was_explicit,
+            );
+            dupes::run_dupes(&DupesOptions {
+                root,
                 config_path: &cli.config,
                 output,
                 no_cache: cli.no_cache,
                 threads,
                 quiet,
-                dry_run,
-                yes,
-                production: cli.production,
-            }),
-            Command::Init { toml, hooks, base } => init::run_init(&init::InitOptions {
-                root: &root,
-                use_toml: toml,
-                hooks,
-                base: base.as_deref(),
-            }),
-            Command::ConfigSchema => init::run_config_schema(),
-            Command::PluginSchema => init::run_plugin_schema(),
-            Command::List {
-                entry_points,
-                files,
-                plugins,
-            } => list::run_list(&ListOptions {
-                root: &root,
-                config_path: &cli.config,
-                output,
-                threads,
-                no_cache: cli.no_cache,
-                entry_points,
-                files,
-                plugins,
-                production: cli.production,
-            }),
-            Command::Dupes {
                 mode,
                 min_tokens,
                 min_lines,
@@ -940,110 +1013,131 @@ fn main() -> ExitCode {
                 skip_local,
                 cross_language,
                 top,
-                trace,
-            } => {
-                let (output, quiet, _fail_on_issues) = apply_ci_defaults(
-                    cli.ci,
-                    cli.fail_on_issues,
-                    output,
-                    quiet,
-                    cli_format_was_explicit,
-                );
-                dupes::run_dupes(&DupesOptions {
-                    root: &root,
-                    config_path: &cli.config,
-                    output,
-                    no_cache: cli.no_cache,
-                    threads,
-                    quiet,
-                    mode,
-                    min_tokens,
-                    min_lines,
-                    threshold,
-                    skip_local,
-                    cross_language,
-                    top,
-                    baseline_path: cli.baseline.as_deref(),
-                    save_baseline_path: cli.save_baseline.as_deref(),
-                    production: cli.production,
-                    trace: trace.as_deref(),
-                    changed_since: cli.changed_since.as_deref(),
-                    explain: cli.explain,
-                })
-            }
-            Command::Health {
-                max_cyclomatic,
-                max_cognitive,
-                top,
-                sort,
-                complexity,
-                file_scores,
-                hotspots,
-                targets,
-                score,
-                min_score,
-                since,
-                min_commits,
-                save_snapshot,
-                trend,
-            } => {
-                let (output, quiet, _fail_on_issues) = apply_ci_defaults(
-                    cli.ci,
-                    cli.fail_on_issues,
-                    output,
-                    quiet,
-                    cli_format_was_explicit,
-                );
-                // --min-score, --save-snapshot, and --trend imply --score
-                let score = score || min_score.is_some() || trend;
-                let snapshot_requested = save_snapshot.is_some();
-                // No section flags = show all (including score). Any flag set = show only those.
-                // --save-snapshot and --trend are orthogonal (not section flags) but force score.
-                let any_section = complexity || file_scores || hotspots || targets || score;
-                let eff_score = if any_section { score } else { true } || snapshot_requested;
-                // Score needs full pipeline for accuracy
-                let force_full = snapshot_requested || eff_score;
-                let eff_file_scores = if any_section { file_scores } else { true } || force_full;
-                let eff_hotspots = if any_section { hotspots } else { true } || force_full;
-                let eff_complexity = if any_section { complexity } else { true };
-                let eff_targets = if any_section { targets } else { true };
-                health::run_health(&HealthOptions {
-                    root: &root,
-                    config_path: &cli.config,
-                    output,
-                    no_cache: cli.no_cache,
-                    threads,
-                    quiet,
-                    max_cyclomatic,
-                    max_cognitive,
-                    top,
-                    sort,
-                    production: cli.production,
-                    changed_since: cli.changed_since.as_deref(),
-                    workspace: cli.workspace.as_deref(),
-                    baseline: cli.baseline.as_deref(),
-                    save_baseline: cli.save_baseline.as_deref(),
-                    complexity: eff_complexity,
-                    file_scores: eff_file_scores,
-                    hotspots: eff_hotspots,
-                    targets: eff_targets,
-                    score: eff_score,
-                    min_score,
-                    since: since.as_deref(),
-                    min_commits,
-                    explain: cli.explain,
-                    save_snapshot: save_snapshot.map(|opt| PathBuf::from(opt.unwrap_or_default())),
-                    trend,
-                })
-            }
-            Command::Schema => unreachable!("handled above"),
-            Command::Migrate {
-                toml,
-                dry_run,
-                from,
-            } => migrate::run_migrate(&root, toml, dry_run, from.as_deref()),
-        },
+                baseline_path: cli.baseline.as_deref(),
+                save_baseline_path: cli.save_baseline.as_deref(),
+                production: cli.production,
+                trace: trace.as_deref(),
+                changed_since: cli.changed_since.as_deref(),
+                explain: cli.explain,
+            })
+        }
+        Command::Health {
+            max_cyclomatic,
+            max_cognitive,
+            top,
+            sort,
+            complexity,
+            file_scores,
+            hotspots,
+            targets,
+            score,
+            min_score,
+            since,
+            min_commits,
+            save_snapshot,
+            trend,
+        } => dispatch_health(
+            cli,
+            root,
+            output,
+            quiet,
+            cli_format_was_explicit,
+            threads,
+            max_cyclomatic,
+            max_cognitive,
+            top,
+            sort,
+            complexity,
+            file_scores,
+            hotspots,
+            targets,
+            score,
+            min_score,
+            since.as_deref(),
+            min_commits,
+            save_snapshot.as_ref(),
+            trend,
+        ),
+        Command::Schema => unreachable!("handled above"),
+        Command::Migrate {
+            toml,
+            dry_run,
+            from,
+        } => migrate::run_migrate(root, toml, dry_run, from.as_deref()),
     }
+}
+
+#[expect(clippy::too_many_arguments)]
+fn dispatch_health(
+    cli: &Cli,
+    root: &std::path::Path,
+    output: fallow_config::OutputFormat,
+    quiet: bool,
+    cli_format_was_explicit: bool,
+    threads: usize,
+    max_cyclomatic: Option<u16>,
+    max_cognitive: Option<u16>,
+    top: Option<usize>,
+    sort: health::SortBy,
+    complexity: bool,
+    file_scores: bool,
+    hotspots: bool,
+    targets: bool,
+    score: bool,
+    min_score: Option<f64>,
+    since: Option<&str>,
+    min_commits: Option<u32>,
+    save_snapshot: Option<&Option<String>>,
+    trend: bool,
+) -> ExitCode {
+    let (output, quiet, _fail_on_issues) = apply_ci_defaults(
+        cli.ci,
+        cli.fail_on_issues,
+        output,
+        quiet,
+        cli_format_was_explicit,
+    );
+    // --min-score, --save-snapshot, and --trend imply --score
+    let score = score || min_score.is_some() || trend;
+    let snapshot_requested = save_snapshot.is_some();
+    // No section flags = show all (including score). Any flag set = show only those.
+    // --save-snapshot and --trend are orthogonal (not section flags) but force score.
+    let any_section = complexity || file_scores || hotspots || targets || score;
+    let eff_score = if any_section { score } else { true } || snapshot_requested;
+    // Score needs full pipeline for accuracy
+    let force_full = snapshot_requested || eff_score;
+    let eff_file_scores = if any_section { file_scores } else { true } || force_full;
+    let eff_hotspots = if any_section { hotspots } else { true } || force_full;
+    let eff_complexity = if any_section { complexity } else { true };
+    let eff_targets = if any_section { targets } else { true };
+    health::run_health(&HealthOptions {
+        root,
+        config_path: &cli.config,
+        output,
+        no_cache: cli.no_cache,
+        threads,
+        quiet,
+        max_cyclomatic,
+        max_cognitive,
+        top,
+        sort,
+        production: cli.production,
+        changed_since: cli.changed_since.as_deref(),
+        workspace: cli.workspace.as_deref(),
+        baseline: cli.baseline.as_deref(),
+        save_baseline: cli.save_baseline.as_deref(),
+        complexity: eff_complexity,
+        file_scores: eff_file_scores,
+        hotspots: eff_hotspots,
+        targets: eff_targets,
+        score: eff_score,
+        min_score,
+        since,
+        min_commits,
+        explain: cli.explain,
+        save_snapshot: save_snapshot.map(|opt| PathBuf::from(opt.as_deref().unwrap_or_default())),
+        trend,
+    })
 }
 
 #[cfg(test)]

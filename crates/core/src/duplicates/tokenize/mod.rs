@@ -32,112 +32,115 @@ pub fn tokenize_file_cross_language(path: &Path, source: &str, strip_types: bool
 }
 
 fn tokenize_file_inner(path: &Path, source: &str, strip_types: bool) -> FileTokens {
-    use crate::extract::{
-        extract_astro_frontmatter, extract_mdx_statements, extract_sfc_scripts, is_sfc_file,
-    };
+    use crate::extract::{extract_astro_frontmatter, extract_mdx_statements, is_sfc_file};
 
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    // For Vue/Svelte SFCs, extract and tokenize `<script>` blocks.
     if is_sfc_file(path) {
-        let scripts = extract_sfc_scripts(source);
-        let mut all_tokens = Vec::new();
-
-        for script in &scripts {
-            let source_type = match (script.is_typescript, script.is_jsx) {
-                (true, true) => SourceType::tsx(),
-                (true, false) => SourceType::ts(),
-                (false, true) => SourceType::jsx(),
-                (false, false) => SourceType::mjs(),
-            };
-            let allocator = Allocator::default();
-            let parser_return = Parser::new(&allocator, &script.body, source_type).parse();
-
-            let mut extractor = TokenExtractor::with_strip_types(strip_types);
-            extractor.visit_program(&parser_return.program);
-
-            // Adjust token spans to reference positions in the full SFC source
-            // rather than the extracted script block.
-            let offset = script.byte_offset as u32;
-            for token in &mut extractor.tokens {
-                token.span = Span::new(token.span.start + offset, token.span.end + offset);
-            }
-            all_tokens.extend(extractor.tokens);
-        }
-
-        let line_count = source.lines().count().max(1);
-        return FileTokens {
-            tokens: all_tokens,
-            source: source.to_string(),
-            line_count,
-        };
+        return tokenize_sfc(source, strip_types);
     }
-
-    // For Astro files, extract and tokenize frontmatter.
     if ext == "astro" {
-        if let Some(script) = extract_astro_frontmatter(source) {
-            let allocator = Allocator::default();
-            let parser_return = Parser::new(&allocator, &script.body, SourceType::ts()).parse();
-
-            let mut extractor = TokenExtractor::with_strip_types(strip_types);
-            extractor.visit_program(&parser_return.program);
-
-            let offset = script.byte_offset as u32;
-            for token in &mut extractor.tokens {
-                token.span = Span::new(token.span.start + offset, token.span.end + offset);
-            }
-
-            let line_count = source.lines().count().max(1);
-            return FileTokens {
-                tokens: extractor.tokens,
-                source: source.to_string(),
-                line_count,
-            };
-        }
-        // No frontmatter — return empty tokens.
-        let line_count = source.lines().count().max(1);
-        return FileTokens {
-            tokens: Vec::new(),
-            source: source.to_string(),
-            line_count,
-        };
+        return tokenize_astro(source, strip_types, extract_astro_frontmatter);
     }
-
-    // For MDX files, extract and tokenize import/export statements.
     if ext == "mdx" {
-        let statements = extract_mdx_statements(source);
-        if !statements.is_empty() {
-            let allocator = Allocator::default();
-            let parser_return = Parser::new(&allocator, &statements, SourceType::jsx()).parse();
-
-            let mut extractor = TokenExtractor::with_strip_types(strip_types);
-            extractor.visit_program(&parser_return.program);
-
-            let line_count = source.lines().count().max(1);
-            return FileTokens {
-                tokens: extractor.tokens,
-                source: source.to_string(),
-                line_count,
-            };
-        }
-        let line_count = source.lines().count().max(1);
-        return FileTokens {
-            tokens: Vec::new(),
-            source: source.to_string(),
-            line_count,
-        };
+        return tokenize_mdx(source, strip_types, extract_mdx_statements);
     }
-
-    // CSS/SCSS files are not JS/TS — skip tokenization for duplication detection.
     if ext == "css" || ext == "scss" {
-        let line_count = source.lines().count().max(1);
-        return FileTokens {
-            tokens: Vec::new(),
-            source: source.to_string(),
-            line_count,
-        };
+        return empty_tokens(source);
     }
 
+    tokenize_js_ts(path, source, strip_types)
+}
+
+/// Tokenize Vue/Svelte SFC `<script>` blocks.
+fn tokenize_sfc(source: &str, strip_types: bool) -> FileTokens {
+    let scripts = crate::extract::extract_sfc_scripts(source);
+    let mut all_tokens = Vec::new();
+
+    for script in &scripts {
+        let source_type = match (script.is_typescript, script.is_jsx) {
+            (true, true) => SourceType::tsx(),
+            (true, false) => SourceType::ts(),
+            (false, true) => SourceType::jsx(),
+            (false, false) => SourceType::mjs(),
+        };
+        let allocator = Allocator::default();
+        let parser_return = Parser::new(&allocator, &script.body, source_type).parse();
+
+        let mut extractor = TokenExtractor::with_strip_types(strip_types);
+        extractor.visit_program(&parser_return.program);
+
+        let offset = script.byte_offset as u32;
+        for token in &mut extractor.tokens {
+            token.span = Span::new(token.span.start + offset, token.span.end + offset);
+        }
+        all_tokens.extend(extractor.tokens);
+    }
+
+    FileTokens {
+        tokens: all_tokens,
+        source: source.to_string(),
+        line_count: source.lines().count().max(1),
+    }
+}
+
+/// Tokenize Astro frontmatter between `---` delimiters.
+fn tokenize_astro(
+    source: &str,
+    strip_types: bool,
+    extract_fn: fn(&str) -> Option<fallow_extract::sfc::SfcScript>,
+) -> FileTokens {
+    if let Some(script) = extract_fn(source) {
+        let allocator = Allocator::default();
+        let parser_return = Parser::new(&allocator, &script.body, SourceType::ts()).parse();
+
+        let mut extractor = TokenExtractor::with_strip_types(strip_types);
+        extractor.visit_program(&parser_return.program);
+
+        let offset = script.byte_offset as u32;
+        for token in &mut extractor.tokens {
+            token.span = Span::new(token.span.start + offset, token.span.end + offset);
+        }
+
+        return FileTokens {
+            tokens: extractor.tokens,
+            source: source.to_string(),
+            line_count: source.lines().count().max(1),
+        };
+    }
+    empty_tokens(source)
+}
+
+/// Tokenize MDX import/export statements.
+fn tokenize_mdx(source: &str, strip_types: bool, extract_fn: fn(&str) -> String) -> FileTokens {
+    let statements = extract_fn(source);
+    if !statements.is_empty() {
+        let allocator = Allocator::default();
+        let parser_return = Parser::new(&allocator, &statements, SourceType::jsx()).parse();
+
+        let mut extractor = TokenExtractor::with_strip_types(strip_types);
+        extractor.visit_program(&parser_return.program);
+
+        return FileTokens {
+            tokens: extractor.tokens,
+            source: source.to_string(),
+            line_count: source.lines().count().max(1),
+        };
+    }
+    empty_tokens(source)
+}
+
+/// Return empty tokens for a source file (CSS, no-frontmatter Astro, empty MDX).
+fn empty_tokens(source: &str) -> FileTokens {
+    FileTokens {
+        tokens: Vec::new(),
+        source: source.to_string(),
+        line_count: source.lines().count().max(1),
+    }
+}
+
+/// Tokenize a standard JS/TS file, with JSX fallback for parse errors.
+fn tokenize_js_ts(path: &Path, source: &str, strip_types: bool) -> FileTokens {
     let source_type = SourceType::from_path(path).unwrap_or_default();
     let allocator = Allocator::default();
     let parser_return = Parser::new(&allocator, source, source_type).parse();
@@ -162,12 +165,10 @@ fn tokenize_file_inner(path: &Path, source: &str, strip_types: bool) -> FileToke
         }
     }
 
-    let line_count = source.lines().count().max(1);
-
     FileTokens {
         tokens: extractor.tokens,
         source: source.to_string(),
-        line_count,
+        line_count: source.lines().count().max(1),
     }
 }
 

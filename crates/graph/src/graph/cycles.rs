@@ -136,21 +136,28 @@ impl ModuleGraph {
             }
         }
 
-        // Phase 2: Enumerate individual elementary cycles within each SCC.
-        // For small SCCs (len == 2), there's exactly one cycle.
-        // For larger SCCs, use bounded DFS to find up to MAX_CYCLES_PER_SCC cycles.
+        self.enumerate_cycles_from_sccs(&sccs, &all_succs, &succ_ranges)
+    }
+
+    /// Enumerate individual elementary cycles from SCCs and return sorted results.
+    fn enumerate_cycles_from_sccs(
+        &self,
+        sccs: &[Vec<FileId>],
+        all_succs: &[usize],
+        succ_ranges: &[Range<usize>],
+    ) -> Vec<Vec<FileId>> {
         const MAX_CYCLES_PER_SCC: usize = 20;
 
         let succs = SuccessorMap {
-            all_succs: &all_succs,
-            succ_ranges: &succ_ranges,
+            all_succs,
+            succ_ranges,
             modules: &self.modules,
         };
 
         let mut result: Vec<Vec<FileId>> = Vec::new();
         let mut seen_cycles: FxHashSet<Vec<u32>> = FxHashSet::default();
 
-        for scc in &sccs {
+        for scc in sccs {
             if scc.len() == 2 {
                 let mut cycle = vec![scc[0].0 as usize, scc[1].0 as usize];
                 // Canonical: smallest path first

@@ -78,147 +78,138 @@ impl Plugin for JestPlugin {
             result.referenced_dependencies.push(dep);
         }
 
-        // preset → referenced dependency (e.g., "ts-jest", "react-native")
-        if let Some(preset) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["preset"])
-        {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(&preset));
-        }
-
-        // setupFiles → setup files
-        let setup_files =
-            config_parser::extract_config_string_array(&parse_source, parse_path, &["setupFiles"]);
-        for f in &setup_files {
-            result
-                .setup_files
-                .push(root.join(f.trim_start_matches("./")));
-        }
-
-        // setupFilesAfterEnv → setup files
-        let setup_after = config_parser::extract_config_string_array(
-            &parse_source,
-            parse_path,
-            &["setupFilesAfterEnv"],
-        );
-        for f in &setup_after {
-            result
-                .setup_files
-                .push(root.join(f.trim_start_matches("./")));
-        }
-
-        // globalSetup → setup file
-        if let Some(setup) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["globalSetup"])
-        {
-            result
-                .setup_files
-                .push(root.join(setup.trim_start_matches("./")));
-        }
-
-        // globalTeardown → setup file
-        if let Some(teardown) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["globalTeardown"])
-        {
-            result
-                .setup_files
-                .push(root.join(teardown.trim_start_matches("./")));
-        }
-
-        // testMatch → additional entry patterns
-        let test_match =
-            config_parser::extract_config_string_array(&parse_source, parse_path, &["testMatch"]);
-        result.entry_patterns.extend(test_match);
-
-        // transform values → referenced dependencies (shallow to avoid options objects)
-        let transform_values =
-            config_parser::extract_config_shallow_strings(&parse_source, parse_path, "transform");
-        for val in &transform_values {
-            let dep = crate::resolve::extract_package_name(val);
-            result.referenced_dependencies.push(dep);
-        }
-
-        // reporters → referenced dependencies (shallow to avoid options objects)
-        let reporters =
-            config_parser::extract_config_shallow_strings(&parse_source, parse_path, "reporters");
-        for reporter in &reporters {
-            if !BUILTIN_REPORTERS.contains(&reporter.as_str()) {
-                let dep = crate::resolve::extract_package_name(reporter);
-                result.referenced_dependencies.push(dep);
-            }
-        }
-
-        // testEnvironment → if not built-in, it's a referenced dependency
-        if let Some(env) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["testEnvironment"])
-            && !matches!(env.as_str(), "node" | "jsdom")
-        {
-            result
-                .referenced_dependencies
-                .push(format!("jest-environment-{env}"));
-            result.referenced_dependencies.push(env);
-        }
-
-        // watchPlugins → referenced dependencies
-        let watch_plugins = config_parser::extract_config_shallow_strings(
-            &parse_source,
-            parse_path,
-            "watchPlugins",
-        );
-        for plugin in &watch_plugins {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(plugin));
-        }
-
-        // resolver → referenced dependency (only if it's a package, not a relative path)
-        if let Some(resolver) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["resolver"])
-            && !resolver.starts_with('.')
-            && !resolver.starts_with('/')
-        {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(&resolver));
-        }
-
-        // snapshotSerializers → referenced dependencies
-        let serializers = config_parser::extract_config_string_array(
-            &parse_source,
-            parse_path,
-            &["snapshotSerializers"],
-        );
-        for s in &serializers {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(s));
-        }
-
-        // testRunner → referenced dependency (filter built-in runners)
-        if let Some(runner) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["testRunner"])
-            && !matches!(
-                runner.as_str(),
-                "jest-jasmine2" | "jest-circus" | "jest-circus/runner"
-            )
-        {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(&runner));
-        }
-
-        // runner → referenced dependency (process runner, not test runner)
-        if let Some(runner) =
-            config_parser::extract_config_string(&parse_source, parse_path, &["runner"])
-            && runner != "jest-runner"
-        {
-            result
-                .referenced_dependencies
-                .push(crate::resolve::extract_package_name(&runner));
-        }
+        extract_jest_setup_files(&parse_source, parse_path, root, &mut result);
+        extract_jest_dependencies(&parse_source, parse_path, &mut result);
 
         result
+    }
+}
+
+/// Extract setup files from Jest config (setupFiles, setupFilesAfterEnv, globalSetup, globalTeardown).
+fn extract_jest_setup_files(
+    parse_source: &str,
+    parse_path: &Path,
+    root: &Path,
+    result: &mut PluginResult,
+) {
+    // preset → referenced dependency (e.g., "ts-jest", "react-native")
+    if let Some(preset) =
+        config_parser::extract_config_string(parse_source, parse_path, &["preset"])
+    {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(&preset));
+    }
+
+    for key in &["setupFiles", "setupFilesAfterEnv"] {
+        let files = config_parser::extract_config_string_array(parse_source, parse_path, &[key]);
+        for f in &files {
+            result
+                .setup_files
+                .push(root.join(f.trim_start_matches("./")));
+        }
+    }
+
+    for key in &["globalSetup", "globalTeardown"] {
+        if let Some(path) = config_parser::extract_config_string(parse_source, parse_path, &[key]) {
+            result
+                .setup_files
+                .push(root.join(path.trim_start_matches("./")));
+        }
+    }
+
+    // testMatch → additional entry patterns
+    let test_match =
+        config_parser::extract_config_string_array(parse_source, parse_path, &["testMatch"]);
+    result.entry_patterns.extend(test_match);
+}
+
+/// Extract referenced dependencies from Jest config (transform, reporters, environment, etc.).
+fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut PluginResult) {
+    // transform values → referenced dependencies
+    let transform_values =
+        config_parser::extract_config_shallow_strings(parse_source, parse_path, "transform");
+    for val in &transform_values {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(val));
+    }
+
+    // reporters → referenced dependencies
+    let reporters =
+        config_parser::extract_config_shallow_strings(parse_source, parse_path, "reporters");
+    for reporter in &reporters {
+        if !BUILTIN_REPORTERS.contains(&reporter.as_str()) {
+            result
+                .referenced_dependencies
+                .push(crate::resolve::extract_package_name(reporter));
+        }
+    }
+
+    // testEnvironment → if not built-in, it's a referenced dependency
+    if let Some(env) =
+        config_parser::extract_config_string(parse_source, parse_path, &["testEnvironment"])
+        && !matches!(env.as_str(), "node" | "jsdom")
+    {
+        result
+            .referenced_dependencies
+            .push(format!("jest-environment-{env}"));
+        result.referenced_dependencies.push(env);
+    }
+
+    // watchPlugins → referenced dependencies
+    let watch_plugins =
+        config_parser::extract_config_shallow_strings(parse_source, parse_path, "watchPlugins");
+    for plugin in &watch_plugins {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(plugin));
+    }
+
+    // resolver → referenced dependency (only if it's a package, not a relative path)
+    if let Some(resolver) =
+        config_parser::extract_config_string(parse_source, parse_path, &["resolver"])
+        && !resolver.starts_with('.')
+        && !resolver.starts_with('/')
+    {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(&resolver));
+    }
+
+    // snapshotSerializers → referenced dependencies
+    let serializers = config_parser::extract_config_string_array(
+        parse_source,
+        parse_path,
+        &["snapshotSerializers"],
+    );
+    for s in &serializers {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(s));
+    }
+
+    // testRunner → referenced dependency (filter built-in runners)
+    if let Some(runner) =
+        config_parser::extract_config_string(parse_source, parse_path, &["testRunner"])
+        && !matches!(
+            runner.as_str(),
+            "jest-jasmine2" | "jest-circus" | "jest-circus/runner"
+        )
+    {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(&runner));
+    }
+
+    // runner → referenced dependency (process runner, not test runner)
+    if let Some(runner) =
+        config_parser::extract_config_string(parse_source, parse_path, &["runner"])
+        && runner != "jest-runner"
+    {
+        result
+            .referenced_dependencies
+            .push(crate::resolve::extract_package_name(&runner));
     }
 }
 

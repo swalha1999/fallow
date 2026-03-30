@@ -146,72 +146,14 @@ pub fn analyze_with_parse_result(
 
     // Stage 1.6: Analyze package.json scripts
     let t = Instant::now();
-    let pkg_path = config.root.join("package.json");
-    if let Ok(pkg) = PackageJson::load(&pkg_path)
-        && let Some(ref pkg_scripts) = pkg.scripts
-    {
-        let scripts_to_analyze = if config.production {
-            scripts::filter_production_scripts(pkg_scripts)
-        } else {
-            pkg_scripts.clone()
-        };
-        let script_analysis = scripts::analyze_scripts(&scripts_to_analyze, &config.root);
-        plugin_result.script_used_packages = script_analysis.used_packages;
-
-        for config_file in &script_analysis.config_files {
-            plugin_result
-                .entry_patterns
-                .push((config_file.clone(), "scripts".to_string()));
-        }
-    }
-    for ws in workspaces {
-        let ws_pkg_path = ws.root.join("package.json");
-        if let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path)
-            && let Some(ref ws_scripts) = ws_pkg.scripts
-        {
-            let scripts_to_analyze = if config.production {
-                scripts::filter_production_scripts(ws_scripts)
-            } else {
-                ws_scripts.clone()
-            };
-            let ws_analysis = scripts::analyze_scripts(&scripts_to_analyze, &ws.root);
-            plugin_result
-                .script_used_packages
-                .extend(ws_analysis.used_packages);
-
-            let ws_prefix = ws
-                .root
-                .strip_prefix(&config.root)
-                .unwrap_or(&ws.root)
-                .to_string_lossy();
-            for config_file in &ws_analysis.config_files {
-                plugin_result
-                    .entry_patterns
-                    .push((format!("{ws_prefix}/{config_file}"), "scripts".to_string()));
-            }
-        }
-    }
-
-    // Stage 1.7: Analyze CI config files for binary invocations
-    let ci_packages = scripts::ci::analyze_ci_files(&config.root);
-    plugin_result.script_used_packages.extend(ci_packages);
-
+    analyze_all_scripts(config, workspaces, &mut plugin_result);
     let scripts_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Stage 2: SKIPPED — using pre-parsed modules from caller
 
     // Stage 3: Discover entry points
     let t = Instant::now();
-    let mut entry_points = discover::discover_entry_points(config, files);
-    let ws_entries: Vec<_> = workspaces
-        .par_iter()
-        .flat_map(|ws| discover::discover_workspace_entry_points(&ws.root, config, files))
-        .collect();
-    entry_points.extend(ws_entries);
-    let plugin_entries = discover::discover_plugin_entry_points(&plugin_result, config, files);
-    entry_points.extend(plugin_entries);
-    let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
-    entry_points.extend(infra_entries);
+    let entry_points = discover_all_entry_points(config, files, workspaces, &plugin_result);
     let entry_points_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Stage 4: Resolve imports to file IDs
@@ -367,59 +309,7 @@ fn analyze_full(
 
     // Stage 1.6: Analyze package.json scripts for binary usage and config file refs
     let t = Instant::now();
-    let pkg_path = config.root.join("package.json");
-    if let Ok(pkg) = PackageJson::load(&pkg_path)
-        && let Some(ref pkg_scripts) = pkg.scripts
-    {
-        // In production mode, only analyze start/build scripts
-        let scripts_to_analyze = if config.production {
-            scripts::filter_production_scripts(pkg_scripts)
-        } else {
-            pkg_scripts.clone()
-        };
-        let script_analysis = scripts::analyze_scripts(&scripts_to_analyze, &config.root);
-        plugin_result.script_used_packages = script_analysis.used_packages;
-
-        // Add config files from scripts as entry points (resolved later)
-        for config_file in &script_analysis.config_files {
-            plugin_result
-                .entry_patterns
-                .push((config_file.clone(), "scripts".to_string()));
-        }
-    }
-    // Also analyze workspace package.json scripts
-    for ws in workspaces {
-        let ws_pkg_path = ws.root.join("package.json");
-        if let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path)
-            && let Some(ref ws_scripts) = ws_pkg.scripts
-        {
-            let scripts_to_analyze = if config.production {
-                scripts::filter_production_scripts(ws_scripts)
-            } else {
-                ws_scripts.clone()
-            };
-            let ws_analysis = scripts::analyze_scripts(&scripts_to_analyze, &ws.root);
-            plugin_result
-                .script_used_packages
-                .extend(ws_analysis.used_packages);
-
-            let ws_prefix = ws
-                .root
-                .strip_prefix(&config.root)
-                .unwrap_or(&ws.root)
-                .to_string_lossy();
-            for config_file in &ws_analysis.config_files {
-                plugin_result
-                    .entry_patterns
-                    .push((format!("{ws_prefix}/{config_file}"), "scripts".to_string()));
-            }
-        }
-    }
-
-    // Stage 1.7: Analyze CI config files for binary invocations
-    let ci_packages = scripts::ci::analyze_ci_files(&config.root);
-    plugin_result.script_used_packages.extend(ci_packages);
-
+    analyze_all_scripts(config, workspaces, &mut plugin_result);
     let scripts_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Stage 2: Parse all files in parallel and extract imports/exports
@@ -451,16 +341,7 @@ fn analyze_full(
 
     // Stage 3: Discover entry points (static patterns + plugin-discovered patterns)
     let t = Instant::now();
-    let mut entry_points = discover::discover_entry_points(config, files);
-    let ws_entries: Vec<_> = workspaces
-        .par_iter()
-        .flat_map(|ws| discover::discover_workspace_entry_points(&ws.root, config, files))
-        .collect();
-    entry_points.extend(ws_entries);
-    let plugin_entries = discover::discover_plugin_entry_points(&plugin_result, config, files);
-    entry_points.extend(plugin_entries);
-    let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
-    entry_points.extend(infra_entries);
+    let entry_points = discover_all_entry_points(config, files, workspaces, &plugin_result);
     let entry_points_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Stage 4: Resolve imports to file IDs
@@ -569,6 +450,86 @@ fn analyze_full(
         timings,
         graph: if retain { Some(graph) } else { None },
     })
+}
+
+/// Analyze package.json scripts from root and all workspace packages.
+///
+/// Populates the plugin result with script-used packages and config file
+/// entry patterns. Also scans CI config files for binary invocations.
+fn analyze_all_scripts(
+    config: &ResolvedConfig,
+    workspaces: &[fallow_config::WorkspaceInfo],
+    plugin_result: &mut plugins::AggregatedPluginResult,
+) {
+    let pkg_path = config.root.join("package.json");
+    if let Ok(pkg) = PackageJson::load(&pkg_path)
+        && let Some(ref pkg_scripts) = pkg.scripts
+    {
+        let scripts_to_analyze = if config.production {
+            scripts::filter_production_scripts(pkg_scripts)
+        } else {
+            pkg_scripts.clone()
+        };
+        let script_analysis = scripts::analyze_scripts(&scripts_to_analyze, &config.root);
+        plugin_result.script_used_packages = script_analysis.used_packages;
+
+        for config_file in &script_analysis.config_files {
+            plugin_result
+                .entry_patterns
+                .push((config_file.clone(), "scripts".to_string()));
+        }
+    }
+    for ws in workspaces {
+        let ws_pkg_path = ws.root.join("package.json");
+        if let Ok(ws_pkg) = PackageJson::load(&ws_pkg_path)
+            && let Some(ref ws_scripts) = ws_pkg.scripts
+        {
+            let scripts_to_analyze = if config.production {
+                scripts::filter_production_scripts(ws_scripts)
+            } else {
+                ws_scripts.clone()
+            };
+            let ws_analysis = scripts::analyze_scripts(&scripts_to_analyze, &ws.root);
+            plugin_result
+                .script_used_packages
+                .extend(ws_analysis.used_packages);
+
+            let ws_prefix = ws
+                .root
+                .strip_prefix(&config.root)
+                .unwrap_or(&ws.root)
+                .to_string_lossy();
+            for config_file in &ws_analysis.config_files {
+                plugin_result
+                    .entry_patterns
+                    .push((format!("{ws_prefix}/{config_file}"), "scripts".to_string()));
+            }
+        }
+    }
+
+    // Scan CI config files for binary invocations
+    let ci_packages = scripts::ci::analyze_ci_files(&config.root);
+    plugin_result.script_used_packages.extend(ci_packages);
+}
+
+/// Discover all entry points from static patterns, workspaces, plugins, and infrastructure.
+fn discover_all_entry_points(
+    config: &ResolvedConfig,
+    files: &[discover::DiscoveredFile],
+    workspaces: &[fallow_config::WorkspaceInfo],
+    plugin_result: &plugins::AggregatedPluginResult,
+) -> Vec<discover::EntryPoint> {
+    let mut entry_points = discover::discover_entry_points(config, files);
+    let ws_entries: Vec<_> = workspaces
+        .par_iter()
+        .flat_map(|ws| discover::discover_workspace_entry_points(&ws.root, config, files))
+        .collect();
+    entry_points.extend(ws_entries);
+    let plugin_entries = discover::discover_plugin_entry_points(plugin_result, config, files);
+    entry_points.extend(plugin_entries);
+    let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
+    entry_points.extend(infra_entries);
+    entry_points
 }
 
 /// Run plugins for root project and all workspace packages.

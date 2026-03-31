@@ -1100,8 +1100,9 @@ fn dispatch_health(
         quiet,
         cli_format_was_explicit,
     );
-    // --min-score, --save-snapshot, and --trend imply --score
-    let score = score || min_score.is_some() || trend;
+    // --min-score, --save-snapshot, --trend, and --format badge imply --score
+    let badge_format = matches!(output, fallow_config::OutputFormat::Badge);
+    let score = score || min_score.is_some() || trend || badge_format;
     let snapshot_requested = save_snapshot.is_some();
     // No section flags = show all (including score). Any flag set = show only those.
     // --save-snapshot and --trend are orthogonal (not section flags) but force score.

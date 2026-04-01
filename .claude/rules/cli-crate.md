@@ -16,7 +16,7 @@ Key modules:
 - `report/` — Output formatting: `mod.rs` (dispatch), `human/` (check, dupes, health, perf, traces), `json.rs`, `sarif.rs`, `compact.rs`, `markdown.rs`, `codeclimate.rs`
 - `migrate/` — Config migration from knip/jscpd
 - `init.rs` — Generate config files (`.fallowrc.json` or `fallow.toml`), scaffold pre-commit git hooks (`--hooks`)
-- `list.rs` — Show active plugins, entry points, files
+- `list.rs` — Show active plugins, entry points, files, boundary zones/rules (`--boundaries`)
 - `schema.rs` — `schema`, `config-schema`, `plugin-schema` commands
 - `explain.rs` — Metric/rule definitions, JSON `_meta` builders, SARIF `fullDescription`/`helpUri` source, docs URLs
 - `validate.rs` — Input validation (control characters, path sanitization)

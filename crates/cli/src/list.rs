@@ -13,6 +13,7 @@ pub struct ListOptions<'a> {
     pub entry_points: bool,
     pub files: bool,
     pub plugins: bool,
+    pub boundaries: bool,
     pub production: bool,
 }
 
@@ -30,7 +31,7 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
 
-    let show_all = should_show_all(opts.entry_points, opts.files, opts.plugins);
+    let show_all = should_show_all(opts);
 
     // Run plugin detection to find active plugins (including workspace packages)
     let plugin_result = if opts.plugins || show_all {
@@ -62,8 +63,8 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
         None
     };
 
-    // Discover files once if needed by either files or entry_points
-    let need_files = needs_file_discovery(opts.files, show_all, opts.entry_points);
+    // Discover files once if needed by files, entry_points, or boundaries
+    let need_files = needs_file_discovery(opts.files, show_all, opts.entry_points, opts.boundaries);
     let discovered = if need_files {
         Some(fallow_core::discover::discover_files(&config))
     } else {
@@ -89,6 +90,13 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
             entries.extend(plugin_entries);
         }
         Some(entries)
+    } else {
+        None
+    };
+
+    // Compute boundary zone file counts if boundaries are requested.
+    let boundary_data = if opts.boundaries || show_all {
+        Some(compute_boundary_data(&config, discovered.as_deref()))
     } else {
         None
     };
@@ -140,6 +148,10 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
                 result.insert("entry_points".to_string(), serde_json::json!(eps));
             }
 
+            if let Some(ref bd) = boundary_data {
+                result.insert("boundaries".to_string(), boundary_data_to_json(bd));
+            }
+
             match serde_json::to_string_pretty(&serde_json::Value::Object(result)) {
                 Ok(json) => println!("{json}"),
                 Err(e) => {
@@ -173,6 +185,10 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
                     println!("{} ({:?})", ep.path.display(), ep.source);
                 }
             }
+
+            if let Some(ref bd) = boundary_data {
+                print_boundary_data_human(bd);
+            }
         }
     }
 
@@ -181,18 +197,170 @@ pub fn run_list(opts: &ListOptions<'_>) -> ExitCode {
 
 /// Determine whether all listing modes should be shown.
 ///
-/// When none of `--entry-points`, `--files`, or `--plugins` is specified,
-/// the command defaults to showing everything.
-const fn should_show_all(entry_points: bool, files: bool, plugins: bool) -> bool {
-    !entry_points && !files && !plugins
+/// When none of the specific flags is set, the command defaults to
+/// showing everything.
+const fn should_show_all(opts: &ListOptions<'_>) -> bool {
+    !opts.entry_points && !opts.files && !opts.plugins && !opts.boundaries
 }
 
 /// Determine whether file discovery is needed.
 ///
 /// Files must be discovered when showing files, when showing all,
-/// or when computing entry points (which need the file list).
-const fn needs_file_discovery(files: bool, show_all: bool, entry_points: bool) -> bool {
-    files || show_all || entry_points
+/// when computing entry points, or when computing boundary file counts.
+const fn needs_file_discovery(
+    files: bool,
+    show_all: bool,
+    entry_points: bool,
+    boundaries: bool,
+) -> bool {
+    files || show_all || entry_points || boundaries
+}
+
+// ── Boundary listing helpers ───────────────────────────────────
+
+struct BoundaryData {
+    zones: Vec<ZoneInfo>,
+    rules: Vec<RuleInfo>,
+    is_empty: bool,
+}
+
+struct ZoneInfo {
+    name: String,
+    patterns: Vec<String>,
+    file_count: usize,
+}
+
+struct RuleInfo {
+    from: String,
+    allow: Vec<String>,
+}
+
+fn compute_boundary_data(
+    config: &fallow_config::ResolvedConfig,
+    discovered: Option<&[fallow_core::discover::DiscoveredFile]>,
+) -> BoundaryData {
+    let boundaries = &config.boundaries;
+
+    if boundaries.is_empty() {
+        return BoundaryData {
+            zones: vec![],
+            rules: vec![],
+            is_empty: true,
+        };
+    }
+
+    let zones: Vec<ZoneInfo> = boundaries
+        .zones
+        .iter()
+        .map(|zone| {
+            let file_count = discovered.map_or(0, |files| {
+                files
+                    .iter()
+                    .filter(|f| {
+                        let rel = f
+                            .path
+                            .strip_prefix(&config.root)
+                            .ok()
+                            .map(|p| p.to_string_lossy().replace('\\', "/"));
+                        rel.is_some_and(|p| zone.matchers.iter().any(|m| m.is_match(&p)))
+                    })
+                    .count()
+            });
+            ZoneInfo {
+                name: zone.name.clone(),
+                patterns: zone.matchers.iter().map(|m| m.glob().to_string()).collect(),
+                file_count,
+            }
+        })
+        .collect();
+
+    let rules: Vec<RuleInfo> = boundaries
+        .rules
+        .iter()
+        .map(|r| RuleInfo {
+            from: r.from_zone.clone(),
+            allow: r.allowed_zones.clone(),
+        })
+        .collect();
+
+    BoundaryData {
+        zones,
+        rules,
+        is_empty: false,
+    }
+}
+
+fn boundary_data_to_json(bd: &BoundaryData) -> serde_json::Value {
+    if bd.is_empty {
+        return serde_json::json!({
+            "configured": false,
+            "zones": [],
+            "rules": []
+        });
+    }
+
+    let zones: Vec<serde_json::Value> = bd
+        .zones
+        .iter()
+        .map(|z| {
+            serde_json::json!({
+                "name": z.name,
+                "patterns": z.patterns,
+                "file_count": z.file_count,
+            })
+        })
+        .collect();
+
+    let rules: Vec<serde_json::Value> = bd
+        .rules
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "from": r.from,
+                "allow": r.allow,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "configured": true,
+        "zone_count": bd.zones.len(),
+        "zones": zones,
+        "rule_count": bd.rules.len(),
+        "rules": rules,
+    })
+}
+
+fn print_boundary_data_human(bd: &BoundaryData) {
+    if bd.is_empty {
+        eprintln!("Boundaries: not configured");
+        return;
+    }
+
+    eprintln!(
+        "Boundaries: {} zones, {} rules",
+        bd.zones.len(),
+        bd.rules.len()
+    );
+
+    eprintln!("\nZones:");
+    for zone in &bd.zones {
+        eprintln!(
+            "  {:<20} {} files  {}",
+            zone.name,
+            zone.file_count,
+            zone.patterns.join(", ")
+        );
+    }
+
+    eprintln!("\nRules:");
+    for rule in &bd.rules {
+        if rule.allow.is_empty() {
+            eprintln!("  {:<20} (isolated — no imports allowed)", rule.from);
+        } else {
+            eprintln!("  {:<20} → {}", rule.from, rule.allow.join(", "));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -201,101 +369,108 @@ mod tests {
 
     // ── should_show_all ─────────────────────────────────────────
 
+    fn make_opts(
+        entry_points: bool,
+        files: bool,
+        plugins: bool,
+        boundaries: bool,
+    ) -> ListOptions<'static> {
+        ListOptions {
+            root: std::path::Path::new("/project"),
+            config_path: &None,
+            output: OutputFormat::Human,
+            threads: 4,
+            no_cache: false,
+            entry_points,
+            files,
+            plugins,
+            boundaries,
+            production: false,
+        }
+    }
+
     #[test]
     fn show_all_when_no_flags_set() {
-        assert!(should_show_all(false, false, false));
+        assert!(should_show_all(&make_opts(false, false, false, false)));
     }
 
     #[test]
     fn not_show_all_when_entry_points_set() {
-        assert!(!should_show_all(true, false, false));
+        assert!(!should_show_all(&make_opts(true, false, false, false)));
     }
 
     #[test]
     fn not_show_all_when_files_set() {
-        assert!(!should_show_all(false, true, false));
+        assert!(!should_show_all(&make_opts(false, true, false, false)));
     }
 
     #[test]
     fn not_show_all_when_plugins_set() {
-        assert!(!should_show_all(false, false, true));
+        assert!(!should_show_all(&make_opts(false, false, true, false)));
+    }
+
+    #[test]
+    fn not_show_all_when_boundaries_set() {
+        assert!(!should_show_all(&make_opts(false, false, false, true)));
     }
 
     #[test]
     fn not_show_all_when_all_flags_set() {
-        assert!(!should_show_all(true, true, true));
+        assert!(!should_show_all(&make_opts(true, true, true, true)));
     }
 
     #[test]
     fn not_show_all_when_two_flags_set() {
-        assert!(!should_show_all(true, true, false));
-        assert!(!should_show_all(true, false, true));
-        assert!(!should_show_all(false, true, true));
+        assert!(!should_show_all(&make_opts(true, true, false, false)));
+        assert!(!should_show_all(&make_opts(true, false, true, false)));
+        assert!(!should_show_all(&make_opts(false, true, true, false)));
     }
 
     // ── needs_file_discovery ────────────────────────────────────
 
     #[test]
     fn needs_discovery_when_files_requested() {
-        assert!(needs_file_discovery(true, false, false));
+        assert!(needs_file_discovery(true, false, false, false));
     }
 
     #[test]
     fn needs_discovery_when_show_all() {
-        assert!(needs_file_discovery(false, true, false));
+        assert!(needs_file_discovery(false, true, false, false));
     }
 
     #[test]
     fn needs_discovery_when_entry_points_requested() {
-        assert!(needs_file_discovery(false, false, true));
+        assert!(needs_file_discovery(false, false, true, false));
+    }
+
+    #[test]
+    fn needs_discovery_when_boundaries_requested() {
+        assert!(needs_file_discovery(false, false, false, true));
     }
 
     #[test]
     fn no_discovery_when_only_plugins() {
-        // plugins=true but show_all=false, files=false, entry_points=false
-        assert!(!needs_file_discovery(false, false, false));
+        // plugins=true but show_all=false, files=false, entry_points=false, boundaries=false
+        assert!(!needs_file_discovery(false, false, false, false));
     }
 
     // ── ListOptions construction ────────────────────────────────
 
     #[test]
     fn list_options_default_flags() {
-        let opts = ListOptions {
-            root: std::path::Path::new("/project"),
-            config_path: &None,
-            output: OutputFormat::Human,
-            threads: 4,
-            no_cache: false,
-            entry_points: false,
-            files: false,
-            plugins: false,
-            production: false,
-        };
-        assert!(should_show_all(opts.entry_points, opts.files, opts.plugins));
+        let opts = make_opts(false, false, false, false);
+        assert!(should_show_all(&opts));
     }
 
     #[test]
     fn list_options_single_flag() {
-        let opts = ListOptions {
-            root: std::path::Path::new("/project"),
-            config_path: &None,
-            output: OutputFormat::Json,
-            threads: 1,
-            no_cache: true,
-            entry_points: true,
-            files: false,
-            plugins: false,
-            production: false,
-        };
-        assert!(!should_show_all(
-            opts.entry_points,
-            opts.files,
-            opts.plugins
-        ));
+        let opts = make_opts(true, false, false, false);
+        assert!(!should_show_all(&opts));
         assert!(needs_file_discovery(
             opts.files,
-            should_show_all(opts.entry_points, opts.files, opts.plugins),
-            opts.entry_points
+            should_show_all(&opts),
+            opts.entry_points,
+            opts.boundaries,
         ));
     }
 }

@@ -4,9 +4,115 @@ use globset::Glob;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Built-in architecture presets.
+///
+/// Each preset expands into a set of zones and import rules for a common
+/// architecture pattern. User-defined zones and rules merge on top of the
+/// preset defaults (zones with the same name replace the preset zone;
+/// rules with the same `from` replace the preset rule).
+///
+/// # Examples
+///
+/// ```
+/// use fallow_config::BoundaryPreset;
+///
+/// let preset: BoundaryPreset = serde_json::from_str(r#""layered""#).unwrap();
+/// assert!(matches!(preset, BoundaryPreset::Layered));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BoundaryPreset {
+    /// Classic layered architecture: presentation → application → domain ← infrastructure.
+    /// Infrastructure may also import from application (common in DI frameworks).
+    Layered,
+    /// Hexagonal / ports-and-adapters: adapters → ports → domain.
+    Hexagonal,
+    /// Feature-Sliced Design: app > pages > widgets > features > entities > shared.
+    /// Each layer may only import from layers below it.
+    FeatureSliced,
+}
+
+impl BoundaryPreset {
+    /// Expand the preset into default zones and rules.
+    ///
+    /// `source_root` is the directory prefix for zone patterns (e.g., `"src"`, `"lib"`).
+    /// Patterns are generated as `{source_root}/{zone_name}/**`.
+    #[must_use]
+    pub fn default_config(&self, source_root: &str) -> (Vec<BoundaryZone>, Vec<BoundaryRule>) {
+        match self {
+            Self::Layered => Self::layered_config(source_root),
+            Self::Hexagonal => Self::hexagonal_config(source_root),
+            Self::FeatureSliced => Self::feature_sliced_config(source_root),
+        }
+    }
+
+    fn zone(name: &str, source_root: &str) -> BoundaryZone {
+        BoundaryZone {
+            name: name.to_owned(),
+            patterns: vec![format!("{source_root}/{name}/**")],
+            root: None,
+        }
+    }
+
+    fn rule(from: &str, allow: &[&str]) -> BoundaryRule {
+        BoundaryRule {
+            from: from.to_owned(),
+            allow: allow.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    fn layered_config(source_root: &str) -> (Vec<BoundaryZone>, Vec<BoundaryRule>) {
+        let zones = vec![
+            Self::zone("presentation", source_root),
+            Self::zone("application", source_root),
+            Self::zone("domain", source_root),
+            Self::zone("infrastructure", source_root),
+        ];
+        let rules = vec![
+            Self::rule("presentation", &["application"]),
+            Self::rule("application", &["domain"]),
+            Self::rule("domain", &[]),
+            Self::rule("infrastructure", &["domain", "application"]),
+        ];
+        (zones, rules)
+    }
+
+    fn hexagonal_config(source_root: &str) -> (Vec<BoundaryZone>, Vec<BoundaryRule>) {
+        let zones = vec![
+            Self::zone("adapters", source_root),
+            Self::zone("ports", source_root),
+            Self::zone("domain", source_root),
+        ];
+        let rules = vec![
+            Self::rule("adapters", &["ports"]),
+            Self::rule("ports", &["domain"]),
+            Self::rule("domain", &[]),
+        ];
+        (zones, rules)
+    }
+
+    fn feature_sliced_config(source_root: &str) -> (Vec<BoundaryZone>, Vec<BoundaryRule>) {
+        let layer_names = ["app", "pages", "widgets", "features", "entities", "shared"];
+        let zones = layer_names
+            .iter()
+            .map(|name| Self::zone(name, source_root))
+            .collect();
+        let rules = layer_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let below: Vec<&str> = layer_names[i + 1..].to_vec();
+                Self::rule(name, &below)
+            })
+            .collect();
+        (zones, rules)
+    }
+}
+
 /// Architecture boundary configuration.
 ///
 /// Defines zones (directory groupings) and rules (which zones may import from which).
+/// Optionally uses a built-in preset as a starting point.
 ///
 /// # Examples
 ///
@@ -26,9 +132,30 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(config.zones.len(), 2);
 /// assert_eq!(config.rules.len(), 1);
 /// ```
+///
+/// Using a preset:
+///
+/// ```
+/// use fallow_config::BoundaryConfig;
+///
+/// let json = r#"{ "preset": "layered" }"#;
+/// let mut config: BoundaryConfig = serde_json::from_str(json).unwrap();
+/// config.expand("src");
+/// assert_eq!(config.zones.len(), 4);
+/// assert_eq!(config.rules.len(), 4);
+/// ```
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundaryConfig {
+    /// Built-in architecture preset. When set, expands into default zones and rules.
+    /// User-defined zones and rules merge on top: zones with the same name replace
+    /// the preset zone; rules with the same `from` replace the preset rule.
+    /// Preset patterns use `{rootDir}/{zone}/**` where rootDir is auto-detected
+    /// from tsconfig.json (falls back to `src`).
+    /// Note: preset patterns are flat (`src/<zone>/**`). For monorepos with
+    /// per-package source directories, define zones explicitly instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<BoundaryPreset>,
     /// Named zones mapping directory patterns to architectural layers.
     #[serde(default)]
     pub zones: Vec<BoundaryZone>,
@@ -94,10 +221,81 @@ pub struct ResolvedBoundaryRule {
 }
 
 impl BoundaryConfig {
-    /// Whether any boundaries are configured.
+    /// Whether any boundaries are configured (including via preset).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.zones.is_empty()
+        self.preset.is_none() && self.zones.is_empty()
+    }
+
+    /// Expand the preset (if set) into zones and rules, merging user overrides on top.
+    ///
+    /// `source_root` is the directory prefix for preset zone patterns (e.g., `"src"`).
+    /// After expansion, `self.preset` is cleared and all zones/rules are explicit.
+    ///
+    /// Merge semantics:
+    /// - User zones with the same name as a preset zone **replace** the preset zone entirely.
+    /// - User rules with the same `from` as a preset rule **replace** the preset rule.
+    /// - User zones/rules with new names **add** to the preset set.
+    pub fn expand(&mut self, source_root: &str) {
+        let Some(preset) = self.preset.take() else {
+            return;
+        };
+
+        let (preset_zones, preset_rules) = preset.default_config(source_root);
+
+        // Build set of user-defined zone names for override detection.
+        let user_zone_names: rustc_hash::FxHashSet<&str> =
+            self.zones.iter().map(|z| z.name.as_str()).collect();
+
+        // Start with preset zones, replacing any that the user overrides.
+        let mut merged_zones: Vec<BoundaryZone> = preset_zones
+            .into_iter()
+            .filter(|pz| {
+                if user_zone_names.contains(pz.name.as_str()) {
+                    tracing::info!(
+                        "boundary preset: user zone '{}' replaces preset zone",
+                        pz.name
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        // Append all user zones (both overrides and additions).
+        merged_zones.append(&mut self.zones);
+        self.zones = merged_zones;
+
+        // Build set of user-defined rule `from` names for override detection.
+        let user_rule_sources: rustc_hash::FxHashSet<&str> =
+            self.rules.iter().map(|r| r.from.as_str()).collect();
+
+        let mut merged_rules: Vec<BoundaryRule> = preset_rules
+            .into_iter()
+            .filter(|pr| {
+                if user_rule_sources.contains(pr.from.as_str()) {
+                    tracing::info!(
+                        "boundary preset: user rule for '{}' replaces preset rule",
+                        pr.from
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        merged_rules.append(&mut self.rules);
+        self.rules = merged_rules;
+    }
+
+    /// Return the preset name if one is configured but not yet expanded.
+    #[must_use]
+    pub fn preset_name(&self) -> Option<&str> {
+        self.preset.as_ref().map(|p| match p {
+            BoundaryPreset::Layered => "layered",
+            BoundaryPreset::Hexagonal => "hexagonal",
+            BoundaryPreset::FeatureSliced => "feature-sliced",
+        })
     }
 
     /// Validate that all zone names referenced in rules are defined in `zones`.
@@ -263,6 +461,7 @@ allow = ["db"]
     #[test]
     fn validate_zone_references_valid() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),
@@ -286,6 +485,7 @@ allow = ["db"]
     #[test]
     fn validate_zone_references_invalid_from() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![BoundaryZone {
                 name: "ui".to_string(),
                 patterns: vec![],
@@ -304,6 +504,7 @@ allow = ["db"]
     #[test]
     fn validate_zone_references_invalid_allow() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![BoundaryZone {
                 name: "ui".to_string(),
                 patterns: vec![],
@@ -322,6 +523,7 @@ allow = ["db"]
     #[test]
     fn resolve_and_classify() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),
@@ -348,6 +550,7 @@ allow = ["db"]
     #[test]
     fn first_match_wins() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "specific".to_string(),
@@ -376,6 +579,7 @@ allow = ["db"]
     #[test]
     fn self_import_always_allowed() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![BoundaryZone {
                 name: "ui".to_string(),
                 patterns: vec![],
@@ -393,6 +597,7 @@ allow = ["db"]
     #[test]
     fn unrestricted_zone_allows_all() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "shared".to_string(),
@@ -414,6 +619,7 @@ allow = ["db"]
     #[test]
     fn restricted_zone_blocks_unlisted() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),
@@ -444,6 +650,7 @@ allow = ["db"]
     #[test]
     fn empty_allow_blocks_all_except_self() {
         let config = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "isolated".to_string(),
@@ -474,5 +681,277 @@ allow = ["db"]
         }"#;
         let config: BoundaryConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.zones[0].root.as_deref(), Some("packages/app/"));
+    }
+
+    // ── Preset deserialization ─────────────────────────────────
+
+    #[test]
+    fn deserialize_preset_json() {
+        let json = r#"{ "preset": "layered" }"#;
+        let config: BoundaryConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.preset, Some(BoundaryPreset::Layered));
+        assert!(config.zones.is_empty());
+    }
+
+    #[test]
+    fn deserialize_preset_hexagonal_json() {
+        let json = r#"{ "preset": "hexagonal" }"#;
+        let config: BoundaryConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.preset, Some(BoundaryPreset::Hexagonal));
+    }
+
+    #[test]
+    fn deserialize_preset_feature_sliced_json() {
+        let json = r#"{ "preset": "feature-sliced" }"#;
+        let config: BoundaryConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.preset, Some(BoundaryPreset::FeatureSliced));
+    }
+
+    #[test]
+    fn deserialize_preset_toml() {
+        let toml_str = r#"preset = "layered""#;
+        let config: BoundaryConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.preset, Some(BoundaryPreset::Layered));
+    }
+
+    #[test]
+    fn deserialize_invalid_preset_rejected() {
+        let json = r#"{ "preset": "invalid_preset" }"#;
+        let result: Result<BoundaryConfig, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn preset_absent_by_default() {
+        let config = BoundaryConfig::default();
+        assert!(config.preset.is_none());
+        assert!(config.is_empty());
+    }
+
+    #[test]
+    fn preset_makes_config_non_empty() {
+        let config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Layered),
+            zones: vec![],
+            rules: vec![],
+        };
+        assert!(!config.is_empty());
+    }
+
+    // ── Preset expansion ───────────────────────────────────────
+
+    #[test]
+    fn expand_layered_produces_four_zones() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Layered),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert_eq!(config.zones.len(), 4);
+        assert_eq!(config.rules.len(), 4);
+        assert!(config.preset.is_none(), "preset cleared after expand");
+        assert_eq!(config.zones[0].name, "presentation");
+        assert_eq!(config.zones[0].patterns, vec!["src/presentation/**"]);
+    }
+
+    #[test]
+    fn expand_layered_rules_correct() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Layered),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        // presentation → application only
+        let pres_rule = config
+            .rules
+            .iter()
+            .find(|r| r.from == "presentation")
+            .unwrap();
+        assert_eq!(pres_rule.allow, vec!["application"]);
+        // application → domain only
+        let app_rule = config
+            .rules
+            .iter()
+            .find(|r| r.from == "application")
+            .unwrap();
+        assert_eq!(app_rule.allow, vec!["domain"]);
+        // domain → nothing
+        let dom_rule = config.rules.iter().find(|r| r.from == "domain").unwrap();
+        assert!(dom_rule.allow.is_empty());
+        // infrastructure → domain + application (DI-friendly)
+        let infra_rule = config
+            .rules
+            .iter()
+            .find(|r| r.from == "infrastructure")
+            .unwrap();
+        assert_eq!(infra_rule.allow, vec!["domain", "application"]);
+    }
+
+    #[test]
+    fn expand_hexagonal_produces_three_zones() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert_eq!(config.zones.len(), 3);
+        assert_eq!(config.rules.len(), 3);
+        assert_eq!(config.zones[0].name, "adapters");
+        assert_eq!(config.zones[1].name, "ports");
+        assert_eq!(config.zones[2].name, "domain");
+    }
+
+    #[test]
+    fn expand_feature_sliced_produces_six_zones() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::FeatureSliced),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert_eq!(config.zones.len(), 6);
+        assert_eq!(config.rules.len(), 6);
+        // app can import everything below
+        let app_rule = config.rules.iter().find(|r| r.from == "app").unwrap();
+        assert_eq!(
+            app_rule.allow,
+            vec!["pages", "widgets", "features", "entities", "shared"]
+        );
+        // shared imports nothing
+        let shared_rule = config.rules.iter().find(|r| r.from == "shared").unwrap();
+        assert!(shared_rule.allow.is_empty());
+        // entities → shared only
+        let ent_rule = config.rules.iter().find(|r| r.from == "entities").unwrap();
+        assert_eq!(ent_rule.allow, vec!["shared"]);
+    }
+
+    #[test]
+    fn expand_uses_custom_source_root() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("lib");
+        assert_eq!(config.zones[0].patterns, vec!["lib/adapters/**"]);
+        assert_eq!(config.zones[2].patterns, vec!["lib/domain/**"]);
+    }
+
+    // ── Preset merge behavior ──────────────────────────────────
+
+    #[test]
+    fn user_zone_replaces_preset_zone() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![BoundaryZone {
+                name: "domain".to_string(),
+                patterns: vec!["src/core/**".to_string()],
+                root: None,
+            }],
+            rules: vec![],
+        };
+        config.expand("src");
+        // 3 zones total: adapters + ports from preset, domain from user
+        assert_eq!(config.zones.len(), 3);
+        let domain = config.zones.iter().find(|z| z.name == "domain").unwrap();
+        assert_eq!(domain.patterns, vec!["src/core/**"]);
+    }
+
+    #[test]
+    fn user_zone_adds_to_preset() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![BoundaryZone {
+                name: "shared".to_string(),
+                patterns: vec!["src/shared/**".to_string()],
+                root: None,
+            }],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert_eq!(config.zones.len(), 4); // 3 preset + 1 user
+        assert!(config.zones.iter().any(|z| z.name == "shared"));
+    }
+
+    #[test]
+    fn user_rule_replaces_preset_rule() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![],
+            rules: vec![BoundaryRule {
+                from: "adapters".to_string(),
+                allow: vec!["ports".to_string(), "domain".to_string()],
+            }],
+        };
+        config.expand("src");
+        let adapter_rule = config.rules.iter().find(|r| r.from == "adapters").unwrap();
+        // User rule allows both ports and domain (preset only allowed ports)
+        assert_eq!(adapter_rule.allow, vec!["ports", "domain"]);
+        // Other preset rules untouched
+        assert_eq!(
+            config.rules.iter().filter(|r| r.from == "adapters").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn expand_without_preset_is_noop() {
+        let mut config = BoundaryConfig {
+            preset: None,
+            zones: vec![BoundaryZone {
+                name: "ui".to_string(),
+                patterns: vec!["src/ui/**".to_string()],
+                root: None,
+            }],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert_eq!(config.zones.len(), 1);
+        assert_eq!(config.zones[0].name, "ui");
+    }
+
+    #[test]
+    fn expand_then_validate_succeeds() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Layered),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        assert!(config.validate_zone_references().is_empty());
+    }
+
+    #[test]
+    fn expand_then_resolve_classifies() {
+        let mut config = BoundaryConfig {
+            preset: Some(BoundaryPreset::Hexagonal),
+            zones: vec![],
+            rules: vec![],
+        };
+        config.expand("src");
+        let resolved = config.resolve();
+        assert_eq!(
+            resolved.classify_zone("src/adapters/http/handler.ts"),
+            Some("adapters")
+        );
+        assert_eq!(resolved.classify_zone("src/domain/user.ts"), Some("domain"));
+        assert!(!resolved.is_import_allowed("adapters", "domain"));
+        assert!(resolved.is_import_allowed("adapters", "ports"));
+    }
+
+    #[test]
+    fn preset_name_returns_correct_string() {
+        let config = BoundaryConfig {
+            preset: Some(BoundaryPreset::FeatureSliced),
+            zones: vec![],
+            rules: vec![],
+        };
+        assert_eq!(config.preset_name(), Some("feature-sliced"));
+
+        let empty = BoundaryConfig::default();
+        assert_eq!(empty.preset_name(), None);
     }
 }

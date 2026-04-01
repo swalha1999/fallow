@@ -7,8 +7,8 @@ mod resolution;
 mod rules;
 
 pub use boundaries::{
-    BoundaryConfig, BoundaryRule, BoundaryZone, ResolvedBoundaryConfig, ResolvedBoundaryRule,
-    ResolvedZone,
+    BoundaryConfig, BoundaryPreset, BoundaryRule, BoundaryZone, ResolvedBoundaryConfig,
+    ResolvedBoundaryRule, ResolvedZone,
 };
 pub use duplicates_config::{
     DetectionMode, DuplicatesConfig, NormalizationConfig, ResolvedNormalization,

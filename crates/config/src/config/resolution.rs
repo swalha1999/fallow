@@ -125,15 +125,30 @@ impl FallowConfig {
         // Merge inline framework definitions into external plugins
         external_plugins.extend(self.framework);
 
+        // Expand boundary preset (if configured) before validation.
+        // Detect source root from tsconfig.json, falling back to "src".
+        let mut boundaries = self.boundaries;
+        if boundaries.preset.is_some() {
+            let source_root = crate::workspace::parse_tsconfig_root_dir(&root)
+                .filter(|r| {
+                    r != "." && !r.starts_with("..") && !std::path::Path::new(r).is_absolute()
+                })
+                .unwrap_or_else(|| "src".to_owned());
+            if source_root != "src" {
+                tracing::info!("boundary preset: using rootDir '{source_root}' from tsconfig.json");
+            }
+            boundaries.expand(&source_root);
+        }
+
         // Validate and compile architecture boundary config
-        let validation_errors = self.boundaries.validate_zone_references();
+        let validation_errors = boundaries.validate_zone_references();
         for (rule_idx, zone_name) in &validation_errors {
             tracing::error!(
                 "boundary rule {} references undefined zone '{zone_name}'",
                 rule_idx
             );
         }
-        let boundaries = self.boundaries.resolve();
+        let boundaries = boundaries.resolve();
 
         // Pre-compile override glob matchers
         let overrides = self
@@ -920,5 +935,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Boundary preset expansion ──────────────────────────────────
+
+    #[test]
+    fn resolve_expands_boundary_preset() {
+        use crate::config::boundaries::BoundaryPreset;
+
+        let mut config = make_config(false);
+        config.boundaries.preset = Some(BoundaryPreset::Hexagonal);
+        let resolved = config.resolve(
+            PathBuf::from("/project"),
+            OutputFormat::Human,
+            1,
+            true,
+            true,
+        );
+        // Preset should have been expanded into zones (no tsconfig → fallback to "src")
+        assert_eq!(resolved.boundaries.zones.len(), 3);
+        assert_eq!(resolved.boundaries.rules.len(), 3);
+        assert_eq!(resolved.boundaries.zones[0].name, "adapters");
+        assert_eq!(
+            resolved.boundaries.classify_zone("src/adapters/http.ts"),
+            Some("adapters")
+        );
+    }
+
+    #[test]
+    fn resolve_boundary_preset_with_user_override() {
+        use crate::config::boundaries::{BoundaryPreset, BoundaryZone};
+
+        let mut config = make_config(false);
+        config.boundaries.preset = Some(BoundaryPreset::Hexagonal);
+        config.boundaries.zones = vec![BoundaryZone {
+            name: "domain".to_string(),
+            patterns: vec!["src/core/**".to_string()],
+            root: None,
+        }];
+        let resolved = config.resolve(
+            PathBuf::from("/project"),
+            OutputFormat::Human,
+            1,
+            true,
+            true,
+        );
+        // User zone "domain" replaced preset zone "domain"
+        assert_eq!(resolved.boundaries.zones.len(), 3);
+        // The user's pattern should be used for domain zone
+        assert_eq!(
+            resolved.boundaries.classify_zone("src/core/user.ts"),
+            Some("domain")
+        );
+        // Original preset pattern should NOT match
+        assert_eq!(
+            resolved.boundaries.classify_zone("src/domain/user.ts"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_no_preset_unchanged() {
+        let config = make_config(false);
+        let resolved = config.resolve(
+            PathBuf::from("/project"),
+            OutputFormat::Human,
+            1,
+            true,
+            true,
+        );
+        assert!(resolved.boundaries.is_empty());
     }
 }

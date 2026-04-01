@@ -1,6 +1,6 @@
 use fallow_config::{
-    BoundaryConfig, BoundaryRule, BoundaryZone, DuplicatesConfig, FallowConfig, HealthConfig,
-    OutputFormat, RulesConfig, Severity,
+    BoundaryConfig, BoundaryPreset, BoundaryRule, BoundaryZone, DuplicatesConfig, FallowConfig,
+    HealthConfig, OutputFormat, RulesConfig, Severity,
 };
 
 use super::common::fixture_path;
@@ -37,6 +37,7 @@ fn create_boundary_config(
 fn detects_boundary_violation() {
     let root = fixture_path("boundary-violations");
     let boundaries = BoundaryConfig {
+        preset: None,
         zones: vec![
             BoundaryZone {
                 name: "ui".to_string(),
@@ -118,6 +119,7 @@ fn no_violations_when_boundaries_disabled() {
 fn no_violations_when_rule_is_off() {
     let root = fixture_path("boundary-violations");
     let boundaries = BoundaryConfig {
+        preset: None,
         zones: vec![
             BoundaryZone {
                 name: "ui".to_string(),
@@ -163,4 +165,62 @@ fn no_violations_when_rule_is_off() {
         results.boundary_violations.is_empty(),
         "boundary violations should be empty when rule is off"
     );
+}
+
+#[test]
+fn preset_detects_boundary_violation() {
+    let root = fixture_path("boundary-preset");
+    let boundaries = BoundaryConfig {
+        preset: Some(BoundaryPreset::Hexagonal),
+        zones: vec![],
+        rules: vec![],
+    };
+    // Use explicit entry point matching the preset fixture (not the shared helper
+    // which hardcodes src/ui/App.ts for the boundary-violations fixture).
+    let config = FallowConfig {
+        schema: None,
+        extends: vec![],
+        entry: vec!["src/adapters/http.ts".to_string()],
+        ignore_patterns: vec![],
+        framework: vec![],
+        workspaces: None,
+        ignore_dependencies: vec![],
+        ignore_exports: vec![],
+        duplicates: DuplicatesConfig::default(),
+        health: HealthConfig::default(),
+        rules: RulesConfig {
+            boundary_violation: Severity::Error,
+            ..RulesConfig::default()
+        },
+        boundaries,
+        production: false,
+        plugins: vec![],
+        overrides: vec![],
+        regression: None,
+    }
+    .resolve(root, OutputFormat::Human, 4, true, true);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    // adapters/http.ts imports domain/user.ts directly — that's a violation
+    // (adapters may only import from ports)
+    assert_eq!(
+        results.boundary_violations.len(),
+        1,
+        "expected 1 boundary violation, got: {:?}",
+        results
+            .boundary_violations
+            .iter()
+            .map(|v| format!(
+                "{} ({}) -> {} ({})",
+                v.from_zone,
+                v.from_path.display(),
+                v.to_zone,
+                v.to_path.display()
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    let v = &results.boundary_violations[0];
+    assert_eq!(v.from_zone, "adapters");
+    assert_eq!(v.to_zone, "domain");
 }

@@ -47,6 +47,35 @@ pub(super) fn parse_tsconfig_references(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Parse `tsconfig.json` at the project root and extract `compilerOptions.rootDir`.
+///
+/// Returns `None` if the file is missing, malformed, or has no `rootDir` set.
+/// Strips JSONC comments and trailing commas before parsing.
+pub fn parse_tsconfig_root_dir(root: &Path) -> Option<String> {
+    let tsconfig_path = root.join("tsconfig.json");
+    let content = std::fs::read_to_string(&tsconfig_path).ok()?;
+    let content = content.trim_start_matches('\u{FEFF}');
+
+    let mut stripped = String::new();
+    json_comments::StripComments::new(content.as_bytes())
+        .read_to_string(&mut stripped)
+        .ok()?;
+
+    let cleaned = strip_trailing_commas(&stripped);
+    let value: serde_json::Value = serde_json::from_str(&cleaned).ok()?;
+
+    value
+        .get("compilerOptions")
+        .and_then(|opts| opts.get("rootDir"))
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            s.strip_prefix("./")
+                .unwrap_or(s)
+                .trim_end_matches('/')
+                .to_owned()
+        })
+}
+
 /// Strip trailing commas before `]` and `}` in JSON-like content.
 ///
 /// tsconfig.json commonly uses trailing commas which are valid JSONC but not valid JSON.
@@ -469,6 +498,114 @@ mod tests {
         let results = expand_workspace_glob(&temp_dir, "packages/**/*", &canonical_root);
         assert_eq!(results.len(), 2);
 
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ── parse_tsconfig_root_dir ──────────────────────────────────
+
+    #[test]
+    fn tsconfig_root_dir_extracted() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "rootDir": "./src" } }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parse_tsconfig_root_dir(&temp_dir), Some("src".to_string()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_lib() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir-lib");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "rootDir": "lib/" } }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parse_tsconfig_root_dir(&temp_dir), Some("lib".to_string()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_missing_field() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir-nofield");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parse_tsconfig_root_dir(&temp_dir), None);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_no_file() {
+        assert_eq!(parse_tsconfig_root_dir(Path::new("/nonexistent")), None);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_with_comments() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir-comments");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            "{\n  // Root directory\n  \"compilerOptions\": { \"rootDir\": \"app\" }\n}",
+        )
+        .unwrap();
+
+        assert_eq!(parse_tsconfig_root_dir(&temp_dir), Some("app".to_string()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_dot_value() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir-dot");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "rootDir": "." } }"#,
+        )
+        .unwrap();
+
+        // "." is returned as-is — caller filters it out
+        assert_eq!(parse_tsconfig_root_dir(&temp_dir), Some(".".to_string()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tsconfig_root_dir_parent_traversal() {
+        let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-rootdir-parent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(
+            temp_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "rootDir": "../other" } }"#,
+        )
+        .unwrap();
+
+        // Returned as-is — caller filters it out
+        assert_eq!(
+            parse_tsconfig_root_dir(&temp_dir),
+            Some("../other".to_string())
+        );
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 

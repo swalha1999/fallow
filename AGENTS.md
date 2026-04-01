@@ -214,18 +214,20 @@ fallow fix --yes --format json --quiet       # apply changes (--yes required in 
 
 ### `list`
 
-List discovered files, entry points, or detected plugins.
+List discovered files, entry points, detected plugins, or boundary configuration.
 
 ```bash
 fallow list --files --format json --quiet
 fallow list --entry-points --format json --quiet
 fallow list --plugins --format json --quiet
+fallow list --boundaries --format json --quiet
 ```
 
 **Flags:**
 - `--files` -- list all discovered source files
 - `--entry-points` -- list all detected entry points
 - `--plugins` -- list all active framework plugins
+- `--boundaries` -- show architecture boundary zones, rules, and per-zone file counts
 
 ### `init`
 
@@ -359,6 +361,7 @@ fallow dead-code --format json --quiet       # 3. verify
 ```bash
 fallow list --entry-points --format json --quiet
 fallow list --plugins --format json --quiet
+fallow list --boundaries --format json --quiet
 ```
 
 ### Introspect CLI capabilities at runtime

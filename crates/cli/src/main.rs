@@ -276,6 +276,10 @@ enum Command {
         /// Show active plugins
         #[arg(long)]
         plugins: bool,
+
+        /// Show architecture boundary zones, rules, and per-zone file counts
+        #[arg(long)]
+        boundaries: bool,
     },
 
     /// Find code duplication / clones across the project
@@ -1002,6 +1006,7 @@ fn dispatch_subcommand(
             entry_points,
             files,
             plugins,
+            boundaries,
         } => list::run_list(&ListOptions {
             root,
             config_path: &cli.config,
@@ -1011,6 +1016,7 @@ fn dispatch_subcommand(
             entry_points,
             files,
             plugins,
+            boundaries,
             production: cli.production,
         }),
         Command::Dupes {

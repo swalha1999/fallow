@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use package_json::PackageJson;
+pub use parsers::parse_tsconfig_root_dir;
 use parsers::{expand_workspace_glob, parse_pnpm_workspace_yaml, parse_tsconfig_references};
 
 /// Workspace configuration for monorepo support.

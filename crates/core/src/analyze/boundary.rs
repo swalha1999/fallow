@@ -111,6 +111,21 @@ pub fn find_boundary_violations(
         }
     }
 
+    // Warn about zones that matched zero files — likely a misconfiguration.
+    if !boundaries.is_empty() {
+        let classified_zones: rustc_hash::FxHashSet<&str> =
+            zone_cache.values().filter_map(|z| z.as_deref()).collect();
+        for zone in &boundaries.zones {
+            if !classified_zones.contains(zone.name.as_str()) {
+                tracing::warn!(
+                    "boundary zone '{}' matched 0 reachable files — check your directory \
+                     structure, pattern, or whether these files are all currently unreachable",
+                    zone.name
+                );
+            }
+        }
+    }
+
     violations
 }
 
@@ -235,6 +250,7 @@ mod tests {
     fn allowed_import_no_violation() {
         let root = PathBuf::from("/tmp/boundary-test");
         let boundaries = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),
@@ -269,6 +285,7 @@ mod tests {
     fn disallowed_import_produces_violation() {
         let root = PathBuf::from("/tmp/boundary-test");
         let boundaries = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),
@@ -306,6 +323,7 @@ mod tests {
     fn self_import_always_allowed() {
         let root = PathBuf::from("/tmp/boundary-test");
         let boundaries = BoundaryConfig {
+            preset: None,
             zones: vec![BoundaryZone {
                 name: "ui".to_string(),
                 patterns: vec!["src/ui/**".to_string()],
@@ -333,6 +351,7 @@ mod tests {
     fn unzoned_files_unrestricted() {
         let root = PathBuf::from("/tmp/boundary-test");
         let boundaries = BoundaryConfig {
+            preset: None,
             zones: vec![BoundaryZone {
                 name: "ui".to_string(),
                 patterns: vec!["src/ui/**".to_string()],
@@ -357,6 +376,7 @@ mod tests {
     fn file_level_suppression_skips_file() {
         let root = PathBuf::from("/tmp/boundary-test");
         let boundaries = BoundaryConfig {
+            preset: None,
             zones: vec![
                 BoundaryZone {
                     name: "ui".to_string(),

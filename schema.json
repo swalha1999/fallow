@@ -588,9 +588,20 @@
       ]
     },
     "BoundaryConfig": {
-      "description": "Architecture boundary configuration.\n\nDefines zones (directory groupings) and rules (which zones may import from which).\n\n# Examples\n\n```\nuse fallow_config::BoundaryConfig;\n\nlet json = r#\"{\n    \"zones\": [\n        { \"name\": \"ui\", \"patterns\": [\"src/components/**\"] },\n        { \"name\": \"db\", \"patterns\": [\"src/db/**\"] }\n    ],\n    \"rules\": [\n        { \"from\": \"ui\", \"allow\": [\"db\"] }\n    ]\n}\"#;\nlet config: BoundaryConfig = serde_json::from_str(json).unwrap();\nassert_eq!(config.zones.len(), 2);\nassert_eq!(config.rules.len(), 1);\n```",
+      "description": "Architecture boundary configuration.\n\nDefines zones (directory groupings) and rules (which zones may import from which).\nOptionally uses a built-in preset as a starting point.\n\n# Examples\n\n```\nuse fallow_config::BoundaryConfig;\n\nlet json = r#\"{\n    \"zones\": [\n        { \"name\": \"ui\", \"patterns\": [\"src/components/**\"] },\n        { \"name\": \"db\", \"patterns\": [\"src/db/**\"] }\n    ],\n    \"rules\": [\n        { \"from\": \"ui\", \"allow\": [\"db\"] }\n    ]\n}\"#;\nlet config: BoundaryConfig = serde_json::from_str(json).unwrap();\nassert_eq!(config.zones.len(), 2);\nassert_eq!(config.rules.len(), 1);\n```\n\nUsing a preset:\n\n```\nuse fallow_config::BoundaryConfig;\n\nlet json = r#\"{ \"preset\": \"layered\" }\"#;\nlet mut config: BoundaryConfig = serde_json::from_str(json).unwrap();\nconfig.expand(\"src\");\nassert_eq!(config.zones.len(), 4);\nassert_eq!(config.rules.len(), 4);\n```",
       "type": "object",
       "properties": {
+        "preset": {
+          "description": "Built-in architecture preset. When set, expands into default zones and rules.\nUser-defined zones and rules merge on top: zones with the same name replace\nthe preset zone; rules with the same `from` replace the preset rule.\nPreset patterns use `{rootDir}/{zone}/**` where rootDir is auto-detected\nfrom tsconfig.json (falls back to `src`).\nNote: preset patterns are flat (`src/<zone>/**`). For monorepos with\nper-package source directories, define zones explicitly instead.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoundaryPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "zones": {
           "description": "Named zones mapping directory patterns to architectural layers.",
           "type": "array",
@@ -608,6 +619,26 @@
           "default": []
         }
       }
+    },
+    "BoundaryPreset": {
+      "description": "Built-in architecture presets.\n\nEach preset expands into a set of zones and import rules for a common\narchitecture pattern. User-defined zones and rules merge on top of the\npreset defaults (zones with the same name replace the preset zone;\nrules with the same `from` replace the preset rule).\n\n# Examples\n\n```\nuse fallow_config::BoundaryPreset;\n\nlet preset: BoundaryPreset = serde_json::from_str(r#\"\"layered\"\"#).unwrap();\nassert!(matches!(preset, BoundaryPreset::Layered));\n```",
+      "oneOf": [
+        {
+          "description": "Classic layered architecture: presentation → application → domain ← infrastructure.\nInfrastructure may also import from application (common in DI frameworks).",
+          "type": "string",
+          "const": "layered"
+        },
+        {
+          "description": "Hexagonal / ports-and-adapters: adapters → ports → domain.",
+          "type": "string",
+          "const": "hexagonal"
+        },
+        {
+          "description": "Feature-Sliced Design: app > pages > widgets > features > entities > shared.\nEach layer may only import from layers below it.",
+          "type": "string",
+          "const": "feature-sliced"
+        }
+      ]
     },
     "BoundaryZone": {
       "description": "A named zone grouping files by directory pattern.",

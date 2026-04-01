@@ -163,7 +163,7 @@ impl ServerHandler for FallowMcp {
                 "Fallow MCP server — codebase analysis for TypeScript/JavaScript projects. \
                  Tools: analyze (full analysis), check_changed (incremental/PR analysis), \
                  find_dupes (code duplication), fix_preview/fix_apply (auto-fix), \
-                 project_info (plugins, files, entry points), \
+                 project_info (plugins, files, entry points, boundary zones), \
                  check_health (code complexity metrics), \
                  audit (combined dead-code + complexity + duplication for changed files, returns verdict).",
             )

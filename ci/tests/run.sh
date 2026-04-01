@@ -203,6 +203,27 @@ GROUP_TYPE=$(echo "$OUT" | jq -r '.[0].type')
 [ "$GROUP_TYPE" = "unused-export-group" ] && pass "grouped type is unused-export-group" || fail "grouped type" "got $GROUP_TYPE"
 assert_contains "$OUT" "2 unused exports" "grouped comment mentions count"
 
+echo "  boundary violation produces review comment:"
+BV_INPUT='{"total_issues":1,"unused_files":[],"unused_exports":[],"unused_types":[],"unused_dependencies":[],"unused_dev_dependencies":[],"unused_optional_dependencies":[],"unused_enum_members":[],"unused_class_members":[],"unresolved_imports":[],"unlisted_dependencies":[],"duplicate_exports":[],"circular_dependencies":[],"boundary_violations":[{"from_path":"src/ui/App.ts","to_path":"src/db/query.ts","from_zone":"ui","to_zone":"db","import_specifier":"src/db/query.ts","line":5,"col":9}],"type_only_dependencies":[]}'
+OUT=$(echo "$BV_INPUT" | MAX=50 jq -f "$SHARED_JQ_DIR/review-comments-check.jq" 2>&1)
+assert_valid_json "$OUT" "boundary violation JSON valid"
+assert_json_length "$OUT" "1" "boundary violation produces 1 comment"
+assert_contains "$OUT" "Boundary violation" "comment mentions boundary violation"
+assert_contains "$OUT" "ui" "comment mentions from_zone"
+assert_contains "$OUT" "db" "comment mentions to_zone"
+assert_contains "$OUT" "src/ui/App.ts" "comment mentions from_path"
+assert_contains "$OUT" "src/db/query.ts" "comment mentions to_path"
+BV_PATH=$(echo "$OUT" | jq -r '.[0].path')
+[ "$BV_PATH" = "${PREFIX}src/ui/App.ts" ] && pass "path has prefix + from_path" || fail "path has prefix + from_path" "got $BV_PATH"
+BV_LINE=$(echo "$OUT" | jq -r '.[0].line')
+[ "$BV_LINE" = "5" ] && pass "line is 5" || fail "line is 5" "got $BV_LINE"
+
+echo "  boundary violation appears in summary:"
+SUMMARY=$(echo "$BV_INPUT" | jq -rf "$CI_JQ_DIR/summary-check.jq" 2>&1)
+assert_contains "$SUMMARY" "Boundary violations" "summary has boundary section"
+assert_contains "$SUMMARY" "src/ui/App.ts" "summary mentions file"
+assert_contains "$SUMMARY" "ui" "summary mentions zone"
+
 echo "  review-body clean state:"
 OUT_CLEAN=$(jq -r -f "$SHARED_JQ_DIR/review-body.jq" "$FIXTURES/combined-clean.json" 2>&1)
 assert_contains "$OUT_CLEAN" "No dead code" "clean: no dead code"

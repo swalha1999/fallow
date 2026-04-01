@@ -224,3 +224,75 @@ fn preset_detects_boundary_violation() {
     assert_eq!(v.from_zone, "adapters");
     assert_eq!(v.to_zone, "domain");
 }
+
+#[test]
+fn bulletproof_preset_detects_violation() {
+    let root = fixture_path("boundary-bulletproof");
+    let boundaries = BoundaryConfig {
+        preset: Some(BoundaryPreset::Bulletproof),
+        zones: vec![],
+        rules: vec![],
+    };
+    let config = FallowConfig {
+        schema: None,
+        extends: vec![],
+        entry: vec!["src/app/page.ts".to_string()],
+        ignore_patterns: vec![],
+        framework: vec![],
+        workspaces: None,
+        ignore_dependencies: vec![],
+        ignore_exports: vec![],
+        duplicates: DuplicatesConfig::default(),
+        health: HealthConfig::default(),
+        rules: RulesConfig {
+            boundary_violation: Severity::Error,
+            ..RulesConfig::default()
+        },
+        boundaries,
+        production: false,
+        plugins: vec![],
+        overrides: vec![],
+        regression: None,
+    }
+    .resolve(root, OutputFormat::Human, 4, true, true);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    // features/auth/login.ts imports from app/page.ts — features zone cannot
+    // import from app zone (only shared and server are allowed).
+    assert_eq!(
+        results.boundary_violations.len(),
+        1,
+        "expected 1 boundary violation, got: {:?}",
+        results
+            .boundary_violations
+            .iter()
+            .map(|v| format!(
+                "{} ({}) -> {} ({})",
+                v.from_zone,
+                v.from_path.display(),
+                v.to_zone,
+                v.to_path.display()
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    let v = &results.boundary_violations[0];
+    assert_eq!(v.from_zone, "features");
+    assert_eq!(v.to_zone, "app");
+    assert!(
+        v.from_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("src/features/auth/login.ts"),
+        "from_path should end with src/features/auth/login.ts, got: {}",
+        v.from_path.display()
+    );
+    assert!(
+        v.to_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("src/app/page.ts"),
+        "to_path should end with src/app/page.ts, got: {}",
+        v.to_path.display()
+    );
+}

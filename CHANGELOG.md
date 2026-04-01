@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-04-01
+
+### Added
+
+- **Architecture boundary violations** -- define zones (glob patterns mapping directories to architecture layers) and rules (which zones may import from which). Violations are detected at the import site using the resolved target's zone. Reported in all 6 output formats, with inline and file-level suppression via `// fallow-ignore-next-line boundary-violation`. LSP diagnostics, code actions, GitHub Action annotations, GitLab CI review comments, and MCP server integration all included.
+- **Built-in boundary presets** -- `"preset": "layered"` (4 zones: presentation/application/domain/infrastructure), `"preset": "hexagonal"` (3 zones: adapters/ports/domain), `"preset": "feature-sliced"` (6 zones: app/pages/widgets/features/entities/shared), `"preset": "bulletproof"` (4 zones: app/features/shared/server). Presets auto-detect `rootDir` from `tsconfig.json` for pattern prefixes. User zones and rules merge on top of presets.
+- **`fallow list --boundaries`** -- inspect expanded boundary zones, rules, and per-zone file counts. Supports human and JSON output formats.
+- **`--boundary-violations` filter** -- show only boundary violations in `fallow dead-code` output.
+
+### Fixed
+
+- **Rest patterns in destructured exports** -- `export const { a, ...rest } = obj` no longer causes a parser error.
+
+### Changed
+
+- **oxc dependency upgrade** -- bumped all 7 oxc crates to latest versions.
+
 ## [2.8.1] - 2026-04-01
 
 ### Fixed
@@ -666,7 +683,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.8.1...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/fallow-rs/fallow/compare/v2.8.1...v2.9.0
 [2.8.1]: https://github.com/fallow-rs/fallow/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/fallow-rs/fallow/compare/v2.7.3...v2.8.0
 [2.7.3]: https://github.com/fallow-rs/fallow/compare/v2.7.2...v2.7.3

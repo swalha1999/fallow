@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.3] - 2026-04-03
+
+### Fixed
+
+- **GitHub Action Marketplace** -- shortened action description to meet the 125-character limit required for Marketplace publication.
+
 ## [2.9.2] - 2026-04-02
 
 ### Added
@@ -714,7 +720,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.9.2...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.9.3...HEAD
+[2.9.3]: https://github.com/fallow-rs/fallow/compare/v2.9.2...v2.9.3
 [2.9.2]: https://github.com/fallow-rs/fallow/compare/v2.9.1...v2.9.2
 [2.9.1]: https://github.com/fallow-rs/fallow/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/fallow-rs/fallow/compare/v2.8.1...v2.9.0

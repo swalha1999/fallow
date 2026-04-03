@@ -232,13 +232,22 @@ pub(in crate::report) fn build_human_lines(
         |e| e.path.as_path(),
         &format_export,
     );
-    insert_test_src_split(&mut lines, &filtered_exports, |e| &e.path);
     if suppressed_exports > 0 {
-        lines.push(format!(
-            "  {}",
-            format!("({suppressed_exports} more in files already reported as unused)").dimmed()
-        ));
+        // Insert before the trailing blank line so test/src split annotation stays last
+        let pos = if lines.last().is_some_and(String::is_empty) {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        lines.insert(
+            pos,
+            format!(
+                "  {}",
+                format!("({suppressed_exports} more in files already reported as unused)").dimmed()
+            ),
+        );
     }
+    insert_test_src_split(&mut lines, &filtered_exports, |e| &e.path);
 
     build_human_grouped_section(
         &mut lines,
@@ -251,10 +260,19 @@ pub(in crate::report) fn build_human_lines(
         &format_export,
     );
     if suppressed_types > 0 {
-        lines.push(format!(
-            "  {}",
-            format!("({suppressed_types} more in files already reported as unused)").dimmed()
-        ));
+        // Insert before the trailing blank line so test/src split annotation stays last
+        let pos = if lines.last().is_some_and(String::is_empty) {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        lines.insert(
+            pos,
+            format!(
+                "  {}",
+                format!("({suppressed_types} more in files already reported as unused)").dimmed()
+            ),
+        );
     }
 
     build_human_section_ex(
@@ -1698,5 +1716,42 @@ mod tests {
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
         assert!(text.contains("... and 5 more in 5 files"));
+    }
+
+    // ── --top flag limits items shown ──
+
+    #[test]
+    fn top_flag_limits_unused_files_shown() {
+        let root = PathBuf::from("/project");
+        let mut results = AnalysisResults::default();
+        for i in 0..5 {
+            results.unused_files.push(UnusedFile {
+                path: root.join(format!("src/dead{i}.ts")),
+            });
+        }
+        let rules = RulesConfig::default();
+        let lines = build_human_lines(&results, &root, &rules, Some(2));
+        let text = plain(&lines);
+
+        // Header still shows the full count
+        assert!(text.contains("Unused files (5)"));
+
+        // Only 2 of the 5 files should be listed
+        let file_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("src/dead") && l.contains(".ts"))
+            .collect();
+        assert_eq!(
+            file_lines.len(),
+            2,
+            "Expected 2 file lines with top=2, got {}: {file_lines:?}",
+            file_lines.len()
+        );
+
+        // Truncation hint for the remaining 3
+        assert!(
+            text.contains("... and 3 more"),
+            "Expected truncation hint, got:\n{text}"
+        );
     }
 }

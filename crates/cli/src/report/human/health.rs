@@ -341,7 +341,11 @@ fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::Hea
     {
         parts.push(format!(
             "{cd} circular {}",
-            if cd == 1 { "dependency" } else { "dependencies" }
+            if cd == 1 {
+                "dependency"
+            } else {
+                "dependencies"
+            }
         ));
     }
     if let Some(ud) = vs.unused_dep_count
@@ -349,7 +353,11 @@ fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::Hea
     {
         parts.push(format!(
             "{ud} unused {}",
-            if ud == 1 { "dependency" } else { "dependencies" }
+            if ud == 1 {
+                "dependency"
+            } else {
+                "dependencies"
+            }
         ));
     }
     lines.push(format!(

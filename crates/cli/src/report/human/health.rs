@@ -174,7 +174,11 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
         parts.push(format!("circular deps -{cd:.1}"));
     }
     if !parts.is_empty() {
-        lines.push(format!("  {}", parts.join(" \u{00b7} ").dimmed()));
+        lines.push(format!(
+            "  {} {}",
+            "Deductions:".dimmed(),
+            parts.join(" \u{00b7} ").dimmed()
+        ));
     }
     // Check for N/A components
     let mut na_parts = Vec::new();
@@ -342,8 +346,9 @@ fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::Hea
         parts.push(format!("{ud} unused dep{}", plural(ud as usize)));
     }
     lines.push(format!(
-        "{} {}",
+        "{} {} {}",
         "\u{25a0}".dimmed(),
+        "Metrics:".dimmed(),
         parts.join(" \u{00b7} ").dimmed()
     ));
     lines.push(String::new());

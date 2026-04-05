@@ -292,7 +292,7 @@ pub fn run_combined(opts: &CombinedOptions<'_>) -> ExitCode {
                         std::cmp::Ordering::Less => format!(", {} since baseline", d.total_delta),
                         std::cmp::Ordering::Equal => ", \u{00b1}0 since baseline".to_string(),
                     });
-                parts.push(format!("check ({issues} issues{delta_suffix})"));
+                parts.push(format!("dead-code ({issues} issues{delta_suffix})"));
             }
         }
         if let Some(ref r) = dupes_result {

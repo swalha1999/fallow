@@ -650,8 +650,8 @@ fn write_file_scores_section(
         "### File Health Scores ({} files)\n",
         report.file_scores.len(),
     );
-    out.push_str("| File | MI | Fan-in | Fan-out | Dead Code | Density |\n");
-    out.push_str("|:-----|:---|:-------|:--------|:----------|:--------|\n");
+    out.push_str("| File | Maintainability | Fan-in | Fan-out | Dead Code | Density |\n");
+    out.push_str("|:-----|:---------------|:-------|:--------|:----------|:--------|\n");
 
     for score in &report.file_scores {
         let file_str = rel(&score.path);
@@ -1498,7 +1498,7 @@ mod tests {
         };
         let md = build_health_markdown(&report, &root);
         assert!(md.contains("### File Health Scores (1 files)"));
-        assert!(md.contains("| File | MI | Fan-in | Fan-out | Dead Code | Density |"));
+        assert!(md.contains("| File | Maintainability | Fan-in | Fan-out | Dead Code | Density |"));
         assert!(md.contains("| `src/utils.ts` | 72.5 | 5 | 3 | 25% | 0.80 |"));
         assert!(md.contains("**Average maintainability index:** 65.0/100"));
     }

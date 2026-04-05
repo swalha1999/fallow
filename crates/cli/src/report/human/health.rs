@@ -66,7 +66,7 @@ pub(in crate::report) fn print_health_human(
             } else {
                 "low"
             };
-            parts.push(format!("MI {avg:.1} ({label})"));
+            parts.push(format!("maintainability {avg:.1} ({label})"));
         }
         eprintln!(
             "{}",
@@ -81,7 +81,8 @@ pub(in crate::report) fn print_health_human(
         if s.average_maintainability.is_some_and(|mi| mi < 85.0) {
             eprintln!(
                 "{}",
-                "  MI scale: good \u{2265}85, moderate \u{2265}65, low <65 (0\u{2013}100)".dimmed()
+                "  Maintainability scale: good \u{2265}85, moderate \u{2265}65, low <65 (0\u{2013}100)"
+                    .dimmed()
             );
         }
     }
@@ -156,7 +157,7 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
     if let Some(mi) = p.maintainability
         && mi > 0.0
     {
-        parts.push(format!("MI -{mi:.1}"));
+        parts.push(format!("maintainability -{mi:.1}"));
     }
     if let Some(hp) = p.hotspots
         && hp > 0.0
@@ -186,7 +187,7 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
         na_parts.push("dead code");
     }
     if p.maintainability.is_none() {
-        na_parts.push("MI");
+        na_parts.push("maintainability");
     }
     if p.hotspots.is_none() {
         na_parts.push("hotspots");
@@ -330,7 +331,7 @@ fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::Hea
         } else {
             "low"
         };
-        parts.push(format!("MI {mi:.1} ({label})"));
+        parts.push(format!("maintainability {mi:.1} ({label})"));
     }
     if let Some(hc) = vs.hotspot_count {
         parts.push(format!("{hc} churn hotspot{}", plural(hc as usize)));
@@ -796,7 +797,7 @@ pub(in crate::report) fn print_health_summary(
         } else {
             "low"
         };
-        println!("  {mi:>5.1}   Average MI ({label})");
+        println!("  {mi:>5.1}   Average maintainability ({label})");
     }
     if let Some(ref score) = report.health_score {
         println!("  {:>5.0} {}  Health score", score.score, score.grade);
@@ -1122,7 +1123,7 @@ mod tests {
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
         assert!(text.contains("76 B"));
-        assert!(text.contains("MI -4.0"));
+        assert!(text.contains("maintainability -4.0"));
         assert!(text.contains("hotspots -2.0"));
         assert!(text.contains("unused deps -1.0"));
         assert!(text.contains("circular deps -1.0"));
@@ -1194,7 +1195,7 @@ mod tests {
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
-        assert!(text.contains("N/A: dead code, MI, hotspots"));
+        assert!(text.contains("N/A: dead code, maintainability, hotspots"));
         assert!(text.contains("run --score for full pipeline"));
     }
 
@@ -1431,7 +1432,7 @@ mod tests {
         assert!(text.contains("dead exports 8.1%"));
         assert!(text.contains("avg cyclomatic 4.7"));
         assert!(text.contains("p90 cyclomatic 12"));
-        assert!(text.contains("MI 72.4"));
+        assert!(text.contains("maintainability 72.4"));
         assert!(text.contains("2 churn hotspots"));
         assert!(text.contains("3 unused deps"));
         assert!(text.contains("1 circular dep"));
@@ -1491,7 +1492,7 @@ mod tests {
         let text = plain(&lines);
         assert!(!text.contains("dead files"));
         assert!(!text.contains("dead exports"));
-        assert!(!text.contains("MI "));
+        assert!(!text.contains("maintainability "));
         assert!(!text.contains("hotspot"));
         assert!(text.contains("avg cyclomatic 2.0"));
         assert!(text.contains("p90 cyclomatic 5"));

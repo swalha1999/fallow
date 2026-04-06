@@ -2,6 +2,38 @@
 mod common;
 
 use common::{fixture_path, parse_json, redact_all, run_fallow};
+use std::path::Path;
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent directories");
+    }
+    std::fs::write(path, contents).expect("write file");
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("create destination directory");
+    for entry in std::fs::read_dir(src).expect("read source directory") {
+        let entry = entry.expect("read source entry");
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type().expect("read source entry type");
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path);
+        } else if !file_type.is_dir() {
+            std::fs::copy(&src_path, &dst_path).expect("copy file");
+        }
+    }
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?} should succeed");
+}
 
 // ---------------------------------------------------------------------------
 // JSON output structure
@@ -168,6 +200,205 @@ fn health_coverage_gaps_flag_reports_runtime_gaps() {
     assert!(
         !export_names.contains(&"covered"),
         "covered should not be reported as an untested export: {export_names:?}"
+    );
+}
+
+#[test]
+fn health_coverage_gaps_workspace_scope_limits_results() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let root = dir.path();
+
+    write_file(
+        &root.join("package.json"),
+        r#"{
+  "name": "coverage-gaps-workspace",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "dependencies": {
+    "vitest": "^3.2.4"
+  }
+}"#,
+    );
+
+    write_file(
+        &root.join("packages/app/package.json"),
+        r#"{
+  "name": "app",
+  "main": "src/main.ts"
+}"#,
+    );
+    write_file(
+        &root.join("packages/app/src/main.ts"),
+        r#"import { covered } from "./covered";
+import { appGap } from "./app-gap";
+
+export const app = `${covered()}:${appGap()}`;
+"#,
+    );
+    write_file(
+        &root.join("packages/app/src/covered.ts"),
+        r#"export function covered(): string {
+  return "covered";
+}
+"#,
+    );
+    write_file(
+        &root.join("packages/app/src/app-gap.ts"),
+        r#"export function appGap(): string {
+  return "app-gap";
+}
+"#,
+    );
+    write_file(
+        &root.join("packages/app/tests/covered.test.ts"),
+        r#"import { describe, expect, it } from "vitest";
+import { covered } from "../src/covered";
+
+describe("covered", () => {
+  it("covers app runtime code selectively", () => {
+    expect(covered()).toBe("covered");
+  });
+});
+"#,
+    );
+
+    write_file(
+        &root.join("packages/shared/package.json"),
+        r#"{
+  "name": "shared",
+  "main": "src/index.ts"
+}"#,
+    );
+    write_file(
+        &root.join("packages/shared/src/index.ts"),
+        r#"import { sharedGap } from "./shared-gap";
+
+export const shared = sharedGap();
+"#,
+    );
+    write_file(
+        &root.join("packages/shared/src/shared-gap.ts"),
+        r#"export function sharedGap(): string {
+  return "shared-gap";
+}
+"#,
+    );
+
+    let output = common::run_fallow_in_root(
+        "health",
+        root,
+        &[
+            "--coverage-gaps",
+            "--workspace",
+            "app",
+            "--format",
+            "json",
+            "--quiet",
+        ],
+    );
+    assert_eq!(
+        output.code, 1,
+        "workspace-scoped health --coverage-gaps should report app-only gaps"
+    );
+
+    let json = parse_json(&output);
+    let coverage = json["coverage_gaps"]
+        .as_object()
+        .expect("workspace-scoped coverage_gaps should be an object");
+
+    let file_paths: Vec<_> = coverage["files"]
+        .as_array()
+        .expect("coverage_gaps.files should be an array")
+        .iter()
+        .filter_map(|item| item.get("path").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        file_paths
+            .iter()
+            .all(|path| path.replace('\\', "/").contains("packages/app/")),
+        "workspace scope should only report app package files: {file_paths:?}"
+    );
+    assert!(
+        file_paths
+            .iter()
+            .any(|path| path.ends_with("packages/app/src/app-gap.ts")),
+        "app gap should be reported in workspace scope: {file_paths:?}"
+    );
+    assert!(
+        !file_paths
+            .iter()
+            .any(|path| path.contains("packages/shared")),
+        "shared package gaps should be excluded from app workspace scope: {file_paths:?}"
+    );
+}
+
+#[test]
+fn health_coverage_gaps_changed_since_scopes_results() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let root = dir.path();
+    copy_dir_recursive(&fixture_path("coverage-gaps"), root);
+
+    git(root, &["init"]);
+    git(root, &["config", "user.name", "Test User"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial"]);
+
+    write_file(
+        &root.join("src/fixture-only.ts"),
+        r#"export function viaFixture(): string {
+  return "fixture-only-updated";
+}
+"#,
+    );
+    git(root, &["add", "src/fixture-only.ts"]);
+    git(root, &["commit", "-m", "update fixture gap"]);
+
+    let output = common::run_fallow_in_root(
+        "health",
+        root,
+        &[
+            "--coverage-gaps",
+            "--changed-since",
+            "HEAD~1",
+            "--format",
+            "json",
+            "--quiet",
+        ],
+    );
+    assert_eq!(
+        output.code, 1,
+        "changed-since should preserve coverage gaps for changed runtime files"
+    );
+
+    let json = parse_json(&output);
+    let coverage = json["coverage_gaps"]
+        .as_object()
+        .expect("changed-since coverage_gaps should be an object");
+
+    let file_paths: Vec<_> = coverage["files"]
+        .as_array()
+        .expect("coverage_gaps.files should be an array")
+        .iter()
+        .filter_map(|item| item.get("path").and_then(serde_json::Value::as_str))
+        .collect();
+    assert_eq!(
+        file_paths.len(),
+        1,
+        "changed-since should limit file gaps to changed files: {file_paths:?}"
+    );
+    assert!(
+        file_paths[0].ends_with("src/fixture-only.ts"),
+        "changed-since should report the changed fixture-only file, got: {file_paths:?}"
+    );
+
+    let summary = coverage["summary"]
+        .as_object()
+        .expect("coverage_gaps.summary should be an object");
+    assert_eq!(
+        summary["runtime_files"].as_u64(),
+        Some(1),
+        "changed-since should recompute runtime scope summary for changed files only"
     );
 }
 

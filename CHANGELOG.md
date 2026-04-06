@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.2] - 2026-04-06
+
+### Added
+
+- **Svelte/Vue template-visible import tracking** -- imports used only in SFC template markup (e.g., `{formatDate(x)}` in Svelte, `{{ utils.format() }}` in Vue) are now credited as used, preventing false unused-export/import reports. Namespace member access in templates (e.g., `utils.formatDate`) is tracked as member usage. Vue credits only `<script setup>` bindings; Svelte excludes `context="module"` scripts. ([#58](https://github.com/fallow-rs/fallow/pull/58) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Type-only circular dependency filtering** -- `import type` edges are excluded from cycle detection since they are erased at compile time and cannot cause runtime cycles. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+- **Duplicate export common-importer filter** -- duplicate exports are only reported when the files sharing the same export name also share a common importer. Unrelated leaf files (e.g., SvelteKit route modules in different directories) are no longer flagged. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+
+### Fixed
+
+- **Workspace plugin merge: generated imports and path aliases** -- `generated_import_patterns` (e.g., SvelteKit `$types`) and `path_aliases` (e.g., SvelteKit `$lib/`) from workspace-level plugins were not propagated to the root analysis, causing false-positive unresolved imports and resolution failures in monorepo setups. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+- **Windows path prefix** -- replaced `std::fs::canonicalize()` with `dunce::canonicalize()` to avoid `\\?\` extended-length path prefix on Windows, which broke `oxc_resolver` tsconfig discovery and caused all path-aliased imports to be reported as unresolved. ([#55](https://github.com/fallow-rs/fallow/pull/55) by [@KamilDev](https://github.com/KamilDev))
+
 ## [2.14.1] - 2026-04-06
 
 ### Added
@@ -867,7 +880,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.14.1...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.14.2...HEAD
+[2.14.2]: https://github.com/fallow-rs/fallow/compare/v2.14.1...v2.14.2
 [2.14.1]: https://github.com/fallow-rs/fallow/compare/v2.14.0...v2.14.1
 [2.14.0]: https://github.com/fallow-rs/fallow/compare/v2.13.4...v2.14.0
 [2.13.4]: https://github.com/fallow-rs/fallow/compare/v2.13.3...v2.13.4

@@ -97,6 +97,7 @@ fallow health --file-scores               # Per-file maintainability index (0-10
 fallow health --hotspots                  # Riskiest files (git churn x complexity)
 fallow health --targets                   # Ranked refactoring recommendations
 fallow health --targets --effort low      # Only quick-win refactoring targets
+fallow health --coverage-gaps             # Static test coverage gaps
 fallow health --trend                     # Compare against saved snapshot
 fallow health --changed-since main        # Only changed files
 ```

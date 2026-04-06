@@ -316,6 +316,10 @@
           "$ref": "#/definitions/HealthTrend",
           "description": "Trend comparison against a previous snapshot. Only present when --trend is used."
         },
+        "coverage_gaps": {
+          "$ref": "#/definitions/CoverageGaps",
+          "description": "Static test coverage gaps. Only present when --coverage-gaps is used."
+        },
         "_meta": { "$ref": "#/definitions/Meta" }
       }
     },
@@ -690,6 +694,57 @@
       "properties": {
         "value": { "type": "integer", "description": "The numerator (e.g., dead files count)." },
         "total": { "type": "integer", "description": "The denominator (e.g., total files)." }
+      }
+    },
+
+    "CoverageGaps": {
+      "type": "object",
+      "description": "Static test coverage gaps derived from the module graph. Shows runtime files and exports with no test dependency path.",
+      "required": ["summary"],
+      "properties": {
+        "summary": { "$ref": "#/definitions/CoverageGapSummary" },
+        "files": {
+          "type": "array",
+          "description": "Runtime files with no test dependency path. Omitted when empty.",
+          "items": { "$ref": "#/definitions/UntestedFile" }
+        },
+        "exports": {
+          "type": "array",
+          "description": "Runtime exports with no test-reachable reference chain. Omitted when empty.",
+          "items": { "$ref": "#/definitions/UntestedExport" }
+        }
+      }
+    },
+    "CoverageGapSummary": {
+      "type": "object",
+      "description": "Aggregate coverage-gap counters for the current analysis scope.",
+      "required": ["runtime_files", "covered_files", "file_coverage_pct", "untested_files", "untested_exports"],
+      "properties": {
+        "runtime_files": { "type": "integer", "description": "Runtime-reachable files in scope." },
+        "covered_files": { "type": "integer", "description": "Runtime-reachable files also reachable from tests." },
+        "file_coverage_pct": { "type": "number", "description": "Percentage of runtime files that are test-reachable.", "minimum": 0, "maximum": 100 },
+        "untested_files": { "type": "integer", "description": "Runtime files with no test dependency path." },
+        "untested_exports": { "type": "integer", "description": "Runtime exports with no test-reachable reference chain." }
+      }
+    },
+    "UntestedFile": {
+      "type": "object",
+      "description": "A runtime file with no test dependency path.",
+      "required": ["path", "value_export_count"],
+      "properties": {
+        "path": { "type": "string", "description": "File path (relative to project root)." },
+        "value_export_count": { "type": "integer", "description": "Number of value exports declared by the file." }
+      }
+    },
+    "UntestedExport": {
+      "type": "object",
+      "description": "A runtime export that no test-reachable module references.",
+      "required": ["path", "export_name", "line", "col"],
+      "properties": {
+        "path": { "type": "string", "description": "File path (relative to project root)." },
+        "export_name": { "type": "string", "description": "Export name." },
+        "line": { "type": "integer", "description": "1-based source line." },
+        "col": { "type": "integer", "description": "0-based source column." }
       }
     },
 

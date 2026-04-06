@@ -114,7 +114,8 @@
         "type-only-dependencies": "warn",
         "test-only-dependencies": "warn",
         "circular-dependencies": "error",
-        "boundary-violation": "error"
+        "boundary-violation": "error",
+        "coverage-gaps": "off"
       }
     },
     "boundaries": {
@@ -218,6 +219,11 @@
             "type": "string"
           },
           "default": []
+        },
+        "entryPointRole": {
+          "description": "Coverage role for `entryPoints`.\n\nDefaults to `support`. Set to `runtime` for application entry points\nor `test` for test framework entry points.",
+          "$ref": "#/$defs/EntryPointRole",
+          "default": "support"
         },
         "configPatterns": {
           "description": "Glob patterns for config files (marked as always-used when active).",
@@ -332,6 +338,26 @@
             "type",
             "conditions"
           ]
+        }
+      ]
+    },
+    "EntryPointRole": {
+      "description": "How a plugin's discovered entry points contribute to coverage reachability.",
+      "oneOf": [
+        {
+          "description": "Runtime/application roots that should count toward runtime reachability.",
+          "type": "string",
+          "const": "runtime"
+        },
+        {
+          "description": "Test roots that should count toward test reachability.",
+          "type": "string",
+          "const": "test"
+        },
+        {
+          "description": "Support/setup/config roots that should keep files alive but not count as runtime/test.",
+          "type": "string",
+          "const": "support"
         }
       ]
     },
@@ -593,6 +619,10 @@
           "default": "error"
         },
         "boundary-violation": {
+          "$ref": "#/$defs/Severity",
+          "default": "error"
+        },
+        "coverage-gaps": {
           "$ref": "#/$defs/Severity",
           "default": "error"
         }
@@ -891,6 +921,16 @@
           ]
         },
         "boundary-violation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage-gaps": {
           "anyOf": [
             {
               "$ref": "#/$defs/Severity"

@@ -54,6 +54,26 @@ fn combined_mode_runs_successfully() {
     assert!(json.is_object(), "combined output should be a JSON object");
 }
 
+#[test]
+fn combined_human_output_labels_metrics_line() {
+    let output = run_fallow_combined("basic-project", &[]);
+    assert!(
+        output.code == 0 || output.code == 1,
+        "combined human output should not crash, got exit code {}",
+        output.code
+    );
+    let metrics_line = output
+        .stderr
+        .lines()
+        .find(|line| line.contains("dead files"))
+        .expect("combined human output should include the orientation metrics line");
+    assert!(
+        metrics_line.trim_start().starts_with("■ Metrics:"),
+        "combined human output should label the orientation metrics line. line: {metrics_line}\nstderr: {}",
+        output.stderr,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // --only / --skip in combined mode
 // ---------------------------------------------------------------------------

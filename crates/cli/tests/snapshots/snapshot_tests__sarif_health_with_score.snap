@@ -64,6 +64,32 @@ expression: redact_health_sarif_version(&json_str)
               "defaultConfiguration": {
                 "level": "warning"
               }
+            },
+            {
+              "id": "fallow/untested-file",
+              "shortDescription": {
+                "text": "Runtime-reachable file has no test dependency path"
+              },
+              "fullDescription": {
+                "text": "A file is reachable from runtime entry points but not from any discovered test entry point. This indicates production code that no test imports, directly or transitively, according to the static module graph."
+              },
+              "helpUri": "https://docs.fallow.tools/explanations/health#coverage-gaps",
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            },
+            {
+              "id": "fallow/untested-export",
+              "shortDescription": {
+                "text": "Runtime-reachable export has no test dependency path"
+              },
+              "fullDescription": {
+                "text": "A value export is reachable from runtime entry points but no test-reachable module references it. This is a static test dependency gap rather than line coverage, and highlights exports exercised only through production entry paths."
+              },
+              "helpUri": "https://docs.fallow.tools/explanations/health#coverage-gaps",
+              "defaultConfiguration": {
+                "level": "warning"
+              }
             }
           ]
         }

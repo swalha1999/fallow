@@ -11,28 +11,91 @@
 
 use std::path::{Path, PathBuf};
 
-use fallow_config::PackageJson;
+use fallow_config::{EntryPointRole, PackageJson};
+
+const TEST_ENTRY_POINT_PLUGINS: &[&str] = &[
+    "ava",
+    "cucumber",
+    "cypress",
+    "jest",
+    "mocha",
+    "playwright",
+    "vitest",
+    "webdriverio",
+];
+
+const RUNTIME_ENTRY_POINT_PLUGINS: &[&str] = &[
+    "angular",
+    "astro",
+    "docusaurus",
+    "electron",
+    "expo",
+    "gatsby",
+    "nestjs",
+    "next-intl",
+    "nextjs",
+    "nitro",
+    "nuxt",
+    "parcel",
+    "react-native",
+    "react-router",
+    "remix",
+    "rolldown",
+    "rollup",
+    "rsbuild",
+    "rspack",
+    "sanity",
+    "sveltekit",
+    "tanstack-router",
+    "tsdown",
+    "tsup",
+    "vite",
+    "vitepress",
+    "webpack",
+    "wrangler",
+];
+
+#[cfg(test)]
+const SUPPORT_ENTRY_POINT_PLUGINS: &[&str] = &[
+    "drizzle",
+    "i18next",
+    "knex",
+    "kysely",
+    "msw",
+    "prisma",
+    "storybook",
+    "typeorm",
+];
 
 /// Result of resolving a plugin's config file.
 #[derive(Debug, Default)]
 pub struct PluginResult {
     /// Additional entry point glob patterns discovered from config.
     pub entry_patterns: Vec<String>,
+    /// Additional export-usage rules discovered from config.
+    pub used_exports: Vec<(String, Vec<String>)>,
     /// Dependencies referenced in config files (should not be flagged as unused).
     pub referenced_dependencies: Vec<String>,
     /// Additional files that are always considered used.
     pub always_used_files: Vec<String>,
+    /// Path alias mappings discovered from config (prefix -> replacement directory).
+    pub path_aliases: Vec<(String, String)>,
     /// Setup/helper files referenced from config.
     pub setup_files: Vec<PathBuf>,
+    /// Test fixture glob patterns discovered from config.
+    pub fixture_patterns: Vec<String>,
 }
 
 impl PluginResult {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.entry_patterns.is_empty()
+            && self.used_exports.is_empty()
             && self.referenced_dependencies.is_empty()
             && self.always_used_files.is_empty()
+            && self.path_aliases.is_empty()
             && self.setup_files.is_empty()
+            && self.fixture_patterns.is_empty()
     }
 }
 
@@ -76,6 +139,14 @@ pub trait Plugin: Send + Sync {
         &[]
     }
 
+    /// How this plugin's entry patterns should contribute to coverage reachability.
+    ///
+    /// `Support` roots keep files alive for dead-code analysis but do not count
+    /// as runtime or test reachability for static coverage gaps.
+    fn entry_point_role(&self) -> EntryPointRole {
+        builtin_entry_point_role(self.name())
+    }
+
     /// Glob patterns for config files this plugin can parse.
     fn config_patterns(&self) -> &'static [&'static str] {
         &[]
@@ -89,6 +160,14 @@ pub trait Plugin: Send + Sync {
     /// Exports that are always considered used for matching file patterns.
     fn used_exports(&self) -> Vec<(&'static str, &'static [&'static str])> {
         vec![]
+    }
+
+    /// Glob patterns for test fixture files consumed by this framework.
+    /// These files are implicitly used by the test runner and should not be
+    /// flagged as unused. Unlike `always_used()`, this carries semantic intent
+    /// for reporting purposes.
+    fn fixture_glob_patterns(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Dependencies that are tooling (used via CLI/config, not source imports).
@@ -144,11 +223,21 @@ pub trait Plugin: Send + Sync {
     }
 }
 
+fn builtin_entry_point_role(name: &str) -> EntryPointRole {
+    if TEST_ENTRY_POINT_PLUGINS.contains(&name) {
+        EntryPointRole::Test
+    } else if RUNTIME_ENTRY_POINT_PLUGINS.contains(&name) {
+        EntryPointRole::Runtime
+    } else {
+        EntryPointRole::Support
+    }
+}
+
 /// Macro to eliminate boilerplate in plugin implementations.
 ///
 /// Generates a struct and a `Plugin` trait impl with the standard static methods
 /// (`name`, `enablers`, `entry_patterns`, `config_patterns`, `always_used`, `tooling_dependencies`,
-/// `used_exports`).
+/// `fixture_glob_patterns`, `used_exports`).
 ///
 /// For plugins that need custom `resolve_config()` or `is_enabled()`, keep those as
 /// manual `impl Plugin for ...` blocks instead of using this macro.
@@ -199,6 +288,7 @@ macro_rules! define_plugin {
         $(, config_patterns: $config:expr)?
         $(, always_used: $always:expr)?
         $(, tooling_dependencies: $tooling:expr)?
+        $(, fixture_glob_patterns: $fixtures:expr)?
         $(, virtual_module_prefixes: $virtual:expr)?
         $(, used_exports: [$( ($pat:expr, $exports:expr) ),* $(,)?])?
         , resolve_config: imports_only
@@ -219,6 +309,7 @@ macro_rules! define_plugin {
             $( fn config_patterns(&self) -> &'static [&'static str] { $config } )?
             $( fn always_used(&self) -> &'static [&'static str] { $always } )?
             $( fn tooling_dependencies(&self) -> &'static [&'static str] { $tooling } )?
+            $( fn fixture_glob_patterns(&self) -> &'static [&'static str] { $fixtures } )?
             $( fn virtual_module_prefixes(&self) -> &'static [&'static str] { $virtual } )?
 
             $(
@@ -252,6 +343,7 @@ macro_rules! define_plugin {
         $(, config_patterns: $config:expr)?
         $(, always_used: $always:expr)?
         $(, tooling_dependencies: $tooling:expr)?
+        $(, fixture_glob_patterns: $fixtures:expr)?
         $(, virtual_module_prefixes: $virtual:expr)?
         $(, used_exports: [$( ($pat:expr, $exports:expr) ),* $(,)?])?
         $(,)?
@@ -271,6 +363,7 @@ macro_rules! define_plugin {
             $( fn config_patterns(&self) -> &'static [&'static str] { $config } )?
             $( fn always_used(&self) -> &'static [&'static str] { $always } )?
             $( fn tooling_dependencies(&self) -> &'static [&'static str] { $tooling } )?
+            $( fn fixture_glob_patterns(&self) -> &'static [&'static str] { $fixtures } )?
             $( fn virtual_module_prefixes(&self) -> &'static [&'static str] { $virtual } )?
 
             $(
@@ -402,6 +495,42 @@ mod tests {
         assert!(!plugin.is_enabled_with_deps(&deps, Path::new("/project")));
     }
 
+    #[test]
+    fn entry_point_role_defaults_are_centralized() {
+        assert_eq!(vite::VitePlugin.entry_point_role(), EntryPointRole::Runtime);
+        assert_eq!(
+            vitest::VitestPlugin.entry_point_role(),
+            EntryPointRole::Test
+        );
+        assert_eq!(
+            storybook::StorybookPlugin.entry_point_role(),
+            EntryPointRole::Support
+        );
+        assert_eq!(knex::KnexPlugin.entry_point_role(), EntryPointRole::Support);
+    }
+
+    #[test]
+    fn plugins_with_entry_patterns_have_explicit_role_intent() {
+        let runtime_or_test_or_support: rustc_hash::FxHashSet<&'static str> =
+            TEST_ENTRY_POINT_PLUGINS
+                .iter()
+                .chain(RUNTIME_ENTRY_POINT_PLUGINS.iter())
+                .chain(SUPPORT_ENTRY_POINT_PLUGINS.iter())
+                .copied()
+                .collect();
+
+        for plugin in crate::plugins::registry::builtin::create_builtin_plugins() {
+            if plugin.entry_patterns().is_empty() {
+                continue;
+            }
+            assert!(
+                runtime_or_test_or_support.contains(plugin.name()),
+                "plugin '{}' exposes entry patterns but is missing from the entry-point role map",
+                plugin.name()
+            );
+        }
+    }
+
     // ── PluginResult::is_empty ───────────────────────────────────
 
     #[test]
@@ -441,6 +570,15 @@ mod tests {
     fn plugin_result_not_empty_with_always_used_files() {
         let r = PluginResult {
             always_used_files: vec!["**/*.stories.tsx".to_string()],
+            ..Default::default()
+        };
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn plugin_result_not_empty_with_fixture_patterns() {
+        let r = PluginResult {
+            fixture_patterns: vec!["**/__fixtures__/**/*".to_string()],
             ..Default::default()
         };
         assert!(!r.is_empty());
@@ -561,6 +699,11 @@ mod tests {
     #[test]
     fn default_tooling_dependencies_is_empty() {
         assert!(MinimalPlugin.tooling_dependencies().is_empty());
+    }
+
+    #[test]
+    fn default_fixture_glob_patterns_is_empty() {
+        assert!(MinimalPlugin.fixture_glob_patterns().is_empty());
     }
 
     #[test]

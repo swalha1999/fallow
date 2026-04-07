@@ -4,11 +4,13 @@
 //! (which are compiled as part of both the lib and bin targets) can
 //! reference these types without pulling in binary-only dependencies.
 
+mod coverage;
 mod scores;
 mod targets;
 mod trends;
 mod vital_signs;
 
+pub use coverage::*;
 pub use scores::*;
 pub use targets::*;
 pub use trends::*;
@@ -30,6 +32,9 @@ pub struct HealthReport {
     /// Per-file health scores (only populated with `--file-scores` or `--hotspots`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file_scores: Vec<FileHealthScore>,
+    /// Static coverage gaps (only populated with `--coverage-gaps`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage_gaps: Option<CoverageGaps>,
     /// Hotspot entries (only populated with `--hotspots`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hotspots: Vec<HotspotEntry>,
@@ -63,10 +68,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -95,10 +102,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],

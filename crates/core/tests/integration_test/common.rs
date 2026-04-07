@@ -29,9 +29,11 @@ pub fn create_config(root: PathBuf) -> fallow_config::ResolvedConfig {
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, true, true)
 }
@@ -55,9 +57,11 @@ pub fn create_config_with_cache(
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, false, true); // no_cache = false to enable caching
     config.cache_dir = cache_dir;

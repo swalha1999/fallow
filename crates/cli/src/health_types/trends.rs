@@ -27,6 +27,9 @@ pub struct TrendPoint {
     /// Letter grade from the snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// Coverage model used for CRAP computation in this snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage_model: Option<super::CoverageModel>,
 }
 
 /// A single metric's trend between two snapshots.

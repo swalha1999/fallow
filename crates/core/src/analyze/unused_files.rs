@@ -5,7 +5,9 @@ use crate::graph::ModuleGraph;
 use crate::results::UnusedFile;
 use crate::suppress::{self, IssueKind, Suppression};
 
-use super::predicates::{is_barrel_with_reachable_sources, is_config_file, is_declaration_file};
+use super::predicates::{
+    is_barrel_with_reachable_sources, is_config_file, is_declaration_file, is_html_file,
+};
 
 /// Find files that are not reachable from any entry point.
 ///
@@ -15,6 +17,10 @@ use super::predicates::{is_barrel_with_reachable_sources, is_config_file, is_dec
 ///
 /// Configuration files (e.g., `babel.config.js`, `.eslintrc.js`, `knip.config.ts`)
 /// are also excluded because they are consumed by tools, not via imports.
+///
+/// HTML files are excluded because they are entry-point-like: nothing imports
+/// an HTML file, so "unused" is meaningless. They serve as app shells in
+/// Vite/Parcel-style projects and their referenced assets are tracked via edges.
 ///
 /// Barrel files (index.ts that only re-export) are excluded when their re-export
 /// sources are reachable — they serve an organizational purpose even if consumers
@@ -26,19 +32,21 @@ pub fn find_unused_files(
     graph
         .modules
         .iter()
-        .filter(|m| !m.is_reachable && !m.is_entry_point)
+        .filter(|m| !m.is_reachable() && !m.is_entry_point())
         .filter(|m| !is_declaration_file(&m.path))
         .filter(|m| !is_config_file(&m.path))
+        .filter(|m| !is_html_file(&m.path))
         .filter(|m| !is_barrel_with_reachable_sources(m, graph))
         // Safety net: don't report as unused if any reachable module imports this file.
         // BFS reachability should already cover this, but this guard catches edge cases
         // where import resolution or re-export chain propagation creates edges that BFS
         // doesn't fully follow (e.g., path alias resolution inconsistencies).
         .filter(|m| !has_reachable_importer(m.file_id, graph))
-        // Don't report as unused if any export actually has references from other modules.
+        // Don't report as unused if any export actually has references from reachable modules.
         // Re-export chain propagation (Phase 4) can add references after BFS (Phase 3),
         // so a file may have referenced exports despite being "unreachable" by BFS alone.
-        .filter(|m| m.exports.iter().all(|e| e.references.is_empty()))
+        // References from other unreachable modules do not save a dead subtree.
+        .filter(|m| !has_reachable_export_reference(m.file_id, graph))
         // Guard against phantom files: don't report files that no longer exist on disk.
         // This can happen if a file was deleted between discovery and analysis, or if
         // a stale cache entry references a path that no longer exists.
@@ -62,7 +70,21 @@ fn has_reachable_importer(file_id: FileId, graph: &ModuleGraph) -> bool {
     }
     graph.reverse_deps[idx].iter().any(|&dep_id| {
         let dep_idx = dep_id.0 as usize;
-        dep_idx < graph.modules.len() && graph.modules[dep_idx].is_reachable
+        dep_idx < graph.modules.len() && graph.modules[dep_idx].is_reachable()
+    })
+}
+
+/// Check if any export on this file is referenced by a reachable module.
+fn has_reachable_export_reference(file_id: FileId, graph: &ModuleGraph) -> bool {
+    graph.modules.get(file_id.0 as usize).is_some_and(|module| {
+        module.exports.iter().any(|export| {
+            export.references.iter().any(|reference| {
+                graph
+                    .modules
+                    .get(reference.from_file.0 as usize)
+                    .is_some_and(|m| m.is_reachable())
+            })
+        })
     })
 }
 
@@ -70,8 +92,10 @@ fn has_reachable_importer(file_id: FileId, graph: &ModuleGraph) -> bool {
 mod tests {
     use super::*;
     use crate::discover::{DiscoveredFile, EntryPoint, EntryPointSource};
-    use crate::graph::ModuleGraph;
+    use crate::extract::ExportName;
+    use crate::graph::{ExportSymbol, ModuleGraph, ReferenceKind, SymbolReference};
     use crate::resolve::ResolvedModule;
+    use oxc_span::Span;
     use rustc_hash::FxHashSet;
     use std::path::PathBuf;
 
@@ -146,6 +170,56 @@ mod tests {
         // b is not reachable so has_reachable_importer should be false for a
         // In this test, there are no import edges so reverse_deps is empty for all
         assert!(!has_reachable_importer(FileId(1), &graph));
+    }
+
+    #[test]
+    fn has_reachable_export_reference_ignores_unreachable_references() {
+        let mut graph = build_graph(&[
+            ("/src/entry.ts", true),
+            ("/src/helper.ts", false),
+            ("/src/setup.ts", false),
+        ]);
+
+        graph.modules[1].exports = vec![ExportSymbol {
+            name: ExportName::Named("helper".to_string()),
+            is_type_only: false,
+            is_public: false,
+            span: Span::new(0, 10),
+            references: vec![SymbolReference {
+                from_file: FileId(2),
+                kind: ReferenceKind::NamedImport,
+                import_span: Span::new(0, 10),
+            }],
+            members: vec![],
+        }];
+
+        assert!(
+            !has_reachable_export_reference(FileId(1), &graph),
+            "reference from unreachable module should not save file"
+        );
+    }
+
+    #[test]
+    fn has_reachable_export_reference_detects_reachable_references() {
+        let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/helper.ts", false)]);
+
+        graph.modules[1].exports = vec![ExportSymbol {
+            name: ExportName::Named("helper".to_string()),
+            is_type_only: false,
+            is_public: false,
+            span: Span::new(0, 10),
+            references: vec![SymbolReference {
+                from_file: FileId(0),
+                kind: ReferenceKind::NamedImport,
+                import_span: Span::new(0, 10),
+            }],
+            members: vec![],
+        }];
+
+        assert!(
+            has_reachable_export_reference(FileId(1), &graph),
+            "reference from reachable module should keep file alive"
+        );
     }
 
     // ---- find_unused_files tests ----

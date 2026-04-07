@@ -60,6 +60,14 @@ pub(in crate::report) fn print_duplication_human(
             .red()
             .bold()
         );
+        // Advisory when duplication rate is very high — likely mirrored directories
+        if stats.duplication_percentage > 80.0 {
+            eprintln!(
+                "  {}",
+                "Note: rates above 80% often indicate mirrored or generated directories \u{2014} consider ignorePatterns"
+                    .dimmed()
+            );
+        }
     }
 }
 
@@ -359,6 +367,53 @@ pub(super) fn detect_mirrored_families<'a>(
     (mirrors, non_mirrored)
 }
 
+/// Print a concise duplication summary showing only aggregate counts.
+pub(in crate::report) fn print_duplication_summary(
+    report: &DuplicationReport,
+    elapsed: Duration,
+    quiet: bool,
+) {
+    if report.clone_groups.is_empty() {
+        if !quiet {
+            eprintln!(
+                "{}",
+                format!(
+                    "\u{2713} No duplication found ({:.2}s)",
+                    elapsed.as_secs_f64()
+                )
+                .green()
+                .bold()
+            );
+        }
+        return;
+    }
+
+    let stats = &report.stats;
+
+    println!("{}", "Duplication Summary".bold());
+    println!();
+    println!("  {:>6}  Clone families", report.clone_families.len());
+    println!("  {:>6}  Clone groups", report.clone_groups.len());
+    println!(
+        "  {:>6}  Duplicated lines",
+        thousands(stats.duplicated_lines)
+    );
+    println!("  {:>5.1}%  Duplication rate", stats.duplication_percentage);
+
+    if !quiet {
+        eprintln!(
+            "{}",
+            format!(
+                "\u{2717} {:.1}% duplication ({:.2}s)",
+                stats.duplication_percentage,
+                elapsed.as_secs_f64()
+            )
+            .red()
+            .bold()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +484,7 @@ mod tests {
                 line_count: 10,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 clone_groups: 1,
                 clone_instances: 2,
@@ -465,6 +521,7 @@ mod tests {
                 line_count: 10,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);
@@ -505,6 +562,7 @@ mod tests {
                     estimated_savings: 15,
                 }],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);
@@ -547,6 +605,7 @@ mod tests {
                     estimated_savings: 0,
                 }],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);
@@ -582,6 +641,7 @@ mod tests {
                 total_duplicated_tokens: 30,
                 suggestions: vec![],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);
@@ -618,6 +678,7 @@ mod tests {
                 total_duplicated_tokens: 60,
                 suggestions: vec![],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);
@@ -642,6 +703,7 @@ mod tests {
                 line_count: 10,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
         let lines = build_duplication_human_lines(&report, &root);

@@ -2,10 +2,10 @@ name: Cross-Architecture
 
 on:
   pull_request:
-    paths: ['crates/**']
+    paths: ['crates/**', '.github/workflows/cross-arch.yml']
   push:
     branches: [main]
-    paths: ['crates/**']
+    paths: ['crates/**', '.github/workflows/cross-arch.yml']
 
 concurrency:
   group: cross-arch-${{ github.ref }}
@@ -21,6 +21,7 @@ jobs:
   # Tests require the actual target OS, which is handled by ci.yml's matrix.
   # This job verifies the codebase compiles for additional architectures
   # beyond what ci.yml covers (e.g., aarch64 Linux for ARM servers/CI).
+  # Windows is tested natively in ci.yml, so it's not cross-compiled here.
   cross-compile:
     name: Compile (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -32,7 +33,6 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
-          - x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,5 +42,13 @@ jobs:
           targets: ${{ matrix.target }}
           cache-key: cross-${{ matrix.target }}
 
+      - name: Install aarch64 cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Check compilation
         run: cargo check --workspace --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc

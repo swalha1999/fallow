@@ -4,6 +4,19 @@ pub(super) fn is_declaration_file(path: &std::path::Path) -> bool {
     name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
 }
 
+/// Check if a path is an HTML file.
+///
+/// HTML files are excluded from unused-file detection because they are entry-point-like:
+/// nothing imports an HTML file, so "unused" is meaningless for them. They serve as
+/// entry points in Vite/Parcel-style apps and their referenced assets are tracked
+/// via `<script src>` and `<link href>` edges.
+// Keep in sync with fallow_extract::html::is_html_file (crate boundary prevents sharing)
+pub(super) fn is_html_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext == "html")
+}
+
 /// Check if a file is a configuration file consumed by tooling, not via imports.
 ///
 /// These files should never be reported as unused because they are loaded by
@@ -99,8 +112,12 @@ pub fn is_virtual_module(name: &str) -> bool {
     name.starts_with("virtual:")
 }
 
-/// Check if a package name is a platform built-in module (Node.js, Deno, Cloudflare Workers).
+/// Check if a package name is a platform built-in module (Node.js, Bun, Deno, Cloudflare Workers).
 pub fn is_builtin_module(name: &str) -> bool {
+    // Bun built-in modules (e.g., `bun:sqlite`, `bun:test`, `bun:ffi`)
+    if name.starts_with("bun:") {
+        return true;
+    }
     // Cloudflare Workers built-in modules (e.g., `cloudflare:workers`, `cloudflare:sockets`)
     if name.starts_with("cloudflare:") {
         return true;
@@ -209,8 +226,9 @@ pub(super) fn is_path_alias(name: &str) -> bool {
     if name.starts_with('#') {
         return true;
     }
-    // `~/` prefix is a common alias convention (e.g., Nuxt, custom tsconfig)
-    if name.starts_with("~/") {
+    // `~/`, `~~/`, and `@@/` are common alias conventions
+    // (e.g., Nuxt, custom tsconfig)
+    if name.starts_with("~/") || name.starts_with("~~/") || name.starts_with("@@/") {
         return true;
     }
     // `@/` is a very common path alias (e.g., `@/components/Foo`)
@@ -307,7 +325,7 @@ pub(super) fn is_barrel_with_reachable_sources(
         .exports
         .iter()
         .any(|e| e.span.start != 0 || e.span.end != 0);
-    if has_local_exports || module.has_cjs_exports {
+    if has_local_exports || module.has_cjs_exports() {
         return false;
     }
 
@@ -317,7 +335,7 @@ pub(super) fn is_barrel_with_reachable_sources(
         graph
             .modules
             .get(source_idx)
-            .is_some_and(|m| m.is_reachable)
+            .is_some_and(|m| m.is_reachable())
     })
 }
 
@@ -935,6 +953,8 @@ mod tests {
         assert!(is_path_alias("~/lib/helpers"));
         assert!(is_path_alias("~/utils/format"));
         assert!(is_path_alias("~/styles/theme"));
+        assert!(is_path_alias("~~/shared/theme"));
+        assert!(is_path_alias("@@/shared/theme"));
     }
 
     /// Tilde without slash is NOT a path alias — it's a bare specifier.
@@ -1200,6 +1220,15 @@ mod tests {
         assert!(is_builtin_module("node:test/reporters"));
     }
 
+    /// Bun built-in modules.
+    #[test]
+    fn builtin_module_bun() {
+        assert!(is_builtin_module("bun:sqlite"));
+        assert!(is_builtin_module("bun:test"));
+        assert!(is_builtin_module("bun:ffi"));
+        assert!(is_builtin_module("bun:jsc"));
+    }
+
     /// Cloudflare Workers built-in modules.
     #[test]
     fn builtin_module_cloudflare_workers() {
@@ -1370,7 +1399,7 @@ mod tests {
             ("/src/index.ts", false),
             ("/src/utils.ts", false),
         ]);
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         // Add a re-export
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
@@ -1398,14 +1427,14 @@ mod tests {
             ("/src/index.ts", false),
             ("/src/utils.ts", false),
         ]);
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
             imported_name: "helper".to_string(),
             exported_name: "helper".to_string(),
             is_type_only: false,
         }];
-        graph.modules[1].has_cjs_exports = true;
+        graph.modules[1].set_cjs_exports(true);
         assert!(!is_barrel_with_reachable_sources(&graph.modules[1], &graph));
     }
 
@@ -1417,7 +1446,7 @@ mod tests {
             ("/src/index.ts", false),
             ("/src/utils.ts", false),
         ]);
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         // Only re-exports, no local exports, no CJS
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),

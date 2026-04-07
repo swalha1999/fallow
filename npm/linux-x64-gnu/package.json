@@ -1,6 +1,6 @@
 {
   "name": "@fallow-cli/linux-x64-gnu",
-  "version": "2.11.0",
+  "version": "2.18.0",
   "description": "Fallow CLI binary for Linux x64 (GNU)",
   "license": "MIT",
   "repository": {
@@ -14,6 +14,7 @@
     "x64"
   ],
   "files": [
-    "fallow"
+    "fallow",
+    "fallow-mcp"
   ]
 }

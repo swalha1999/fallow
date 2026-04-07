@@ -195,6 +195,9 @@ pub fn promote_warns_to_errors(rules: &mut RulesConfig) {
     if rules.boundary_violation == Severity::Warn {
         rules.boundary_violation = Severity::Error;
     }
+    if rules.coverage_gaps == Severity::Warn {
+        rules.coverage_gaps = Severity::Error;
+    }
 }
 
 #[cfg(test)]
@@ -310,9 +313,11 @@ mod tests {
             boundaries: fallow_config::BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
         .resolve(
             PathBuf::from("/project"),
@@ -379,6 +384,7 @@ mod tests {
             test_only_dependencies: Severity::Off,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Off,
+            coverage_gaps: Severity::Off,
         };
         let config = config_with_rules(rules);
         apply_rules(&mut results, &config);
@@ -479,6 +485,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            coverage_gaps: Severity::Warn,
         };
         assert!(!has_error_severity_issues(&results, &rules, None));
     }
@@ -505,6 +512,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            coverage_gaps: Severity::Warn,
         };
         // Only unused_files present, but set to Warn — should not trigger
         assert!(!has_error_severity_issues(&results, &rules, None));
@@ -551,8 +559,10 @@ mod tests {
             boundaries: fallow_config::BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
             overrides: vec![fallow_config::ConfigOverride {
                 files: vec!["**/*.test.ts".to_string()],
                 rules: fallow_config::PartialRulesConfig {
@@ -682,6 +692,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            coverage_gaps: Severity::Warn,
         };
         promote_warns_to_errors(&mut rules);
 
@@ -699,6 +710,7 @@ mod tests {
         assert_eq!(rules.type_only_dependencies, Severity::Error);
         assert_eq!(rules.test_only_dependencies, Severity::Error);
         assert_eq!(rules.circular_dependencies, Severity::Error);
+        assert_eq!(rules.coverage_gaps, Severity::Error);
     }
 
     #[test]
@@ -719,6 +731,7 @@ mod tests {
             test_only_dependencies: Severity::Off,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Off,
+            coverage_gaps: Severity::Off,
         };
         promote_warns_to_errors(&mut rules);
 
@@ -727,6 +740,7 @@ mod tests {
         assert_eq!(rules.unused_exports, Severity::Off);
         assert_eq!(rules.unused_types, Severity::Off);
         assert_eq!(rules.circular_dependencies, Severity::Off);
+        assert_eq!(rules.coverage_gaps, Severity::Off);
     }
 
     #[test]
@@ -767,6 +781,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
         let rules = RulesConfig::default();
         assert!(has_error_severity_issues(&results, &rules, None));
@@ -783,6 +798,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
         let rules = RulesConfig {
             circular_dependencies: Severity::Warn,
@@ -793,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn has_error_optional_deps_detected() {
+    fn has_error_optional_deps_warn_by_default() {
         let mut results = AnalysisResults::default();
         results.unused_optional_dependencies.push(UnusedDependency {
             package_name: "optional-pkg".into(),
@@ -802,6 +818,23 @@ mod tests {
             line: 5,
         });
         let rules = RulesConfig::default();
+        // unused_optional_dependencies defaults to Warn, so no error
+        assert!(!has_error_severity_issues(&results, &rules, None));
+    }
+
+    #[test]
+    fn has_error_optional_deps_detected_when_error() {
+        let mut results = AnalysisResults::default();
+        results.unused_optional_dependencies.push(UnusedDependency {
+            package_name: "optional-pkg".into(),
+            location: DependencyLocation::OptionalDependencies,
+            path: PathBuf::from("/project/package.json"),
+            line: 5,
+        });
+        let rules = RulesConfig {
+            unused_optional_dependencies: Severity::Error,
+            ..RulesConfig::default()
+        };
         assert!(has_error_severity_issues(&results, &rules, None));
     }
 

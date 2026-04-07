@@ -7,7 +7,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::types::{CloneFamily, CloneGroup, RefactoringKind, RefactoringSuggestion};
+use rustc_hash::FxHashMap;
+
+use super::types::{
+    CloneFamily, CloneGroup, MirroredDirectory, RefactoringKind, RefactoringSuggestion,
+};
 
 /// The line threshold above which we suggest extracting a module rather than a function.
 const MODULE_EXTRACTION_THRESHOLD: usize = 50;
@@ -144,6 +148,91 @@ fn generate_suggestions(
     }
 
     suggestions
+}
+
+/// Split a path string into (directory, filename).
+///
+/// Returns `("", path)` if there is no directory separator.
+fn split_dir_file(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(pos) => (&path[..=pos], &path[pos + 1..]),
+        None => ("", path),
+    }
+}
+
+/// Detect mirrored directory patterns in clone families.
+///
+/// Scans families with exactly 2 files. If multiple families share the same
+/// directory prefix pair (after stripping to the common filename), they are
+/// grouped into a [`MirroredDirectory`]. Minimum 3 families must share a
+/// pattern to qualify as "mirrored".
+#[must_use]
+pub fn detect_mirrored_directories(
+    families: &[CloneFamily],
+    root: &Path,
+) -> Vec<MirroredDirectory> {
+    const MIN_MIRROR_FAMILIES: usize = 3;
+
+    // For each 2-file family, extract the directory pair + filename
+    // Entry: (filename, duplicated_lines)
+    type MirrorEntry = (String, usize);
+    let mut pair_map: FxHashMap<(String, String), Vec<MirrorEntry>> = FxHashMap::default();
+
+    for family in families {
+        if family.files.len() != 2 {
+            continue;
+        }
+        let rel_a = family.files[0]
+            .strip_prefix(root)
+            .unwrap_or(&family.files[0]);
+        let rel_b = family.files[1]
+            .strip_prefix(root)
+            .unwrap_or(&family.files[1]);
+        let path_a = rel_a.to_string_lossy().replace('\\', "/");
+        let path_b = rel_b.to_string_lossy().replace('\\', "/");
+
+        let (dir_a, file_a) = split_dir_file(&path_a);
+        let (dir_b, file_b) = split_dir_file(&path_b);
+
+        // Only match if the filenames are the same
+        if file_a != file_b {
+            continue;
+        }
+
+        // Normalize: always use the lexically smaller dir first
+        let (da, db) = if dir_a <= dir_b {
+            (dir_a.to_string(), dir_b.to_string())
+        } else {
+            (dir_b.to_string(), dir_a.to_string())
+        };
+
+        pair_map
+            .entry((da, db))
+            .or_default()
+            .push((file_a.to_string(), family.total_duplicated_lines));
+    }
+
+    let mut mirrors: Vec<MirroredDirectory> = Vec::new();
+
+    for ((dir_a, dir_b), entries) in &pair_map {
+        if entries.len() < MIN_MIRROR_FAMILIES {
+            continue;
+        }
+        let total_lines: usize = entries.iter().map(|(_, lines)| lines).sum();
+        let mut files: Vec<String> = entries.iter().map(|(f, _)| f.clone()).collect();
+        files.sort();
+        mirrors.push(MirroredDirectory {
+            dir_a: dir_a.clone(),
+            dir_b: dir_b.clone(),
+            shared_files: files,
+            total_lines,
+        });
+    }
+
+    // Sort mirrors by total lines descending
+    mirrors.sort_by(|a, b| b.total_lines.cmp(&a.total_lines));
+
+    mirrors
 }
 
 #[cfg(test)]

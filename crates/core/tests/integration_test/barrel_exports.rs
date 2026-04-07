@@ -475,3 +475,58 @@ fn circular_re_export_no_unused_files() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Default re-export through barrel ────────────────────────
+
+#[test]
+fn barrel_default_reexport_unused_detected() {
+    // Barrel re-exports default exports as named: `export { default as Card } from './Card'`
+    // Only Button is imported from the barrel, so Card should be flagged as unused.
+    let root = fixture_path("barrel-default-reexport");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    // Card is re-exported from barrel but never imported by anyone
+    assert!(
+        unused_export_names.contains(&"Card"),
+        "Card should be detected as unused re-export on barrel, found: {unused_export_names:?}"
+    );
+
+    // Button IS imported via barrel, so it should NOT be unused
+    assert!(
+        !unused_export_names.contains(&"Button"),
+        "Button should NOT be detected as unused (imported by index.ts)"
+    );
+}
+
+#[test]
+fn barrel_default_reexport_no_unused_files() {
+    // All files should be reachable (barrel is imported, Card/Button source files are re-exported from it)
+    let root = fixture_path("barrel-default-reexport");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_file_paths: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    assert!(
+        !unused_file_paths.iter().any(|p| p.contains("Button.ts")),
+        "Button.ts should NOT be unused (re-exported and imported), found: {unused_file_paths:?}"
+    );
+
+    assert!(
+        !unused_file_paths
+            .iter()
+            .any(|p| p.contains("components/index.ts")),
+        "components/index.ts barrel should NOT be unused, found: {unused_file_paths:?}"
+    );
+}

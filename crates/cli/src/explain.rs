@@ -171,6 +171,20 @@ pub const HEALTH_RULES: &[RuleDef] = &[
         full: "File identified as a refactoring candidate based on a weighted combination of complexity density, churn velocity, dead code ratio, fan-in (blast radius), and fan-out (coupling). Categories: urgent churn+complexity, break circular dependency, split high-impact file, remove dead code, extract complex functions, reduce coupling.",
         docs_path: "explanations/health#refactoring-targets",
     },
+    RuleDef {
+        id: "fallow/untested-file",
+        name: "Untested File",
+        short: "Runtime-reachable file has no test dependency path",
+        full: "A file is reachable from runtime entry points but not from any discovered test entry point. This indicates production code that no test imports, directly or transitively, according to the static module graph.",
+        docs_path: "explanations/health#coverage-gaps",
+    },
+    RuleDef {
+        id: "fallow/untested-export",
+        name: "Untested Export",
+        short: "Runtime-reachable export has no test dependency path",
+        full: "A value export is reachable from runtime entry points but no test-reachable module references it. This is a static test dependency gap rather than line coverage, and highlights exports exercised only through production entry paths.",
+        docs_path: "explanations/health#coverage-gaps",
+    },
 ];
 
 pub const DUPES_RULES: &[RuleDef] = &[RuleDef {
@@ -305,9 +319,15 @@ pub fn health_meta() -> Value {
             },
             "health_score": {
                 "name": "Health Score",
-                "description": "Project-level aggregate score computed from vital signs: dead code, complexity, maintainability, hotspots, unused deps, and circular deps. Penalties subtracted from 100. Missing metrics (from pipelines that didn't run) don't penalize. Use --score to force full pipeline for maximum accuracy.",
+                "description": "Project-level aggregate score computed from vital signs: dead code, complexity, maintainability, hotspots, unused dependencies, and circular dependencies. Penalties subtracted from 100. Missing metrics (from pipelines that didn't run) don't penalize. Use --score to force full pipeline for maximum accuracy.",
                 "range": "[0, 100]",
                 "interpretation": "higher is better; A (85\u{2013}100), B (70\u{2013}84), C (55\u{2013}69), D (40\u{2013}54), F (0\u{2013}39)"
+            },
+            "crap_max": {
+                "name": "Untested Complexity Risk (CRAP)",
+                "description": "Change Risk Anti-Patterns score (Savoia & Evans, 2007). Static binary model: test-reachable file = CC, untested file = CC\u{00b2} + CC. Considers test-graph reachability from the module graph, not runtime code coverage. Files not imported by any test file are treated as 0% covered regardless of actual test execution.",
+                "range": "[1, \u{221e})",
+                "interpretation": "lower is better; >=30 is high-risk (CC >= 5 without test path)"
             }
         }
     })
@@ -773,7 +793,7 @@ mod tests {
 
     #[test]
     fn health_rules_count() {
-        assert_eq!(HEALTH_RULES.len(), 4);
+        assert_eq!(HEALTH_RULES.len(), 6);
     }
 
     #[test]

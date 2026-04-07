@@ -17,9 +17,52 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      vscode: ${{ steps.filter.outputs.vscode }}
+      actions: ${{ steps.filter.outputs.actions }}
+      miri: ${{ steps.filter.outputs.miri }}
+      ci-scripts: ${{ steps.filter.outputs.ci-scripts }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'tests/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - '.clippy.toml'
+              - 'rust-toolchain.toml'
+            vscode:
+              - 'editors/vscode/**'
+            actions:
+              - '.github/**'
+            miri:
+              - 'crates/graph/**'
+              - 'crates/extract/**'
+              - 'crates/types/**'
+              - 'crates/config/**'
+            ci-scripts:
+              - 'ci/**'
+              - 'action/**'
+
   check:
     name: Check (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -48,7 +91,10 @@ jobs:
 
   doc:
     name: Documentation
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -62,6 +108,7 @@ jobs:
   typos:
     name: Typos
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -70,7 +117,10 @@ jobs:
 
   vscode:
     name: VS Code Extension
+    needs: changes
+    if: needs.changes.outputs.vscode == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -84,13 +134,32 @@ jobs:
           cache: pnpm
           cache-dependency-path: editors/vscode/pnpm-lock.yaml
       - run: cd editors/vscode && pnpm install --frozen-lockfile
+      - run: cd editors/vscode && pnpm audit --prod
       - run: cd editors/vscode && pnpm lint
       - run: cd editors/vscode && pnpm build
+      - run: cd editors/vscode && pnpm test:unit
       - run: cd editors/vscode && pnpm package
+
+  test-gitlab-ci:
+    name: Test GitLab CI scripts
+    needs: changes
+    if: needs.changes.outputs.ci-scripts == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run GitLab CI jq unit tests
+        run: bash ci/tests/run.sh
 
   audit:
     name: Security Audit
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -100,7 +169,10 @@ jobs:
 
   deny:
     name: Cargo Deny
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -109,7 +181,10 @@ jobs:
 
   shear:
     name: Unused Dependencies
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -119,17 +194,23 @@ jobs:
 
   zizmor:
     name: Actions Security
+    needs: changes
+    if: needs.changes.outputs.actions == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
       - run: uvx zizmor --config .github/zizmor.yml --min-confidence medium --format plain .
 
   msrv:
     name: MSRV (1.92)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -140,3 +221,52 @@ jobs:
           cache-key: msrv
       - name: Check compilation
         run: cargo check --workspace
+
+  miri:
+    name: Miri
+    needs: changes
+    if: needs.changes.outputs.miri == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      MIRI_TOOLCHAIN: nightly-2026-03-20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Miri toolchain
+        run: |
+          rustup toolchain install "$MIRI_TOOLCHAIN" --component miri
+          cargo +"$MIRI_TOOLCHAIN" miri setup
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: miri
+
+      - name: fallow-types
+        run: cargo +"$MIRI_TOOLCHAIN" miri test -p fallow-types --lib --tests
+
+      - name: fallow-graph
+        run: cargo +"$MIRI_TOOLCHAIN" miri test -p fallow-graph --lib --tests -- --skip proptests
+
+      - name: fallow-extract
+        run: cargo +"$MIRI_TOOLCHAIN" miri test -p fallow-extract --lib --tests -- --skip cache
+
+  ci-ok:
+    name: CI
+    if: always()
+    needs: [check, doc, typos, vscode, test-gitlab-ci, audit, deny, shear, zizmor, msrv, miri]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: All checks passed
+        run: |
+          results='${{ toJSON(needs.*.result) }}'
+          for result in $(echo "$results" | jq -r '.[]'); do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "::error::Job failed with result: $result"
+              exit 1
+            fi
+          done

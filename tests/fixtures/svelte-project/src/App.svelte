@@ -1,7 +1,13 @@
 <script lang="ts">
-import { formatName } from './utils';
+import FancyButton from './FancyButton.svelte';
+import { isActive } from './utils';
+import { tooltip } from './utils';
+import * as utils from './utils';
+import { unusedImported } from './utils';
 
-let name = formatName('world');
+let name = 'world';
 </script>
 
-<h1>Hello {name}!</h1>
+<FancyButton />
+<button use:tooltip class:active={isActive}>Hover me</button>
+<h1>Hello {utils.formatName(name)}!</h1>

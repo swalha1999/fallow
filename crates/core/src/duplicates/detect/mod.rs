@@ -194,6 +194,7 @@ impl CloneDetector {
         DuplicationReport {
             clone_groups,
             clone_families: vec![], // Populated by the caller after suppression filtering
+            mirrored_directories: vec![],
             stats,
         }
     }
@@ -204,6 +205,7 @@ const fn empty_report(total_files: usize) -> DuplicationReport {
     DuplicationReport {
         clone_groups: Vec::new(),
         clone_families: Vec::new(),
+        mirrored_directories: Vec::new(),
         stats: DuplicationStats {
             total_files,
             files_with_clones: 0,

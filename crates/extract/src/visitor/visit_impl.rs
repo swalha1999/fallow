@@ -73,6 +73,23 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_export_named_declaration(&mut self, decl: &ExportNamedDeclaration<'a>) {
+        let is_namespace = matches!(&decl.declaration, Some(Declaration::TSModuleDeclaration(_)));
+
+        // Inside a namespace body: collect as member, not top-level export
+        if self.namespace_depth > 0 {
+            if let Some(declaration) = &decl.declaration {
+                self.extract_namespace_members(declaration);
+            }
+            if is_namespace {
+                self.namespace_depth += 1;
+            }
+            walk::walk_export_named_declaration(self, decl);
+            if is_namespace {
+                self.namespace_depth -= 1;
+            }
+            return;
+        }
+
         let is_type_only = decl.export_kind.is_type();
 
         if let Some(source) = &decl.source {
@@ -102,7 +119,19 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
+        // For namespace declarations: walk the body while tracking depth,
+        // then attach collected members to the namespace export.
+        if is_namespace {
+            self.namespace_depth += 1;
+            self.pending_namespace_members.clear();
+        }
         walk::walk_export_named_declaration(self, decl);
+        if is_namespace {
+            self.namespace_depth -= 1;
+            if let Some(ns_export) = self.exports.last_mut() {
+                ns_export.members = std::mem::take(&mut self.pending_namespace_members);
+            }
+        }
     }
 
     fn visit_export_default_declaration(&mut self, decl: &ExportDefaultDeclaration<'a>) {
@@ -440,6 +469,19 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     object: "this".to_string(),
                     member: member.property.name.to_string(),
                 });
+                // Track `this.field = new ClassName(...)` for chained member access
+                // resolution. Enables `this.field.method()` to count as usage of
+                // `ClassName.method`. Uses the `instance_binding_names` map with a
+                // synthetic `"this.field"` key (safe: dots are invalid in identifiers).
+                if let Expression::NewExpression(new_expr) = &expr.right
+                    && let Expression::Identifier(callee) = &new_expr.callee
+                    && !super::helpers::is_builtin_constructor(callee.name.as_str())
+                {
+                    self.instance_binding_names.insert(
+                        format!("this.{}", member.property.name),
+                        callee.name.to_string(),
+                    );
+                }
             }
         }
         walk::walk_assignment_expression(self, expr);
@@ -457,6 +499,17 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
         if matches!(expr.object, Expression::ThisExpression(_)) {
             self.member_accesses.push(MemberAccess {
                 object: "this".to_string(),
+                member: expr.property.name.to_string(),
+            });
+        }
+        // Capture `this.field.member` patterns — chained access through a class field.
+        // Recorded as `MemberAccess { object: "this.field", member }` which is later
+        // resolved via `instance_binding_names` when `this.field = new ClassName(...)`.
+        if let Expression::StaticMemberExpression(inner) = &expr.object
+            && matches!(inner.object, Expression::ThisExpression(_))
+        {
+            self.member_accesses.push(MemberAccess {
+                object: format!("this.{}", inner.property.name),
                 member: expr.property.name.to_string(),
             });
         }

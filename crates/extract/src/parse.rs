@@ -10,6 +10,7 @@ use crate::ExportInfo;
 use crate::ModuleInfo;
 use crate::astro::{is_astro_file, parse_astro_to_module};
 use crate::css::{is_css_file, parse_css_to_module};
+use crate::html::{is_html_file, parse_html_to_module};
 use crate::mdx::{is_mdx_file, parse_mdx_to_module};
 use crate::sfc::{is_sfc_file, parse_sfc_to_module};
 use crate::visitor::ModuleInfoExtractor;
@@ -17,14 +18,20 @@ use fallow_types::discover::FileId;
 use fallow_types::extract::ImportInfo;
 
 /// Parse source text into a [`ModuleInfo`].
+///
+/// When `need_complexity` is false the per-function complexity visitor is
+/// skipped, saving one full AST walk per file.  The dead-code analysis
+/// pipeline never consumes complexity data, so callers that only need
+/// imports/exports should pass `false`.
 pub fn parse_source_to_module(
     file_id: FileId,
     path: &Path,
     source: &str,
     content_hash: u64,
+    need_complexity: bool,
 ) -> ModuleInfo {
     if is_sfc_file(path) {
-        return parse_sfc_to_module(file_id, source, content_hash);
+        return parse_sfc_to_module(file_id, path, source, content_hash);
     }
     if is_astro_file(path) {
         return parse_astro_to_module(file_id, source, content_hash);
@@ -34,6 +41,9 @@ pub fn parse_source_to_module(
     }
     if is_css_file(path) {
         return parse_css_to_module(file_id, path, source, content_hash);
+    }
+    if is_html_file(path) {
+        return parse_html_to_module(file_id, source, content_hash);
     }
 
     let source_type = SourceType::from_path(path).unwrap_or_default();
@@ -53,10 +63,16 @@ pub fn parse_source_to_module(
     let mut unused_bindings =
         compute_unused_import_bindings(&parser_return.program, &extractor.imports);
 
-    // Compute per-function complexity metrics from the initial parse
+    // Line offsets are always needed (error location reporting in analysis).
     let line_offsets = fallow_types::extract::compute_line_offsets(source);
-    let mut complexity =
-        crate::complexity::compute_complexity(&parser_return.program, line_offsets.clone());
+
+    // Per-function complexity metrics: only computed when the caller needs them
+    // (e.g. the `health` command).  The dead-code pipeline never reads this.
+    let mut complexity = if need_complexity {
+        crate::complexity::compute_complexity(&parser_return.program, line_offsets.clone())
+    } else {
+        Vec::new()
+    };
 
     // If parsing produced very few results relative to source size (likely parse errors
     // from Flow types or JSX in .js files), retry with JSX/TSX source type as a fallback.
@@ -79,9 +95,13 @@ pub fn parse_source_to_module(
         if retry_total > total_extracted {
             unused_bindings =
                 compute_unused_import_bindings(&retry_return.program, &retry_extractor.imports);
-            // Recompute complexity from the successful retry parse
-            complexity =
-                crate::complexity::compute_complexity(&retry_return.program, line_offsets.clone());
+            // Recompute complexity from the successful retry parse (only if requested)
+            if need_complexity {
+                complexity = crate::complexity::compute_complexity(
+                    &retry_return.program,
+                    line_offsets.clone(),
+                );
+            }
             // Re-parse suppressions from the retry's comments (not the original failed parse)
             suppressions =
                 crate::suppress::parse_suppressions(&retry_return.program.comments, source);
@@ -217,7 +237,10 @@ fn has_public_tag(comment_text: &str) -> bool {
 /// references. A value import used only as a type annotation (`const x: Foo`)
 /// will have a type-position reference and will NOT appear in the unused list.
 /// This is correct: `import { Foo }` (without `type`) may be needed at runtime.
-fn compute_unused_import_bindings(program: &Program<'_>, imports: &[ImportInfo]) -> Vec<String> {
+pub fn compute_unused_import_bindings(
+    program: &Program<'_>,
+    imports: &[ImportInfo],
+) -> Vec<String> {
     use oxc_semantic::SemanticBuilder;
 
     // Skip files with no imports

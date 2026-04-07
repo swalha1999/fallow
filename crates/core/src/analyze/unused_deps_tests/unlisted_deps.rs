@@ -544,3 +544,50 @@ fn no_at_types_still_flags_unlisted() {
         "no @types/axios listed — axios should be flagged as unlisted"
     );
 }
+
+#[test]
+fn bun_builtins_not_reported_as_unlisted() {
+    let (graph, resolved_modules) = build_graph_with_npm_imports(&[("bun:sqlite", false)]);
+    let pkg = make_pkg(&[], &[], &[]);
+    let config = test_config(PathBuf::from("/project"));
+    let line_offsets: LineOffsetsMap<'_> = FxHashMap::default();
+
+    let unlisted = find_unlisted_dependencies(
+        &graph,
+        &pkg,
+        &config,
+        &[],
+        None,
+        &resolved_modules,
+        &line_offsets,
+    );
+
+    assert!(
+        !unlisted.iter().any(|d| d.package_name == "bun:sqlite"),
+        "bun:sqlite builtin should not be flagged as unlisted"
+    );
+}
+
+#[test]
+fn ignore_dependencies_suppresses_unlisted() {
+    let (graph, resolved_modules) = build_graph_with_npm_imports(&[("axios", false)]);
+    let pkg = make_pkg(&[], &[], &[]); // axios is NOT listed
+    let mut config = test_config(PathBuf::from("/project"));
+    config.ignore_dependencies = vec!["axios".to_string()];
+    let line_offsets: LineOffsetsMap<'_> = FxHashMap::default();
+
+    let unlisted = find_unlisted_dependencies(
+        &graph,
+        &pkg,
+        &config,
+        &[],
+        None,
+        &resolved_modules,
+        &line_offsets,
+    );
+
+    assert!(
+        !unlisted.iter().any(|d| d.package_name == "axios"),
+        "axios in ignoreDependencies should not be flagged as unlisted"
+    );
+}

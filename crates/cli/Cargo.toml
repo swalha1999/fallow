@@ -18,7 +18,9 @@ path = "src/main.rs"
 [dependencies]
 fallow-core = { workspace = true }
 fallow-config = { workspace = true }
+fallow-types = { workspace = true }
 clap = { workspace = true }
+dunce = { workspace = true }
 globset = { workspace = true }
 colored = { workspace = true }
 serde = { workspace = true }
@@ -30,6 +32,7 @@ notify = { workspace = true }
 rayon = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 tempfile = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
 rustc-hash = { workspace = true }
 
 [lib]
@@ -43,6 +46,9 @@ insta = { workspace = true }
 fallow-types = { workspace = true }
 oxc_span = { workspace = true }
 proptest = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["miette"] # feature-only dep: activates fancy rendering for fallow-config's miette::Report
 
 [lints]
 workspace = true

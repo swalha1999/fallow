@@ -2,24 +2,27 @@ use super::super::PluginResult;
 use super::*;
 use fallow_config::{ExternalPluginDef, ExternalUsedExport, PluginDetection};
 use helpers::{check_plugin_detection, discover_json_config_files, process_config_result};
-use std::collections::HashMap;
+
+/// Build a dependency object from names for JSON deserialization.
+fn deps_json(names: &[&str]) -> serde_json::Value {
+    let map: serde_json::Map<String, serde_json::Value> = names
+        .iter()
+        .map(|n| (n.to_string(), serde_json::Value::String("*".to_string())))
+        .collect();
+    serde_json::Value::Object(map)
+}
 
 /// Helper: build a PackageJson with given dependency names.
+/// Uses JSON deserialization to avoid the disallowed `std::collections::HashMap`.
 fn make_pkg(deps: &[&str]) -> PackageJson {
-    let map: HashMap<String, String> = deps.iter().map(|d| (d.to_string(), "*".into())).collect();
-    PackageJson {
-        dependencies: Some(map),
-        ..Default::default()
-    }
+    let json = serde_json::json!({ "dependencies": deps_json(deps) });
+    serde_json::from_value(json).unwrap()
 }
 
 /// Helper: build a PackageJson with dev dependencies.
 fn make_pkg_dev(deps: &[&str]) -> PackageJson {
-    let map: HashMap<String, String> = deps.iter().map(|d| (d.to_string(), "*".into())).collect();
-    PackageJson {
-        dev_dependencies: Some(map),
-        ..Default::default()
-    }
+    let json = serde_json::json!({ "devDependencies": deps_json(deps) });
+    serde_json::from_value(json).unwrap()
 }
 
 // ── Plugin detection via enablers ────────────────────────────
@@ -63,12 +66,7 @@ fn prefix_enabler_does_not_match_without_slash() {
     // "storybook" (exact) should match, but "@storybook" (without /) should not match via prefix
     let registry = PluginRegistry::default();
     // This only has a package called "@storybookish" — it should NOT match
-    let mut map = HashMap::new();
-    map.insert("@storybookish".to_string(), "*".to_string());
-    let pkg = PackageJson {
-        dependencies: Some(map),
-        ..Default::default()
-    };
+    let pkg = make_pkg(&["@storybookish"]);
     let result = registry.run(&pkg, Path::new("/project"), &[]);
     assert!(
         !result.active_plugins.contains(&"storybook".to_string()),
@@ -165,6 +163,7 @@ fn external_plugin_detected_by_enablers() {
         always_used: vec!["my.config.ts".to_string()],
         tooling_dependencies: vec!["my-framework-cli".to_string()],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["my-framework"]);
@@ -195,6 +194,7 @@ fn external_plugin_not_detected_when_dep_missing() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["react"]);
@@ -220,6 +220,7 @@ fn external_plugin_prefix_enabler() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["@custom/core"]);
@@ -241,6 +242,7 @@ fn external_plugin_detection_dependency() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["special-dep"]);
@@ -273,6 +275,7 @@ fn external_plugin_detection_any_combinator() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     // Only pkg-b present — should still match via Any
@@ -302,6 +305,7 @@ fn external_plugin_detection_all_combinator_fails_partial() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     // Only pkg-a present — All requires both
@@ -325,6 +329,7 @@ fn external_plugin_used_exports_aggregated() {
             pattern: "pages/**/*.tsx".to_string(),
             exports: vec!["default".to_string(), "getServerSideProps".to_string()],
         }],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["ue-dep"]);
@@ -346,6 +351,7 @@ fn external_plugin_without_enablers_or_detection_stays_inactive() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["anything"]);
@@ -463,6 +469,7 @@ fn external_plugin_detection_overrides_enablers() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["pkg-y"]);
@@ -488,6 +495,7 @@ fn external_plugin_detection_overrides_enablers_positive() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["pkg-x"]);
@@ -512,6 +520,7 @@ fn external_plugin_config_patterns_added_to_always_used() {
         always_used: vec!["setup.ts".to_string()],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["cfg-dep"]);
@@ -553,6 +562,7 @@ fn external_plugin_detection_all_combinator_succeeds() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["pkg-a", "pkg-b"]);
@@ -593,6 +603,7 @@ fn external_plugin_nested_any_inside_all() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext.clone()]);
     // Has required-dep + optional-b → should pass
@@ -632,6 +643,7 @@ fn external_plugin_detection_file_exists_against_discovered() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = PackageJson::default();
@@ -657,6 +669,7 @@ fn external_plugin_detection_file_exists_no_match() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = PackageJson::default();
@@ -774,15 +787,22 @@ fn process_config_result_merges_all_fields() {
     let mut aggregated = AggregatedPluginResult::default();
     let config_result = PluginResult {
         entry_patterns: vec!["src/routes/**/*.ts".to_string()],
+        used_exports: vec![("src/routes/**/*.ts".to_string(), vec!["loader".to_string()])],
         referenced_dependencies: vec!["lodash".to_string(), "axios".to_string()],
         always_used_files: vec!["setup.ts".to_string()],
+        path_aliases: vec![],
         setup_files: vec![PathBuf::from("/project/test/setup.ts")],
+        fixture_patterns: vec![],
     };
     process_config_result("test-plugin", config_result, &mut aggregated);
 
     assert_eq!(aggregated.entry_patterns.len(), 1);
     assert_eq!(aggregated.entry_patterns[0].0, "src/routes/**/*.ts");
     assert_eq!(aggregated.entry_patterns[0].1, "test-plugin");
+
+    assert_eq!(aggregated.used_exports.len(), 1);
+    assert_eq!(aggregated.used_exports[0].0, "src/routes/**/*.ts");
+    assert_eq!(aggregated.used_exports[0].1, vec!["loader".to_string()]);
 
     assert_eq!(aggregated.referenced_dependencies.len(), 2);
     assert!(
@@ -814,15 +834,21 @@ fn process_config_result_accumulates_across_multiple_calls() {
 
     let result1 = PluginResult {
         entry_patterns: vec!["a.ts".to_string()],
+        used_exports: vec![("a.ts".to_string(), vec!["default".to_string()])],
         referenced_dependencies: vec!["dep-a".to_string()],
         always_used_files: vec![],
+        path_aliases: vec![],
         setup_files: vec![PathBuf::from("/project/setup-a.ts")],
+        fixture_patterns: vec![],
     };
     let result2 = PluginResult {
         entry_patterns: vec!["b.ts".to_string()],
+        used_exports: vec![("b.ts".to_string(), vec!["loader".to_string()])],
         referenced_dependencies: vec!["dep-b".to_string()],
         always_used_files: vec!["c.ts".to_string()],
+        path_aliases: vec![],
         setup_files: vec![],
+        fixture_patterns: vec![],
     };
 
     process_config_result("plugin-a", result1, &mut aggregated);
@@ -834,6 +860,10 @@ fn process_config_result_accumulates_across_multiple_calls() {
     assert_eq!(aggregated.entry_patterns[0].1, "plugin-a");
     assert_eq!(aggregated.entry_patterns[1].0, "b.ts");
     assert_eq!(aggregated.entry_patterns[1].1, "plugin-b");
+
+    assert_eq!(aggregated.used_exports.len(), 2);
+    assert_eq!(aggregated.used_exports[0].0, "a.ts");
+    assert_eq!(aggregated.used_exports[1].0, "b.ts");
 
     // Verify referenced dependencies from both calls
     assert_eq!(aggregated.referenced_dependencies.len(), 2);
@@ -862,6 +892,51 @@ fn process_config_result_accumulates_across_multiple_calls() {
     assert_eq!(aggregated.setup_files[0].1, "plugin-a");
 }
 
+#[test]
+fn process_config_result_path_aliases_override_existing_prefixes() {
+    let mut aggregated = AggregatedPluginResult {
+        path_aliases: vec![
+            ("~/".to_string(), "app".to_string()),
+            ("@/".to_string(), "app".to_string()),
+            ("#shared".to_string(), "shared".to_string()),
+        ],
+        ..Default::default()
+    };
+
+    let config_result = PluginResult {
+        path_aliases: vec![
+            ("~/".to_string(), "src".to_string()),
+            ("@/".to_string(), "src".to_string()),
+        ],
+        ..Default::default()
+    };
+
+    process_config_result("nuxt", config_result, &mut aggregated);
+
+    let tilde_aliases: Vec<_> = aggregated
+        .path_aliases
+        .iter()
+        .filter(|(prefix, _)| prefix == "~/")
+        .collect();
+    assert_eq!(tilde_aliases.len(), 1);
+    assert_eq!(tilde_aliases[0].1, "src");
+
+    let at_aliases: Vec<_> = aggregated
+        .path_aliases
+        .iter()
+        .filter(|(prefix, _)| prefix == "@/")
+        .collect();
+    assert_eq!(at_aliases.len(), 1);
+    assert_eq!(at_aliases[0].1, "src");
+
+    assert!(
+        aggregated
+            .path_aliases
+            .contains(&("#shared".to_string(), "shared".to_string())),
+        "unrelated aliases should be preserved"
+    );
+}
+
 // ── PluginResult::is_empty ───────────────────────────────────
 
 #[test]
@@ -880,11 +955,19 @@ fn plugin_result_not_empty_when_any_field_set() {
             ..Default::default()
         },
         PluginResult {
+            used_exports: vec![("src/**/*.ts".to_string(), vec!["loader".to_string()])],
+            ..Default::default()
+        },
+        PluginResult {
             referenced_dependencies: vec!["lodash".to_string()],
             ..Default::default()
         },
         PluginResult {
             always_used_files: vec!["setup.ts".to_string()],
+            ..Default::default()
+        },
+        PluginResult {
+            path_aliases: vec![("@".to_string(), "src".to_string())],
             ..Default::default()
         },
         PluginResult {
@@ -1050,6 +1133,7 @@ fn multiple_external_plugins_independently_activated() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let ext_b = ExternalPluginDef {
         schema: None,
@@ -1061,6 +1145,7 @@ fn multiple_external_plugins_independently_activated() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext_a, ext_b]);
     // Only dep-a present
@@ -1095,6 +1180,7 @@ fn external_plugin_multiple_used_exports() {
                 exports: vec!["GET".to_string(), "POST".to_string()],
             },
         ],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["multi-dep"]);
@@ -1223,6 +1309,7 @@ fn process_external_plugins_prefix_enabler_requires_slash() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let mut result = AggregatedPluginResult::default();
     let deps = vec!["@organism".to_string()];
@@ -1245,6 +1332,7 @@ fn process_external_plugins_prefix_enabler_matches_scoped() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let mut result = AggregatedPluginResult::default();
     let deps = vec!["@org/core".to_string()];
@@ -1354,12 +1442,8 @@ fn run_discovers_json_config_on_disk_fallback() {
 
 #[test]
 fn peer_deps_trigger_plugins() {
-    let mut map = HashMap::new();
-    map.insert("next".to_string(), "^14.0.0".to_string());
-    let pkg = PackageJson {
-        peer_dependencies: Some(map),
-        ..Default::default()
-    };
+    let json = serde_json::json!({ "peerDependencies": deps_json(&["next"]) });
+    let pkg: PackageJson = serde_json::from_value(json).unwrap();
     let registry = PluginRegistry::default();
     let result = registry.run(&pkg, Path::new("/project"), &[]);
     assert!(
@@ -1370,12 +1454,8 @@ fn peer_deps_trigger_plugins() {
 
 #[test]
 fn optional_deps_trigger_plugins() {
-    let mut map = HashMap::new();
-    map.insert("next".to_string(), "^14.0.0".to_string());
-    let pkg = PackageJson {
-        optional_dependencies: Some(map),
-        ..Default::default()
-    };
+    let json = serde_json::json!({ "optionalDependencies": deps_json(&["next"]) });
+    let pkg: PackageJson = serde_json::from_value(json).unwrap();
     let registry = PluginRegistry::default();
     let result = registry.run(&pkg, Path::new("/project"), &[]);
     assert!(
@@ -1424,6 +1504,7 @@ fn external_plugin_detection_all_with_file_and_dep() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["my-lib"]);
@@ -1456,6 +1537,7 @@ fn external_plugin_detection_all_dep_and_file_missing_file() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let registry = PluginRegistry::new(vec![ext]);
     let pkg = make_pkg(&["my-lib"]);
@@ -1764,6 +1846,7 @@ fn process_external_plugins_detection_dependency() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let mut result = AggregatedPluginResult::default();
     let deps = vec!["my-dep".to_string()];
@@ -1791,6 +1874,7 @@ fn process_external_plugins_detection_not_matched() {
         always_used: vec![],
         tooling_dependencies: vec![],
         used_exports: vec![],
+        entry_point_role: fallow_config::EntryPointRole::Runtime,
     };
     let mut result = AggregatedPluginResult::default();
     let deps = vec!["other-dep".to_string()];

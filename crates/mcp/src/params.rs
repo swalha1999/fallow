@@ -228,6 +228,9 @@ pub struct HealthParams {
     /// Show only refactoring targets: ranked recommendations based on complexity, coupling, churn, and dead code.
     pub targets: Option<bool>,
 
+    /// Show static test coverage gaps: runtime files and exports with no test dependency path.
+    pub coverage_gaps: Option<bool>,
+
     /// Show only the project health score (0–100) with letter grade (A/B/C/D/F).
     /// Forces full pipeline for maximum accuracy.
     pub score: Option<bool>,
@@ -265,6 +268,13 @@ pub struct HealthParams {
     /// Compare current metrics against the most recent saved snapshot and show per-metric deltas.
     /// Implies --score. Reads from `.fallow/snapshots/`.
     pub trend: Option<bool>,
+
+    /// Analysis effort level. Controls the depth of analysis: "low" (fast, surface-level),
+    /// "medium" (balanced, default), "high" (thorough, includes all heuristics).
+    pub effort: Option<String>,
+
+    /// Include a natural-language summary of findings alongside the structured JSON output.
+    pub summary: Option<bool>,
 }
 
 #[derive(Default, Deserialize, JsonSchema)]

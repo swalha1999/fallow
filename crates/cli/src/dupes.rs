@@ -7,7 +7,7 @@ use fallow_core::duplicates::DuplicationReport;
 use crate::baseline::{DuplicationBaselineData, filter_new_clone_groups, recompute_stats};
 use crate::check::get_changed_files;
 use crate::report;
-use crate::{emit_error, load_config};
+use crate::{error::emit_error, load_config};
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum DupesMode {
@@ -15,6 +15,17 @@ pub enum DupesMode {
     Mild,
     Weak,
     Semantic,
+}
+
+impl From<fallow_config::DetectionMode> for DupesMode {
+    fn from(mode: fallow_config::DetectionMode) -> Self {
+        match mode {
+            fallow_config::DetectionMode::Strict => Self::Strict,
+            fallow_config::DetectionMode::Mild => Self::Mild,
+            fallow_config::DetectionMode::Weak => Self::Weak,
+            fallow_config::DetectionMode::Semantic => Self::Semantic,
+        }
+    }
 }
 
 pub struct DupesOptions<'a> {
@@ -37,6 +48,12 @@ pub struct DupesOptions<'a> {
     pub trace: Option<&'a str>,
     pub changed_since: Option<&'a str>,
     pub explain: bool,
+    /// When true, emit a condensed summary instead of full item-level output.
+    #[allow(
+        dead_code,
+        reason = "wired from CLI but consumed by combined mode, not standalone dupes"
+    )]
+    pub summary: bool,
     pub group_by: Option<crate::GroupBy>,
 }
 
@@ -97,6 +114,10 @@ fn filter_by_changed_files(
         .retain(|g| g.instances.iter().any(|i| changed.contains(&i.file)));
     report.clone_families =
         fallow_core::duplicates::families::group_into_families(&report.clone_groups, root);
+    report.mirrored_directories = fallow_core::duplicates::families::detect_mirrored_directories(
+        &report.clone_families,
+        root,
+    );
     report.stats = recompute_stats(report);
 }
 
@@ -209,6 +230,11 @@ pub fn execute_dupes(opts: &DupesOptions<'_>) -> Result<DupesResult, ExitCode> {
             &report.clone_groups,
             &config.root,
         );
+        report.mirrored_directories =
+            fallow_core::duplicates::families::detect_mirrored_directories(
+                &report.clone_families,
+                &config.root,
+            );
     }
 
     let elapsed = start.elapsed();
@@ -222,7 +248,12 @@ pub fn execute_dupes(opts: &DupesOptions<'_>) -> Result<DupesResult, ExitCode> {
 }
 
 /// Print duplication results and return appropriate exit code.
-pub fn print_dupes_result(result: &DupesResult, quiet: bool, explain: bool) -> ExitCode {
+pub fn print_dupes_result(
+    result: &DupesResult,
+    quiet: bool,
+    explain: bool,
+    summary: bool,
+) -> ExitCode {
     let ctx = report::ReportContext {
         root: &result.config.root,
         rules: &result.config.rules,
@@ -230,6 +261,8 @@ pub fn print_dupes_result(result: &DupesResult, quiet: bool, explain: bool) -> E
         quiet,
         explain,
         group_by: None,
+        top: None,
+        summary,
     };
     let report_code = report::print_duplication_report(&result.report, &ctx, result.config.output);
     if report_code != ExitCode::SUCCESS {
@@ -263,7 +296,7 @@ pub fn run_dupes(opts: &DupesOptions<'_>) -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
-    print_dupes_result_with_grouping(&result, opts.quiet, opts.explain, None)
+    print_dupes_result_with_grouping(&result, opts.quiet, opts.explain, None, opts.summary)
 }
 
 fn print_dupes_result_with_grouping(
@@ -271,6 +304,7 @@ fn print_dupes_result_with_grouping(
     quiet: bool,
     explain: bool,
     group_by: Option<report::OwnershipResolver>,
+    summary: bool,
 ) -> ExitCode {
     let ctx = report::ReportContext {
         root: &result.config.root,
@@ -279,6 +313,8 @@ fn print_dupes_result_with_grouping(
         quiet,
         explain,
         group_by,
+        top: None,
+        summary,
     };
     report::print_duplication_report(&result.report, &ctx, result.config.output)
 }
@@ -321,6 +357,7 @@ mod tests {
         DuplicationReport {
             clone_groups: groups,
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files,
                 files_with_clones: 0,
@@ -356,6 +393,7 @@ mod tests {
             trace: None,
             changed_since: None,
             explain: false,
+            summary: false,
             group_by: None,
         }
     }

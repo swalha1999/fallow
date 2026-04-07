@@ -130,9 +130,11 @@ fn ignore_dependencies_config_filters_deps() {
         boundaries: BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(
         PathBuf::from("/project"),

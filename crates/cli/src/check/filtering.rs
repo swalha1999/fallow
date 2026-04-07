@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use fallow_config::{OutputFormat, discover_workspaces};
 
-use crate::emit_error;
+use crate::error::emit_error;
 
 // ── Workspace filtering ──────────────────────────────────────────
 
@@ -540,6 +540,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let mut changed = rustc_hash::FxHashSet::default();
@@ -561,6 +562,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let mut changed = rustc_hash::FxHashSet::default();
@@ -671,6 +673,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
         results.circular_dependencies.push(CircularDependency {
             files: vec![
@@ -680,6 +683,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let ws_root = PathBuf::from("/project/packages/ui");
@@ -703,6 +707,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let ws_root = PathBuf::from("/project/packages/ui");

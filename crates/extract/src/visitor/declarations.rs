@@ -94,14 +94,34 @@ impl ModuleInfoExtractor {
                     members,
                 });
             }
-            Declaration::TSModuleDeclaration(module) => match &module.id {
-                TSModuleDeclarationName::Identifier(id) => {
-                    self.push_type_export(&id.name, id.span);
+            Declaration::TSModuleDeclaration(module) => {
+                // `declare namespace` / `declare module` are type-only (ambient).
+                // Runtime namespaces (`export namespace Foo { ... }`) compile to
+                // real JavaScript objects and are NOT type-only.
+                let ns_type_only = module.declare || is_type_only;
+                match &module.id {
+                    TSModuleDeclarationName::Identifier(id) => {
+                        self.exports.push(ExportInfo {
+                            name: ExportName::Named(id.name.to_string()),
+                            local_name: Some(id.name.to_string()),
+                            is_type_only: ns_type_only,
+                            is_public: false,
+                            span: id.span,
+                            members: vec![],
+                        });
+                    }
+                    TSModuleDeclarationName::StringLiteral(lit) => {
+                        self.exports.push(ExportInfo {
+                            name: ExportName::Named(lit.value.to_string()),
+                            local_name: Some(lit.value.to_string()),
+                            is_type_only: ns_type_only,
+                            is_public: false,
+                            span: lit.span,
+                            members: vec![],
+                        });
+                    }
                 }
-                TSModuleDeclarationName::StringLiteral(lit) => {
-                    self.push_type_export(&lit.value, lit.span);
-                }
-            },
+            }
             _ => {}
         }
     }
@@ -120,6 +140,90 @@ impl ModuleInfoExtractor {
                 span: id.span,
                 members: vec![],
             });
+        }
+    }
+
+    /// Extract namespace member names from a declaration inside a namespace body.
+    ///
+    /// Called when `namespace_depth > 0` to collect inner exported declarations
+    /// as `MemberInfo` entries instead of top-level module exports.
+    pub(crate) fn extract_namespace_members(&mut self, decl: &Declaration<'_>) {
+        match decl {
+            Declaration::FunctionDeclaration(func) => {
+                if let Some(id) = func.id.as_ref() {
+                    self.pending_namespace_members.push(MemberInfo {
+                        name: id.name.to_string(),
+                        kind: MemberKind::NamespaceMember,
+                        span: id.span,
+                        has_decorator: false,
+                    });
+                }
+            }
+            Declaration::VariableDeclaration(var) => {
+                for declarator in &var.declarations {
+                    for id in declarator.id.get_binding_identifiers() {
+                        self.pending_namespace_members.push(MemberInfo {
+                            name: id.name.to_string(),
+                            kind: MemberKind::NamespaceMember,
+                            span: id.span,
+                            has_decorator: false,
+                        });
+                    }
+                }
+            }
+            Declaration::ClassDeclaration(class) => {
+                if let Some(id) = class.id.as_ref() {
+                    self.pending_namespace_members.push(MemberInfo {
+                        name: id.name.to_string(),
+                        kind: MemberKind::NamespaceMember,
+                        span: id.span,
+                        has_decorator: false,
+                    });
+                }
+            }
+            Declaration::TSEnumDeclaration(enumd) => {
+                self.pending_namespace_members.push(MemberInfo {
+                    name: enumd.id.name.to_string(),
+                    kind: MemberKind::NamespaceMember,
+                    span: enumd.id.span,
+                    has_decorator: false,
+                });
+            }
+            Declaration::TSInterfaceDeclaration(iface) => {
+                self.pending_namespace_members.push(MemberInfo {
+                    name: iface.id.name.to_string(),
+                    kind: MemberKind::NamespaceMember,
+                    span: iface.id.span,
+                    has_decorator: false,
+                });
+            }
+            Declaration::TSTypeAliasDeclaration(alias) => {
+                self.pending_namespace_members.push(MemberInfo {
+                    name: alias.id.name.to_string(),
+                    kind: MemberKind::NamespaceMember,
+                    span: alias.id.span,
+                    has_decorator: false,
+                });
+            }
+            Declaration::TSModuleDeclaration(module) => match &module.id {
+                TSModuleDeclarationName::Identifier(id) => {
+                    self.pending_namespace_members.push(MemberInfo {
+                        name: id.name.to_string(),
+                        kind: MemberKind::NamespaceMember,
+                        span: id.span,
+                        has_decorator: false,
+                    });
+                }
+                TSModuleDeclarationName::StringLiteral(lit) => {
+                    self.pending_namespace_members.push(MemberInfo {
+                        name: lit.value.to_string(),
+                        kind: MemberKind::NamespaceMember,
+                        span: lit.span,
+                        has_decorator: false,
+                    });
+                }
+            },
+            _ => {}
         }
     }
 

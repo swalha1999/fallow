@@ -8,7 +8,9 @@ use super::fallbacks::{
     extract_package_name_from_node_modules_path, try_path_alias_fallback,
     try_pnpm_workspace_fallback, try_source_fallback,
 };
-use super::path_info::{extract_package_name, is_bare_specifier, is_path_alias};
+use super::path_info::{
+    extract_package_name, is_bare_specifier, is_path_alias, is_valid_package_name,
+};
 use super::react_native::{build_condition_names, build_extensions};
 use super::types::{ResolveContext, ResolveResult};
 
@@ -59,9 +61,40 @@ pub(super) fn resolve_specifier(
         return ResolveResult::ExternalFile(PathBuf::from(specifier));
     }
 
+    // In HTML files, root-relative paths (`/src/main.tsx`) are a web convention meaning
+    // "relative to the project root". Vite, Parcel, and other dev servers resolve them
+    // this way. Use `resolve(directory, specifier)` with the project root as the base
+    // directory, so resolution works regardless of where the HTML file lives (e.g.,
+    // `public/index.html` referencing `/src/main.tsx`).
+    // Scoped to HTML files only — in JS/TS, `/foo` is an absolute filesystem path.
+    if specifier.starts_with('/') && from_file.extension().is_some_and(|e| e == "html") {
+        let relative = format!(".{specifier}");
+        if let Ok(resolved) = ctx.resolver.resolve(ctx.root, &relative) {
+            let resolved_path = resolved.path();
+            if let Some(&file_id) = ctx.raw_path_to_id.get(resolved_path) {
+                return ResolveResult::InternalModule(file_id);
+            }
+            if let Ok(canonical) = dunce::canonicalize(resolved_path) {
+                if let Some(&file_id) = ctx.path_to_id.get(canonical.as_path()) {
+                    return ResolveResult::InternalModule(file_id);
+                }
+                if let Some(fallback) = ctx.canonical_fallback
+                    && let Some(file_id) = fallback.get(&canonical)
+                {
+                    return ResolveResult::InternalModule(file_id);
+                }
+            }
+        }
+        return ResolveResult::Unresolvable(specifier.to_string());
+    }
+
     // Bare specifier classification (used for fallback logic below).
     let is_bare = is_bare_specifier(specifier);
     let is_alias = is_path_alias(specifier);
+    let matches_plugin_alias = ctx
+        .path_aliases
+        .iter()
+        .any(|(prefix, _)| specifier.starts_with(prefix));
 
     // Use resolve_file instead of resolve so that TsconfigDiscovery::Auto works.
     // oxc_resolver's resolve() ignores Auto tsconfig discovery — only resolve_file()
@@ -96,7 +129,7 @@ pub(super) fn resolve_specifier(
             }
 
             // Fall back to canonical path lookup
-            match resolved_path.canonicalize() {
+            match dunce::canonicalize(resolved_path) {
                 Ok(canonical) => {
                     if let Some(&file_id) = ctx.path_to_id.get(canonical.as_path()) {
                         ResolveResult::InternalModule(file_id)
@@ -143,15 +176,16 @@ pub(super) fn resolve_specifier(
             }
         }
         Err(_) => {
-            if is_alias {
+            if is_alias || matches_plugin_alias {
                 // Try plugin-provided path aliases before giving up.
-                // These substitute import prefixes (e.g., `~/` → `app/`) and re-resolve
-                // as relative imports from the project root.
+                // This covers both built-in alias shapes (`~/`, `@/`, `#foo`) and
+                // custom prefixes discovered from framework config files such as
+                // `@shared/*` or `$utils/*`.
                 // Path aliases that fail resolution are unresolvable, not npm packages.
                 // Classifying them as NpmPackage would cause false "unlisted dependency" reports.
                 try_path_alias_fallback(ctx, specifier)
                     .unwrap_or_else(|| ResolveResult::Unresolvable(specifier.to_string()))
-            } else if is_bare {
+            } else if is_bare && is_valid_package_name(specifier) {
                 let pkg_name = extract_package_name(specifier);
                 ResolveResult::NpmPackage(pkg_name)
             } else {

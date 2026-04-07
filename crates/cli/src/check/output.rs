@@ -4,7 +4,7 @@ use fallow_config::{OutputFormat, ResolvedConfig};
 use fallow_core::graph::ModuleGraph;
 
 use super::TraceOptions;
-use crate::{emit_error, report};
+use crate::{error::emit_error, report};
 
 // ── Trace output ─────────────────────────────────────────────────
 
@@ -216,9 +216,11 @@ mod tests {
             production: false,
             quiet: true,
             external_plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
     }
 

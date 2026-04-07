@@ -111,7 +111,7 @@ pub fn byte_offset_to_line_col(line_offsets: &[u32], byte_offset: u32) -> (u32, 
 }
 
 /// Complexity metrics for a single function/method/arrow.
-#[derive(Debug, Clone, serde::Serialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, serde::Serialize, bitcode::Encode, bitcode::Decode)]
 pub struct FunctionComplexity {
     /// Function name (or `"<anonymous>"` for unnamed functions/arrows).
     pub name: String,
@@ -155,17 +155,17 @@ pub struct ExportInfo {
     /// Source span of the export declaration.
     #[serde(serialize_with = "serialize_span")]
     pub span: Span,
-    /// Members of this export (for enums and classes).
+    /// Members of this export (for enums, classes, and namespaces).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<MemberInfo>,
 }
 
-/// A member of an enum or class.
+/// A member of an enum, class, or namespace.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemberInfo {
     /// Member name.
     pub name: String,
-    /// Whether this is an enum member, class method, or class property.
+    /// The kind of member (enum, class method/property, or namespace member).
     pub kind: MemberKind,
     /// Source span of the member declaration.
     #[serde(serialize_with = "serialize_span")]
@@ -189,7 +189,7 @@ pub struct MemberInfo {
 /// assert_ne!(kind, MemberKind::ClassMethod);
 /// assert_ne!(MemberKind::ClassMethod, MemberKind::ClassProperty);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, bitcode::Encode, bitcode::Decode)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberKind {
     /// A TypeScript enum member.
@@ -198,6 +198,8 @@ pub enum MemberKind {
     ClassMethod,
     /// A class property.
     ClassProperty,
+    /// A member exported from a TypeScript namespace.
+    NamespaceMember,
 }
 
 /// A static member access expression (e.g., `Status.Active`, `MyClass.create()`).
@@ -214,7 +216,7 @@ pub enum MemberKind {
 /// assert_eq!(access.object, "Status");
 /// assert_eq!(access.member, "Active");
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bitcode::Encode, bitcode::Decode)]
 pub struct MemberAccess {
     /// The identifier being accessed (the import name).
     pub object: String,
@@ -617,38 +619,39 @@ mod tests {
         assert_eq!(MemberKind::EnumMember, MemberKind::EnumMember);
         assert_eq!(MemberKind::ClassMethod, MemberKind::ClassMethod);
         assert_eq!(MemberKind::ClassProperty, MemberKind::ClassProperty);
+        assert_eq!(MemberKind::NamespaceMember, MemberKind::NamespaceMember);
         assert_ne!(MemberKind::EnumMember, MemberKind::ClassMethod);
         assert_ne!(MemberKind::ClassMethod, MemberKind::ClassProperty);
+        assert_ne!(MemberKind::NamespaceMember, MemberKind::EnumMember);
     }
 
-    // ── MemberKind bincode roundtrip ────────────────────────────
+    // ── MemberKind bitcode roundtrip ─────────────────────────────
 
     #[test]
-    fn member_kind_bincode_roundtrip() {
+    fn member_kind_bitcode_roundtrip() {
         let kinds = [
             MemberKind::EnumMember,
             MemberKind::ClassMethod,
             MemberKind::ClassProperty,
+            MemberKind::NamespaceMember,
         ];
-        let config = bincode::config::standard();
         for kind in &kinds {
-            let bytes = bincode::encode_to_vec(kind, config).unwrap();
-            let (decoded, _): (MemberKind, _) = bincode::decode_from_slice(&bytes, config).unwrap();
+            let bytes = bitcode::encode(kind);
+            let decoded: MemberKind = bitcode::decode(&bytes).unwrap();
             assert_eq!(&decoded, kind);
         }
     }
 
-    // ── MemberAccess bincode roundtrip ──────────────────────────
+    // ── MemberAccess bitcode roundtrip ─────────────────────────
 
     #[test]
-    fn member_access_bincode_roundtrip() {
+    fn member_access_bitcode_roundtrip() {
         let access = MemberAccess {
             object: "Status".to_string(),
             member: "Active".to_string(),
         };
-        let config = bincode::config::standard();
-        let bytes = bincode::encode_to_vec(&access, config).unwrap();
-        let (decoded, _): (MemberAccess, _) = bincode::decode_from_slice(&bytes, config).unwrap();
+        let bytes = bitcode::encode(&access);
+        let decoded: MemberAccess = bitcode::decode(&bytes).unwrap();
         assert_eq!(decoded.object, "Status");
         assert_eq!(decoded.member, "Active");
     }
@@ -673,10 +676,10 @@ mod tests {
         assert_eq!((line, col), (1, 0));
     }
 
-    // ── FunctionComplexity bincode roundtrip ─────────────────────
+    // ── FunctionComplexity bitcode roundtrip ──────────────────────
 
     #[test]
-    fn function_complexity_bincode_roundtrip() {
+    fn function_complexity_bitcode_roundtrip() {
         let fc = FunctionComplexity {
             name: "processData".to_string(),
             line: 42,
@@ -685,10 +688,8 @@ mod tests {
             cognitive: 25,
             line_count: 80,
         };
-        let config = bincode::config::standard();
-        let bytes = bincode::encode_to_vec(&fc, config).unwrap();
-        let (decoded, _): (FunctionComplexity, _) =
-            bincode::decode_from_slice(&bytes, config).unwrap();
+        let bytes = bitcode::encode(&fc);
+        let decoded: FunctionComplexity = bitcode::decode(&bytes).unwrap();
         assert_eq!(decoded.name, "processData");
         assert_eq!(decoded.line, 42);
         assert_eq!(decoded.col, 4);

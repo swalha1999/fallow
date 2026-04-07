@@ -22,10 +22,12 @@ fn compile_ignore_matchers(config: &ResolvedConfig) -> IgnoreMatchers<'_> {
     config
         .ignore_export_rules
         .iter()
-        .filter_map(|rule| {
-            globset::Glob::new(&rule.file)
-                .ok()
-                .map(|g| (g.compile_matcher(), rule.exports.as_slice()))
+        .filter_map(|rule| match globset::Glob::new(&rule.file) {
+            Ok(g) => Some((g.compile_matcher(), rule.exports.as_slice())),
+            Err(e) => {
+                tracing::warn!("invalid ignoreExports pattern '{}': {e}", rule.file);
+                None
+            }
         })
         .collect()
 }
@@ -39,34 +41,37 @@ fn compile_plugin_matchers(
     };
     pr.used_exports
         .iter()
-        .filter_map(|(file_pat, exports)| {
-            globset::Glob::new(file_pat).ok().map(|g| {
-                (
-                    g.compile_matcher(),
-                    exports.iter().map(String::as_str).collect::<Vec<_>>(),
-                )
-            })
+        .filter_map(|(file_pat, exports)| match globset::Glob::new(file_pat) {
+            Ok(g) => Some((
+                g.compile_matcher(),
+                exports.iter().map(String::as_str).collect::<Vec<_>>(),
+            )),
+            Err(e) => {
+                tracing::warn!("invalid used_exports pattern '{file_pat}': {e}");
+                None
+            }
         })
         .collect()
 }
 
 /// Check whether a module should be skipped for unused-export analysis.
 ///
-/// Skips entry points, CJS-only modules, Svelte files (whose `export let`
-/// declarations are component props), and fully-unreachable modules where
-/// every export has zero references (those are already caught by `find_unused_files`).
-/// Unreachable modules with *some* referenced exports are NOT skipped — their
-/// individually unused exports would otherwise slip through both detectors.
-fn should_skip_module(module: &ModuleNode) -> bool {
-    if module.is_entry_point {
+/// Skips entry points that do not have framework/plugin `used_exports` handling,
+/// CJS-only modules, Svelte files (whose `export let` declarations are component
+/// props), and fully-unreachable modules where every export has zero references
+/// (those are already caught by `find_unused_files`). Unreachable modules with
+/// *some* referenced exports are NOT skipped — their individually unused exports
+/// would otherwise slip through both detectors.
+fn should_skip_module(module: &ModuleNode, has_plugin_used_exports: bool) -> bool {
+    if module.is_entry_point() && !has_plugin_used_exports {
         return true;
     }
-    if !module.is_reachable {
+    if !module.is_reachable() {
         // Completely unreachable with no references at all → caught by find_unused_files
         return module.exports.iter().all(|e| e.references.is_empty());
     }
     // CJS modules with module.exports but no named exports: hard to track individually
-    if module.has_cjs_exports && module.exports.is_empty() {
+    if module.has_cjs_exports() && module.exports.is_empty() {
         return true;
     }
     // Svelte `export let`/`export const` are component props consumed by the runtime;
@@ -107,18 +112,11 @@ pub fn find_unused_exports(
     let reachable_files: FxHashSet<u32> = graph
         .modules
         .iter()
-        .filter(|m| m.is_reachable)
+        .filter(|m| m.is_reachable())
         .map(|m| m.file_id.0)
         .collect();
 
     for module in &graph.modules {
-        if should_skip_module(module) {
-            continue;
-        }
-
-        // Namespace imports are now handled with member-access narrowing in graph.rs:
-        // only specific accessed members get references populated. No blanket skip needed.
-
         // Compute relative path once per module for glob matching
         let relative_path = module
             .path
@@ -139,10 +137,17 @@ pub fn find_unused_exports(
             .map(|(_, exports)| exports)
             .collect();
 
+        if should_skip_module(module, !matching_plugin.is_empty()) {
+            continue;
+        }
+
+        // Namespace imports are now handled with member-access narrowing in graph.rs:
+        // only specific accessed members get references populated. No blanket skip needed.
+
         for export in &module.exports {
             // For unreachable modules, only references from reachable files count —
             // references from other unreachable modules don't save an export.
-            let is_referenced = if module.is_reachable {
+            let is_referenced = if module.is_reachable() {
                 !export.references.is_empty()
             } else {
                 export
@@ -224,7 +229,7 @@ pub fn find_duplicate_exports(
         FxHashMap::default();
 
     for (idx, module) in graph.modules.iter().enumerate() {
-        if !module.is_reachable || module.is_entry_point {
+        if !module.is_reachable() || module.is_entry_point() {
             continue;
         }
 
@@ -288,7 +293,17 @@ pub fn find_duplicate_exports(
                 })
                 .collect();
 
-            if independent.len() > 1 {
+            if independent.len() <= 1 {
+                return None;
+            }
+
+            // Filter: only report duplicates where at least two files share a common
+            // importer in the module graph. Unrelated leaf files (e.g., SvelteKit route
+            // modules in different directories) that happen to export the same name
+            // are not actionable duplicates since they can never be confused at an
+            // import site.
+            let has_shared_importer = has_common_importer(&independent, graph);
+            if has_shared_importer {
                 Some(DuplicateExport {
                     export_name: name,
                     locations: independent,
@@ -298,6 +313,63 @@ pub fn find_duplicate_exports(
             }
         })
         .collect()
+}
+
+/// Check if any two files in the duplicate set share a common importer.
+///
+/// Two files "share a common importer" if there exists a third file that imports
+/// from both. This filters out false positives from unrelated leaf modules (e.g.,
+/// SvelteKit route files in different directories) that coincidentally export the
+/// same name but are never imported together.
+fn has_common_importer(locations: &[DuplicateLocation], graph: &ModuleGraph) -> bool {
+    if locations.len() <= 1 {
+        return false;
+    }
+
+    // Collect FileIds for the duplicate locations by matching paths
+    let file_ids: Vec<FileId> = locations
+        .iter()
+        .filter_map(|loc| {
+            graph
+                .modules
+                .iter()
+                .find(|m| m.path == loc.path)
+                .map(|m| m.file_id)
+        })
+        .collect();
+
+    if file_ids.len() <= 1 {
+        return false;
+    }
+
+    // For each pair, check if they share a common importer via reverse_deps
+    for i in 0..file_ids.len() {
+        let idx_i = file_ids[i].0 as usize;
+        if idx_i >= graph.reverse_deps.len() {
+            continue;
+        }
+        let importers_i: FxHashSet<FileId> = graph.reverse_deps[idx_i].iter().copied().collect();
+        for j in (i + 1)..file_ids.len() {
+            let idx_j = file_ids[j].0 as usize;
+            if idx_j >= graph.reverse_deps.len() {
+                continue;
+            }
+            // Check if any importer of file j also imports file i
+            if graph.reverse_deps[idx_j]
+                .iter()
+                .any(|imp| importers_i.contains(imp))
+            {
+                return true;
+            }
+            // Also check if one directly imports the other
+            if importers_i.contains(&file_ids[j])
+                || graph.reverse_deps[idx_j].contains(&file_ids[i])
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Collect usage counts for all exports in the module graph.
@@ -327,7 +399,7 @@ pub fn collect_export_usages(
     for module in &graph.modules {
         // Skip unreachable modules — no point showing Code Lens for files
         // that aren't reachable from any entry point
-        if !module.is_reachable {
+        if !module.is_reachable() {
             continue;
         }
 
@@ -460,9 +532,11 @@ mod tests {
             boundaries: fallow_config::BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
         .resolve(
             PathBuf::from("/tmp/test"),
@@ -517,7 +591,7 @@ mod tests {
     #[test]
     fn duplicate_exports_no_duplicates_single_module() {
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/utils.ts", false)]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20), make_export("bar", 30, 40)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
@@ -531,10 +605,13 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("helper", 10, 20)];
+        // entry.ts imports both a.ts and b.ts — they share a common importer
+        graph.reverse_deps[1] = vec![FileId(0)];
+        graph.reverse_deps[2] = vec![FileId(0)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
         assert_eq!(result.len(), 1);
@@ -549,7 +626,7 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![ExportSymbol {
             name: ExportName::Default,
             is_type_only: false,
@@ -558,7 +635,7 @@ mod tests {
             references: vec![],
             members: vec![],
         }];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![ExportSymbol {
             name: ExportName::Default,
             is_type_only: false,
@@ -579,9 +656,9 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 0, 0)]; // synthetic
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("helper", 10, 20)]; // real
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
@@ -595,7 +672,7 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
         // Module 2 stays unreachable
         graph.modules[2].exports = vec![make_export("helper", 10, 20)];
@@ -608,7 +685,7 @@ mod tests {
     fn duplicate_exports_skips_entry_points() {
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/b.ts", false)]);
         graph.modules[0].exports = vec![make_export("helper", 10, 20)];
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
@@ -622,7 +699,7 @@ mod tests {
             ("/src/index.ts", false),
             ("/src/helper.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
@@ -630,7 +707,7 @@ mod tests {
             exported_name: "helper".to_string(),
             is_type_only: false,
         }];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("helper", 5, 15)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
@@ -644,9 +721,9 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("helper", 10, 20)];
 
         let supp = vec![Suppression {
@@ -669,14 +746,64 @@ mod tests {
             ("/src/c.ts", false),
         ]);
         for i in 1..=3 {
-            graph.modules[i].is_reachable = true;
+            graph.modules[i].set_reachable(true);
             graph.modules[i].exports = vec![make_export("sharedFn", 10, 20)];
         }
+        // entry.ts imports all three — they share a common importer
+        graph.reverse_deps[1] = vec![FileId(0)];
+        graph.reverse_deps[2] = vec![FileId(0)];
+        graph.reverse_deps[3] = vec![FileId(0)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].export_name, "sharedFn");
         assert_eq!(result[0].locations.len(), 3);
+    }
+
+    #[test]
+    fn duplicate_exports_unrelated_leaf_files_not_flagged() {
+        // Two route files exporting the same name but with no common importer
+        // (e.g., SvelteKit routes in different directories)
+        let mut graph = build_graph(&[
+            ("/src/entry.ts", true),
+            ("/src/routes/foo/page.ts", false),
+            ("/src/routes/bar/page.ts", false),
+        ]);
+        graph.modules[1].set_reachable(true);
+        graph.modules[1].exports = vec![make_export("Area", 10, 20)];
+        graph.modules[2].set_reachable(true);
+        graph.modules[2].exports = vec![make_export("Area", 10, 20)];
+        // No shared importer: each is imported by a different parent
+        // (or not imported at all — just reachable via framework routing)
+        let suppressions = FxHashMap::default();
+        let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
+        assert!(
+            result.is_empty(),
+            "unrelated leaf files should not be flagged as duplicates"
+        );
+    }
+
+    #[test]
+    fn duplicate_exports_direct_import_still_flagged() {
+        // Two files where one imports the other — they are connected
+        let mut graph = build_graph(&[
+            ("/src/entry.ts", true),
+            ("/src/a.ts", false),
+            ("/src/b.ts", false),
+        ]);
+        graph.modules[1].set_reachable(true);
+        graph.modules[1].exports = vec![make_export("helper", 10, 20)];
+        graph.modules[2].set_reachable(true);
+        graph.modules[2].exports = vec![make_export("helper", 10, 20)];
+        // a.ts imports b.ts directly
+        graph.reverse_deps[2] = vec![FileId(1)];
+        let suppressions = FxHashMap::default();
+        let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
+        assert_eq!(
+            result.len(),
+            1,
+            "directly connected files should still be flagged"
+        );
     }
 
     #[test]
@@ -686,9 +813,9 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("bar", 10, 20)];
         let suppressions = FxHashMap::default();
         let result = find_duplicate_exports(&graph, &suppressions, &FxHashMap::default());
@@ -717,9 +844,11 @@ mod tests {
             boundaries: fallow_config::BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
         .resolve(
             PathBuf::from("/tmp/test"),
@@ -739,6 +868,7 @@ mod tests {
             config_patterns: vec![],
             always_used: vec![],
             used_exports,
+            entry_point_roles: FxHashMap::default(),
             referenced_dependencies: vec![],
             discovered_always_used: vec![],
             setup_files: vec![],
@@ -748,6 +878,7 @@ mod tests {
             generated_import_patterns: vec![],
             path_aliases: vec![],
             active_plugins: vec![],
+            fixture_patterns: vec![],
         }
     }
 
@@ -781,7 +912,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -798,7 +929,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_referenced_export("helper", 10, 20, 0)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -814,7 +945,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![ExportSymbol {
             name: ExportName::Named("publicFn".to_string()),
             is_type_only: false,
@@ -837,7 +968,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![
             make_export("valueFn", 10, 20),
             make_type_export("MyType", 30, 40),
@@ -884,6 +1015,36 @@ mod tests {
         assert!(types.is_empty());
     }
 
+    #[test]
+    fn unused_exports_reports_non_framework_exports_in_entry_point_with_plugin_rules() {
+        let mut graph = build_graph(&[("/tmp/test/src/app/page.tsx", true)]);
+        graph.modules[0].set_reachable(true);
+        graph.modules[0].exports = vec![
+            make_export("default", 10, 20),
+            make_export("generateMetadata", 30, 40),
+            make_export("helper", 50, 60),
+        ];
+
+        let plugin = make_plugin_result(vec![(
+            "src/app/**/page.{ts,tsx,js,jsx}".to_string(),
+            vec!["default".to_string(), "generateMetadata".to_string()],
+        )]);
+        let config = test_config();
+        let suppressions = FxHashMap::default();
+
+        let (exports, types) = find_unused_exports(
+            &graph,
+            &config,
+            Some(&plugin),
+            &suppressions,
+            &FxHashMap::default(),
+        );
+
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].export_name, "helper");
+        assert!(types.is_empty());
+    }
+
     // -- should_skip_module: CJS-only --
 
     #[test]
@@ -892,8 +1053,8 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/legacy.js", false),
         ]);
-        graph.modules[1].is_reachable = true;
-        graph.modules[1].has_cjs_exports = true;
+        graph.modules[1].set_reachable(true);
+        graph.modules[1].set_cjs_exports(true);
         // No named exports, only module.exports
         graph.modules[1].exports = vec![];
         let config = test_config();
@@ -910,8 +1071,8 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/mixed.js", false),
         ]);
-        graph.modules[1].is_reachable = true;
-        graph.modules[1].has_cjs_exports = true;
+        graph.modules[1].set_reachable(true);
+        graph.modules[1].set_cjs_exports(true);
         graph.modules[1].exports = vec![make_export("namedFn", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -929,7 +1090,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/Component.svelte", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("count", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -947,8 +1108,8 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
-        graph.modules[1].has_cjs_exports = false;
+        graph.modules[1].set_reachable(true);
+        graph.modules[1].set_cjs_exports(false);
         graph.modules[1].exports = vec![make_export("helper", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -966,7 +1127,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
         let config = test_config(); // no ignore_exports rules
         let suppressions = FxHashMap::default();
@@ -988,9 +1149,9 @@ mod tests {
             ("/tmp/test/src/types.ts", false),
             ("/tmp/test/src/constants.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("MyType", 10, 20)];
-        graph.modules[2].is_reachable = true;
+        graph.modules[2].set_reachable(true);
         graph.modules[2].exports = vec![make_export("MY_CONST", 10, 20)];
 
         let config = test_config_with_ignore_exports(vec![
@@ -1020,7 +1181,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
 
         // Invalid glob pattern with unclosed bracket
@@ -1047,7 +1208,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/types.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("TypeA", 10, 20), make_export("TypeB", 30, 40)];
 
         let config = test_config_with_ignore_exports(vec![fallow_config::IgnoreExportRule {
@@ -1071,7 +1232,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![
             make_export("ignored", 10, 20),
             make_export("reported", 30, 40),
@@ -1096,7 +1257,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
 
         let config = test_config_with_ignore_exports(vec![fallow_config::IgnoreExportRule {
@@ -1121,7 +1282,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -1142,7 +1303,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -1169,7 +1330,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/pages/index.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![
             make_export("getStaticProps", 10, 20),
             make_export("unusedHelper", 30, 40),
@@ -1199,7 +1360,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/api/handler.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("handler", 10, 20)];
 
         let config = test_config_with_ignore_exports(vec![fallow_config::IgnoreExportRule {
@@ -1232,7 +1393,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/utils.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export("foo", 10, 20)];
         let config = test_config();
         let suppressions = FxHashMap::default();
@@ -1256,7 +1417,7 @@ mod tests {
             ("/tmp/test/src/entry.ts", true),
             ("/tmp/test/src/barrel.ts", false),
         ]);
-        graph.modules[1].is_reachable = true;
+        graph.modules[1].set_reachable(true);
         // Span 0..0 is the re-export sentinel
         graph.modules[1].exports = vec![make_export("reexported", 0, 0)];
         let config = test_config();

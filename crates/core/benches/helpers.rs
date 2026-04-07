@@ -25,9 +25,11 @@ pub fn make_config(root: PathBuf, no_cache: bool) -> fallow_config::ResolvedConf
         boundaries: BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, no_cache, true)
 }

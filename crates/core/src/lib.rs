@@ -22,7 +22,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use errors::FallowError;
-use fallow_config::{PackageJson, ResolvedConfig, discover_workspaces};
+use fallow_config::{
+    EntryPointRole, PackageJson, ResolvedConfig, discover_workspaces, find_undeclared_workspaces,
+};
 use rayon::prelude::*;
 use results::AnalysisResults;
 use trace::PipelineTimings;
@@ -142,6 +144,14 @@ pub fn analyze_with_parse_result(
         tracing::info!(count = workspaces_vec.len(), "workspaces discovered");
     }
 
+    // Warn about directories with package.json not declared as workspaces
+    if !config.quiet {
+        let undeclared = find_undeclared_workspaces(&config.root, &workspaces_vec);
+        for diag in &undeclared {
+            tracing::warn!("{}", diag.message);
+        }
+    }
+
     // Stage 1: Discover files (cheap — needed for file registry and resolution)
     let t = Instant::now();
     let pb = progress.stage_spinner("Discovering files...");
@@ -172,6 +182,9 @@ pub fn analyze_with_parse_result(
     let entry_points = discover_all_entry_points(config, files, workspaces, &plugin_result);
     let entry_points_ms = t.elapsed().as_secs_f64() * 1000.0;
 
+    // Compute entry-point summary before the graph consumes the entry_points vec
+    let ep_summary = summarize_entry_points(&entry_points.all);
+
     // Stage 4: Resolve imports to file IDs
     let t = Instant::now();
     let pb = progress.stage_spinner("Resolving imports...");
@@ -189,14 +202,20 @@ pub fn analyze_with_parse_result(
     // Stage 5: Build module graph
     let t = Instant::now();
     let pb = progress.stage_spinner("Building module graph...");
-    let graph = graph::ModuleGraph::build(&resolved, &entry_points, files);
+    let graph = graph::ModuleGraph::build_with_reachability_roots(
+        &resolved,
+        &entry_points.all,
+        &entry_points.runtime,
+        &entry_points.test,
+        files,
+    );
     let graph_ms = t.elapsed().as_secs_f64() * 1000.0;
     pb.finish_and_clear();
 
     // Stage 6: Analyze for dead code
     let t = Instant::now();
     let pb = progress.stage_spinner("Analyzing...");
-    let result = analyze::find_dead_code_full(
+    let mut result = analyze::find_dead_code_full(
         &graph,
         config,
         &resolved,
@@ -208,6 +227,8 @@ pub fn analyze_with_parse_result(
     let analyze_ms = t.elapsed().as_secs_f64() * 1000.0;
     pb.finish_and_clear();
     progress.finish();
+
+    result.entry_point_summary = Some(ep_summary);
 
     let total_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -232,7 +253,7 @@ pub fn analyze_with_parse_result(
         scripts_ms,
         modules.len(),
         entry_points_ms,
-        entry_points.len(),
+        entry_points.all.len(),
         resolve_ms,
         graph_ms,
         analyze_ms,
@@ -252,7 +273,7 @@ pub fn analyze_with_parse_result(
         cache_misses: 0,
         cache_update_ms: 0.0,
         entry_points_ms,
-        entry_point_count: entry_points.len(),
+        entry_point_count: entry_points.all.len(),
         resolve_imports_ms: resolve_ms,
         build_graph_ms: graph_ms,
         analyze_ms,
@@ -306,6 +327,14 @@ fn analyze_full(
         tracing::info!(count = workspaces_vec.len(), "workspaces discovered");
     }
 
+    // Warn about directories with package.json not declared as workspaces
+    if !config.quiet {
+        let undeclared = find_undeclared_workspaces(&config.root, &workspaces_vec);
+        for diag in &undeclared {
+            tracing::warn!("{}", diag.message);
+        }
+    }
+
     // Stage 1: Discover all source files
     let t = Instant::now();
     let pb = progress.stage_spinner("Discovering files...");
@@ -340,7 +369,7 @@ fn analyze_full(
         cache::CacheStore::load(&config.cache_dir)
     };
 
-    let parse_result = extract::parse_all_files(files, cache_store.as_ref());
+    let parse_result = extract::parse_all_files(files, cache_store.as_ref(), false);
     let modules = parse_result.modules;
     let cache_hits = parse_result.cache_hits;
     let cache_misses = parse_result.cache_misses;
@@ -380,14 +409,23 @@ fn analyze_full(
     // Stage 5: Build module graph
     let t = Instant::now();
     let pb = progress.stage_spinner("Building module graph...");
-    let graph = graph::ModuleGraph::build(&resolved, &entry_points, files);
+    let graph = graph::ModuleGraph::build_with_reachability_roots(
+        &resolved,
+        &entry_points.all,
+        &entry_points.runtime,
+        &entry_points.test,
+        files,
+    );
     let graph_ms = t.elapsed().as_secs_f64() * 1000.0;
     pb.finish_and_clear();
+
+    // Compute entry-point summary before the graph consumes the entry_points vec
+    let ep_summary = summarize_entry_points(&entry_points.all);
 
     // Stage 6: Analyze for dead code (with plugin context and workspace info)
     let t = Instant::now();
     let pb = progress.stage_spinner("Analyzing...");
-    let result = analyze::find_dead_code_full(
+    let mut result = analyze::find_dead_code_full(
         &graph,
         config,
         &resolved,
@@ -399,6 +437,8 @@ fn analyze_full(
     let analyze_ms = t.elapsed().as_secs_f64() * 1000.0;
     pb.finish_and_clear();
     progress.finish();
+
+    result.entry_point_summary = Some(ep_summary);
 
     let total_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -433,7 +473,7 @@ fn analyze_full(
         cache_summary,
         cache_ms,
         entry_points_ms,
-        entry_points.len(),
+        entry_points.all.len(),
         resolve_ms,
         graph_ms,
         analyze_ms,
@@ -454,7 +494,7 @@ fn analyze_full(
             cache_misses,
             cache_update_ms: cache_ms,
             entry_points_ms,
-            entry_point_count: entry_points.len(),
+            entry_point_count: entry_points.all.len(),
             resolve_imports_ms: resolve_ms,
             build_graph_ms: graph_ms,
             analyze_ms,
@@ -494,7 +534,7 @@ fn analyze_all_scripts(
 
         for config_file in &script_analysis.config_files {
             plugin_result
-                .entry_patterns
+                .discovered_always_used
                 .push((config_file.clone(), "scripts".to_string()));
         }
     }
@@ -520,7 +560,7 @@ fn analyze_all_scripts(
                 .to_string_lossy();
             for config_file in &ws_analysis.config_files {
                 plugin_result
-                    .entry_patterns
+                    .discovered_always_used
                     .push((format!("{ws_prefix}/{config_file}"), "scripts".to_string()));
             }
         }
@@ -529,6 +569,10 @@ fn analyze_all_scripts(
     // Scan CI config files for binary invocations
     let ci_packages = scripts::ci::analyze_ci_files(&config.root);
     plugin_result.script_used_packages.extend(ci_packages);
+    plugin_result
+        .entry_point_roles
+        .entry("scripts".to_string())
+        .or_insert(EntryPointRole::Support);
 }
 
 /// Discover all entry points from static patterns, workspaces, plugins, and infrastructure.
@@ -537,18 +581,56 @@ fn discover_all_entry_points(
     files: &[discover::DiscoveredFile],
     workspaces: &[fallow_config::WorkspaceInfo],
     plugin_result: &plugins::AggregatedPluginResult,
-) -> Vec<discover::EntryPoint> {
-    let mut entry_points = discover::discover_entry_points(config, files);
+) -> discover::CategorizedEntryPoints {
+    let mut entry_points = discover::CategorizedEntryPoints::default();
+    entry_points.extend_runtime(discover::discover_entry_points(config, files));
+
     let ws_entries: Vec<_> = workspaces
         .par_iter()
         .flat_map(|ws| discover::discover_workspace_entry_points(&ws.root, config, files))
         .collect();
-    entry_points.extend(ws_entries);
-    let plugin_entries = discover::discover_plugin_entry_points(plugin_result, config, files);
+    entry_points.extend_runtime(ws_entries);
+
+    let plugin_entries = discover::discover_plugin_entry_point_sets(plugin_result, config, files);
     entry_points.extend(plugin_entries);
+
     let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
-    entry_points.extend(infra_entries);
-    entry_points
+    entry_points.extend_runtime(infra_entries);
+
+    // Add dynamically loaded files from config as entry points
+    if !config.dynamically_loaded.is_empty() {
+        let dynamic_entries = discover::discover_dynamically_loaded_entry_points(config, files);
+        entry_points.extend_runtime(dynamic_entries);
+    }
+
+    entry_points.dedup()
+}
+
+/// Summarize entry points by source category for user-facing output.
+fn summarize_entry_points(entry_points: &[discover::EntryPoint]) -> results::EntryPointSummary {
+    let mut counts: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
+    for ep in entry_points {
+        let category = match &ep.source {
+            discover::EntryPointSource::PackageJsonMain
+            | discover::EntryPointSource::PackageJsonModule
+            | discover::EntryPointSource::PackageJsonExports
+            | discover::EntryPointSource::PackageJsonBin
+            | discover::EntryPointSource::PackageJsonScript => "package.json",
+            discover::EntryPointSource::Plugin { .. } => "plugin",
+            discover::EntryPointSource::TestFile => "test file",
+            discover::EntryPointSource::DefaultIndex => "default index",
+            discover::EntryPointSource::ManualEntry => "manual entry",
+            discover::EntryPointSource::InfrastructureConfig => "config",
+            discover::EntryPointSource::DynamicallyLoaded => "dynamically loaded",
+        };
+        *counts.entry(category.to_string()).or_insert(0) += 1;
+    }
+    let mut by_source: Vec<(String, usize)> = counts.into_iter().collect();
+    by_source.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    results::EntryPointSummary {
+        total: entry_points.len(),
+        by_source,
+    }
 }
 
 /// Run plugins for root project and all workspace packages.
@@ -619,6 +701,8 @@ fn run_plugins(
         result.active_plugins.iter().cloned().collect();
     let mut seen_prefixes: rustc_hash::FxHashSet<String> =
         result.virtual_module_prefixes.iter().cloned().collect();
+    let mut seen_generated: rustc_hash::FxHashSet<String> =
+        result.generated_import_patterns.iter().cloned().collect();
     for (ws_result, ws_prefix) in ws_results {
         // Prefix helper: workspace-relative patterns need the workspace prefix
         // to be matchable from the monorepo root. But patterns that are already
@@ -637,6 +721,9 @@ fn run_plugins(
                 .entry_patterns
                 .push((prefix_if_needed(pat), pname.clone()));
         }
+        for (plugin_name, role) in ws_result.entry_point_roles {
+            result.entry_point_roles.entry(plugin_name).or_insert(role);
+        }
         for (pat, pname) in &ws_result.always_used {
             result
                 .always_used
@@ -645,6 +732,11 @@ fn run_plugins(
         for (pat, pname) in &ws_result.discovered_always_used {
             result
                 .discovered_always_used
+                .push((prefix_if_needed(pat), pname.clone()));
+        }
+        for (pat, pname) in &ws_result.fixture_patterns {
+            result
+                .fixture_patterns
                 .push((prefix_if_needed(pat), pname.clone()));
         }
         for (file_pat, exports) in &ws_result.used_exports {
@@ -674,6 +766,21 @@ fn run_plugins(
                 seen_prefixes.insert(prefix.clone());
                 result.virtual_module_prefixes.push(prefix);
             }
+        }
+        // Generated import patterns (e.g., SvelteKit /$types) are suffix
+        // matches on specifiers, not file paths — no workspace prefix needed.
+        for pattern in ws_result.generated_import_patterns {
+            if !seen_generated.contains(&pattern) {
+                seen_generated.insert(pattern.clone());
+                result.generated_import_patterns.push(pattern);
+            }
+        }
+        // Path aliases from workspace plugins (e.g., SvelteKit $lib/ → src/lib).
+        // Prefix the replacement directory so it resolves from the monorepo root.
+        for (prefix, replacement) in ws_result.path_aliases {
+            result
+                .path_aliases
+                .push((prefix, format!("{ws_prefix}/{replacement}")));
         }
     }
 

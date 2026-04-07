@@ -35,6 +35,11 @@ const ALWAYS_USED: &[&str] = &[
 
 const TOOLING_DEPENDENCIES: &[&str] = &["vitest"];
 
+const FIXTURE_PATTERNS: &[&str] = &[
+    "**/__fixtures__/**/*.{ts,tsx,js,jsx,json}",
+    "**/fixtures/**/*.{ts,tsx,js,jsx,json}",
+];
+
 /// Built-in Vitest reporter names that should not be treated as dependencies.
 const BUILTIN_REPORTERS: &[&str] = &[
     "default",
@@ -99,6 +104,10 @@ impl Plugin for VitestPlugin {
 
     fn tooling_dependencies(&self) -> &'static [&'static str] {
         TOOLING_DEPENDENCIES
+    }
+
+    fn fixture_glob_patterns(&self) -> &'static [&'static str] {
+        FIXTURE_PATTERNS
     }
 
     fn resolve_config(&self, config_path: &Path, source: &str, root: &Path) -> PluginResult {

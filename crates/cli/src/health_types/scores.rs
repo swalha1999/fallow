@@ -3,6 +3,9 @@
 /// Hotspot score threshold for counting a file as a hotspot in vital signs.
 pub const HOTSPOT_SCORE_THRESHOLD: f64 = 50.0;
 
+/// Cognitive complexity threshold above which a function is flagged for extraction.
+pub const COGNITIVE_EXTRACTION_THRESHOLD: u16 = 30;
+
 /// Project-level health score: a single 0–100 number with letter grade.
 ///
 /// ## Score Formula
@@ -140,6 +143,9 @@ pub struct HealthSummary {
     /// Average maintainability index across all scored files (only set with `--file-scores`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub average_maintainability: Option<f64>,
+    /// Coverage model used for CRAP computation (None when file scores not computed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage_model: Option<CoverageModel>,
 }
 
 /// Per-file health score combining complexity, coupling, and dead code metrics.
@@ -185,6 +191,19 @@ pub struct FileHealthScore {
     pub function_count: usize,
     /// Total lines of code (from line_offsets).
     pub lines: u32,
+    /// Maximum CRAP score among functions in this file.
+    /// Static binary model: test-reachable file = CC, untested = CC^2 + CC.
+    pub crap_max: f64,
+    /// Count of functions with CRAP >= 30 (CC >= 5 without test path).
+    pub crap_above_threshold: usize,
+}
+
+/// Coverage model used for CRAP score computation.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageModel {
+    /// Binary model: test-reachable = CC, untested = CC^2 + CC.
+    StaticBinary,
 }
 
 /// A hotspot: a file that is both complex and frequently changing.
@@ -304,5 +323,11 @@ mod tests {
         // None fields should be absent
         assert!(!json.contains("maintainability"));
         assert!(!json.contains("hotspots"));
+    }
+
+    #[test]
+    fn coverage_model_serializes_as_snake_case() {
+        let json = serde_json::to_string(&CoverageModel::StaticBinary).unwrap();
+        assert_eq!(json, r#""static_binary""#);
     }
 }

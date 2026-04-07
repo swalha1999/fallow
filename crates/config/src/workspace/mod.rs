@@ -29,6 +29,15 @@ pub struct WorkspaceInfo {
     pub is_internal_dependency: bool,
 }
 
+/// A diagnostic about workspace configuration issues.
+#[derive(Debug, Clone)]
+pub struct WorkspaceDiagnostic {
+    /// Path to the directory with the issue.
+    pub path: PathBuf,
+    /// Human-readable description of the issue.
+    pub message: String,
+}
+
 /// Discover all workspace packages in a monorepo.
 ///
 /// Sources (additive, deduplicated by canonical path):
@@ -38,7 +47,7 @@ pub struct WorkspaceInfo {
 #[must_use]
 pub fn discover_workspaces(root: &Path) -> Vec<WorkspaceInfo> {
     let patterns = collect_workspace_patterns(root);
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     let mut workspaces = expand_patterns_to_workspaces(root, &patterns, &canonical_root);
     workspaces.extend(collect_tsconfig_workspaces(root, &canonical_root));
@@ -49,6 +58,116 @@ pub fn discover_workspaces(root: &Path) -> Vec<WorkspaceInfo> {
 
     mark_internal_dependencies(&mut workspaces);
     workspaces.into_iter().map(|(ws, _)| ws).collect()
+}
+
+/// Find directories containing `package.json` that are not declared as workspaces.
+///
+/// Only meaningful in monorepos that declare workspaces (via `package.json` `workspaces`
+/// field or `pnpm-workspace.yaml`). Scans up to two directory levels deep, skipping
+/// hidden directories, `node_modules`, and `build`.
+#[must_use]
+pub fn find_undeclared_workspaces(
+    root: &Path,
+    declared: &[WorkspaceInfo],
+) -> Vec<WorkspaceDiagnostic> {
+    // Only run when workspaces are declared
+    let patterns = collect_workspace_patterns(root);
+    if patterns.is_empty() {
+        return Vec::new();
+    }
+
+    let declared_roots: rustc_hash::FxHashSet<PathBuf> = declared
+        .iter()
+        .map(|w| dunce::canonicalize(&w.root).unwrap_or_else(|_| w.root.clone()))
+        .collect();
+
+    let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    let mut undeclared = Vec::new();
+
+    // Walk first two levels of directories
+    let Ok(top_entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    for entry in top_entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') || name_str == "node_modules" || name_str == "build" {
+            continue;
+        }
+
+        // Check this directory itself
+        check_undeclared(
+            &path,
+            root,
+            &canonical_root,
+            &declared_roots,
+            &mut undeclared,
+        );
+
+        // Check immediate children (second level)
+        let Ok(child_entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for child in child_entries.filter_map(Result::ok) {
+            let child_path = child.path();
+            if !child_path.is_dir() {
+                continue;
+            }
+            let child_name = child.file_name();
+            let child_name_str = child_name.to_string_lossy();
+            if child_name_str.starts_with('.')
+                || child_name_str == "node_modules"
+                || child_name_str == "build"
+            {
+                continue;
+            }
+            check_undeclared(
+                &child_path,
+                root,
+                &canonical_root,
+                &declared_roots,
+                &mut undeclared,
+            );
+        }
+    }
+
+    undeclared
+}
+
+/// Check a single directory for an undeclared workspace.
+fn check_undeclared(
+    dir: &Path,
+    root: &Path,
+    canonical_root: &Path,
+    declared_roots: &rustc_hash::FxHashSet<PathBuf>,
+    undeclared: &mut Vec<WorkspaceDiagnostic>,
+) {
+    if !dir.join("package.json").exists() {
+        return;
+    }
+    let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    // Skip the project root itself
+    if canonical == *canonical_root {
+        return;
+    }
+    if declared_roots.contains(&canonical) {
+        return;
+    }
+    let relative = dir.strip_prefix(root).unwrap_or(dir);
+    undeclared.push(WorkspaceDiagnostic {
+        path: dir.to_path_buf(),
+        message: format!(
+            "Directory '{}' contains package.json but is not declared as a workspace",
+            relative.display()
+        ),
+    });
 }
 
 /// Collect glob patterns from `package.json` `workspaces` field and `pnpm-workspace.yaml`.
@@ -174,7 +293,7 @@ fn collect_tsconfig_workspaces(
     let mut workspaces = Vec::new();
 
     for dir in parse_tsconfig_references(root) {
-        let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        let canonical_dir = dunce::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
         // Security: skip references pointing to project root or outside it
         if canonical_dir == *canonical_root || !canonical_dir.starts_with(canonical_root) {
             continue;
@@ -219,7 +338,7 @@ fn mark_internal_dependencies(workspaces: &mut Vec<(WorkspaceInfo, Vec<String>)>
     {
         let mut seen = rustc_hash::FxHashSet::default();
         workspaces.retain(|(ws, _)| {
-            let canonical = ws.root.canonicalize().unwrap_or_else(|_| ws.root.clone());
+            let canonical = dunce::canonicalize(&ws.root).unwrap_or_else(|_| ws.root.clone());
             seen.insert(canonical)
         });
     }
@@ -620,5 +739,99 @@ mod tests {
         let workspaces = discover_workspaces(dir.path());
         assert_eq!(workspaces.len(), 1);
         assert_eq!(workspaces[0].name, "my-app", "should fall back to dir name");
+    }
+
+    // ── find_undeclared_workspaces ─────────────────────────────────
+
+    #[test]
+    fn undeclared_workspace_detected() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pkg_a = dir.path().join("packages").join("a");
+        let pkg_b = dir.path().join("packages").join("b");
+        std::fs::create_dir_all(&pkg_a).unwrap();
+        std::fs::create_dir_all(&pkg_b).unwrap();
+
+        // Only packages/a is declared as a workspace
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces": ["packages/a"]}"#,
+        )
+        .unwrap();
+        std::fs::write(pkg_a.join("package.json"), r#"{"name": "a"}"#).unwrap();
+        std::fs::write(pkg_b.join("package.json"), r#"{"name": "b"}"#).unwrap();
+
+        let declared = discover_workspaces(dir.path());
+        assert_eq!(declared.len(), 1);
+
+        let undeclared = find_undeclared_workspaces(dir.path(), &declared);
+        assert_eq!(undeclared.len(), 1);
+        assert!(
+            undeclared[0]
+                .path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .contains("packages/b"),
+            "should detect packages/b as undeclared: {:?}",
+            undeclared[0].path
+        );
+    }
+
+    #[test]
+    fn no_undeclared_when_all_covered() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pkg_a = dir.path().join("packages").join("a");
+        std::fs::create_dir_all(&pkg_a).unwrap();
+
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces": ["packages/*"]}"#,
+        )
+        .unwrap();
+        std::fs::write(pkg_a.join("package.json"), r#"{"name": "a"}"#).unwrap();
+
+        let declared = discover_workspaces(dir.path());
+        let undeclared = find_undeclared_workspaces(dir.path(), &declared);
+        assert!(undeclared.is_empty());
+    }
+
+    #[test]
+    fn no_undeclared_when_no_workspace_patterns() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let sub = dir.path().join("lib");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        // No workspaces field at all — non-monorepo project
+        std::fs::write(dir.path().join("package.json"), r#"{"name": "app"}"#).unwrap();
+        std::fs::write(sub.join("package.json"), r#"{"name": "lib"}"#).unwrap();
+
+        let undeclared = find_undeclared_workspaces(dir.path(), &[]);
+        assert!(
+            undeclared.is_empty(),
+            "should skip check when no workspace patterns exist"
+        );
+    }
+
+    #[test]
+    fn undeclared_skips_node_modules_and_hidden_dirs() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let nm = dir.path().join("node_modules").join("some-pkg");
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir_all(&nm).unwrap();
+        std::fs::create_dir_all(&hidden).unwrap();
+
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces": ["packages/*"]}"#,
+        )
+        .unwrap();
+        // Put package.json in node_modules and hidden dirs
+        std::fs::write(nm.join("package.json"), r#"{"name": "nm-pkg"}"#).unwrap();
+        std::fs::write(hidden.join("package.json"), r#"{"name": "hidden"}"#).unwrap();
+
+        let undeclared = find_undeclared_workspaces(dir.path(), &[]);
+        assert!(
+            undeclared.is_empty(),
+            "should not flag node_modules or hidden directories"
+        );
     }
 }

@@ -24,6 +24,11 @@ const ALWAYS_USED: &[&str] = &["playwright.config.{ts,js}"];
 
 const TOOLING_DEPENDENCIES: &[&str] = &["@playwright/test", "playwright"];
 
+const FIXTURE_PATTERNS: &[&str] = &[
+    "**/fixtures/**/*.{ts,tsx,js,jsx,json}",
+    "e2e/fixtures/**/*.{ts,tsx,js,jsx,json}",
+];
+
 impl Plugin for PlaywrightPlugin {
     fn name(&self) -> &'static str {
         "playwright"
@@ -47,6 +52,10 @@ impl Plugin for PlaywrightPlugin {
 
     fn tooling_dependencies(&self) -> &'static [&'static str] {
         TOOLING_DEPENDENCIES
+    }
+
+    fn fixture_glob_patterns(&self) -> &'static [&'static str] {
+        FIXTURE_PATTERNS
     }
 
     fn resolve_config(&self, config_path: &Path, source: &str, root: &Path) -> PluginResult {

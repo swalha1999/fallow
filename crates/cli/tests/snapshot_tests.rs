@@ -116,6 +116,7 @@ fn sample_results(root: &Path) -> AnalysisResults {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
 
     r
@@ -498,6 +499,7 @@ fn sarif_mixed_severity_snapshot() {
         circular_dependencies: fallow_config::Severity::Warn,
         test_only_dependencies: fallow_config::Severity::Warn,
         boundary_violation: fallow_config::Severity::Warn,
+        coverage_gaps: fallow_config::Severity::Warn,
     };
     let sarif = build_sarif(&results, &root, &rules);
     let json_str = serde_json::to_string_pretty(&sarif).expect("should serialize");
@@ -1225,6 +1227,7 @@ fn codeclimate_mixed_severity_snapshot() {
         circular_dependencies: fallow_config::Severity::Warn,
         test_only_dependencies: fallow_config::Severity::Warn,
         boundary_violation: fallow_config::Severity::Warn,
+        coverage_gaps: fallow_config::Severity::Warn,
     };
     let cc = build_codeclimate(&results, &root, &rules);
     let json_str = serde_json::to_string_pretty(&cc).expect("should serialize");
@@ -1284,6 +1287,7 @@ fn codeclimate_circular_deps_only_snapshot() {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     let cc = build_codeclimate(&results, &root, &RulesConfig::default());
     let json_str = serde_json::to_string_pretty(&cc).expect("should serialize");
@@ -1352,6 +1356,7 @@ fn json_circular_deps_only_snapshot() {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     let value = build_json(&results, &root, Duration::ZERO).expect("JSON build should succeed");
     let json_str = serde_json::to_string_pretty(&value).expect("should serialize");
@@ -1367,6 +1372,7 @@ fn sarif_circular_deps_only_snapshot() {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     let sarif = build_sarif(&results, &root, &RulesConfig::default());
     let json_str = serde_json::to_string_pretty(&sarif).expect("should serialize");
@@ -1382,6 +1388,7 @@ fn compact_circular_deps_only_snapshot() {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     let lines = build_compact_lines(&results, &root);
     insta::assert_snapshot!("compact_circular_deps_only", lines.join("\n"));
@@ -1694,6 +1701,7 @@ fn markdown_circular_deps_only_snapshot() {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     let output = build_markdown(&results, &root);
     insta::assert_snapshot!("markdown_circular_deps_only", output);
@@ -1766,10 +1774,12 @@ fn sample_health_report(root: &Path) -> HealthReport {
             max_cognitive_threshold: 15,
             files_scored: None,
             average_maintainability: None,
+            coverage_model: None,
         },
         vital_signs: None,
         health_score: None,
         file_scores: vec![],
+        coverage_gaps: None,
         hotspots: vec![],
         hotspot_summary: None,
         targets: vec![],
@@ -1790,10 +1800,12 @@ const fn empty_health_report() -> HealthReport {
             max_cognitive_threshold: 15,
             files_scored: None,
             average_maintainability: None,
+            coverage_model: None,
         },
         vital_signs: None,
         health_score: None,
         file_scores: vec![],
+        coverage_gaps: None,
         hotspots: vec![],
         hotspot_summary: None,
         targets: vec![],
@@ -1832,6 +1844,7 @@ fn markdown_health_with_vital_signs_snapshot() {
         maintainability_avg: Some(72.4),
         unused_dep_count: Some(3),
         circular_dep_count: Some(1),
+        counts: None,
     });
     let output = build_health_markdown(&report, &root);
     insta::assert_snapshot!("markdown_health_with_vital_signs", output);
@@ -1901,6 +1914,7 @@ fn health_report_with_score(root: &Path) -> HealthReport {
         maintainability_avg: Some(85.2),
         unused_dep_count: Some(22),
         circular_dep_count: Some(4),
+        counts: None,
     });
     report.health_score = Some(HealthScore {
         score: 76.9,
@@ -1959,6 +1973,7 @@ fn health_report_with_trend(root: &Path) -> HealthReport {
             git_sha: Some("abc1234".into()),
             score: Some(72.0),
             grade: Some("B".into()),
+            coverage_model: None,
         },
         metrics: vec![
             TrendMetric {
@@ -2058,6 +2073,7 @@ fn sample_duplication_report(root: &Path) -> DuplicationReport {
             line_count: 11,
         }],
         clone_families: vec![],
+        mirrored_directories: vec![],
         stats: DuplicationStats {
             total_files: 100,
             files_with_clones: 2,

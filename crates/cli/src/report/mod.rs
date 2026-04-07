@@ -32,6 +32,10 @@ pub struct ReportContext<'a> {
     pub explain: bool,
     /// When set, group all output by this resolver.
     pub group_by: Option<OwnershipResolver>,
+    /// Limit displayed items per section (--top N).
+    pub top: Option<usize>,
+    /// When set, print a concise summary instead of the full report.
+    pub summary: bool,
 }
 
 /// Strip the project root prefix from a path for display, falling back to the full path.
@@ -150,7 +154,18 @@ pub fn print_results(
 
     match output {
         OutputFormat::Human => {
-            human::print_human(results, ctx.root, ctx.rules, ctx.elapsed, ctx.quiet);
+            if ctx.summary {
+                human::check::print_check_summary(results, ctx.rules, ctx.elapsed, ctx.quiet);
+            } else {
+                human::print_human(
+                    results,
+                    ctx.root,
+                    ctx.rules,
+                    ctx.elapsed,
+                    ctx.quiet,
+                    ctx.top,
+                );
+            }
             ExitCode::SUCCESS
         }
         OutputFormat::Json => {
@@ -210,13 +225,9 @@ fn print_grouped_results(
             markdown::print_grouped_markdown(groups, ctx.root);
             ExitCode::SUCCESS
         }
-        OutputFormat::Sarif => {
-            sarif::print_grouped_sarif(original, ctx.root, ctx.rules, resolver);
-            ExitCode::SUCCESS
-        }
+        OutputFormat::Sarif => sarif::print_grouped_sarif(original, ctx.root, ctx.rules, resolver),
         OutputFormat::CodeClimate => {
-            codeclimate::print_grouped_codeclimate(original, ctx.root, ctx.rules, resolver);
-            ExitCode::SUCCESS
+            codeclimate::print_grouped_codeclimate(original, ctx.root, ctx.rules, resolver)
         }
         OutputFormat::Badge => {
             eprintln!("Error: badge format is only supported for the health command");
@@ -236,7 +247,11 @@ pub fn print_duplication_report(
 ) -> ExitCode {
     match output {
         OutputFormat::Human => {
-            human::print_duplication_human(report, ctx.root, ctx.elapsed, ctx.quiet);
+            if ctx.summary {
+                human::dupes::print_duplication_summary(report, ctx.elapsed, ctx.quiet);
+            } else {
+                human::print_duplication_human(report, ctx.root, ctx.elapsed, ctx.quiet);
+            }
             ExitCode::SUCCESS
         }
         OutputFormat::Json => json::print_duplication_json(report, ctx.elapsed, ctx.explain),
@@ -268,7 +283,11 @@ pub fn print_health_report(
 ) -> ExitCode {
     match output {
         OutputFormat::Human => {
-            human::print_health_human(report, ctx.root, ctx.elapsed, ctx.quiet);
+            if ctx.summary {
+                human::health::print_health_summary(report, ctx.elapsed, ctx.quiet);
+            } else {
+                human::print_health_human(report, ctx.root, ctx.elapsed, ctx.quiet);
+            }
             ExitCode::SUCCESS
         }
         OutputFormat::Compact => {
@@ -366,6 +385,7 @@ pub use codeclimate::build_health_codeclimate;
     reason = "target-dependent: used in lib, unused in bin"
 )]
 pub use compact::build_compact_lines;
+pub use json::build_baseline_deltas_json;
 #[allow(
     unused_imports,
     reason = "target-dependent: used in lib, unused in bin"

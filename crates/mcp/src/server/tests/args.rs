@@ -507,6 +507,7 @@ fn health_args_with_all_options() {
         file_scores: Some(true),
         hotspots: Some(true),
         targets: None,
+        coverage_gaps: Some(true),
         score: None,
         min_score: None,
         since: Some("6m".to_string()),
@@ -519,6 +520,8 @@ fn health_args_with_all_options() {
         no_cache: Some(true),
         threads: Some(4),
         trend: None,
+        effort: Some("high".to_string()),
+        summary: Some(true),
     };
     let args = build_health_args(&params);
     assert_eq!(
@@ -546,6 +549,7 @@ fn health_args_with_all_options() {
             "--complexity",
             "--file-scores",
             "--hotspots",
+            "--coverage-gaps",
             "--since",
             "6m",
             "--min-commits",
@@ -560,6 +564,9 @@ fn health_args_with_all_options() {
             "--no-cache",
             "--threads",
             "4",
+            "--effort",
+            "high",
+            "--summary",
         ]
     );
 }

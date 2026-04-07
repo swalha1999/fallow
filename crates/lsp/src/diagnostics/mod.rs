@@ -73,6 +73,7 @@ mod tests {
         DuplicationReport {
             clone_groups: vec![],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 0,
                 files_with_clones: 0,

@@ -1,5 +1,22 @@
 use super::common::{create_config, fixture_path};
 
+/// Create a symlink, removing any existing entry (file, directory, or stale symlink) first.
+/// This makes symlink setup idempotent across repeated test runs.
+fn force_symlink(target: &std::path::Path, link: &std::path::Path) {
+    // Remove existing entry at the link path (regular dir, file, or broken symlink)
+    if link.symlink_metadata().is_ok() {
+        if link.is_dir() && !link.is_symlink() {
+            let _ = std::fs::remove_dir_all(link);
+        } else {
+            let _ = std::fs::remove_file(link);
+        }
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("symlink creation should succeed");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link).expect("symlink creation should succeed");
+}
+
 #[test]
 fn workspace_patterns_from_package_json() {
     let pkg: fallow_config::PackageJson =
@@ -24,23 +41,12 @@ fn workspace_patterns_yarn_format() {
 fn workspace_project_discovers_workspace_packages() {
     let root = fixture_path("workspace-project");
 
-    // Set up node_modules symlinks for cross-workspace resolution (like npm/pnpm install would)
+    // Set up node_modules symlinks for cross-workspace resolution (like npm/pnpm install would).
+    // Uses force_symlink to handle stale directories from prior runs.
     let nm = root.join("node_modules");
     let _ = std::fs::create_dir_all(nm.join("@workspace"));
-    #[cfg(unix)]
-    {
-        let _ = std::os::unix::fs::symlink(root.join("packages/shared"), nm.join("shared"));
-        let _ =
-            std::os::unix::fs::symlink(root.join("packages/utils"), nm.join("@workspace/utils"));
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::os::windows::fs::symlink_dir(root.join("packages/shared"), nm.join("shared"));
-        let _ = std::os::windows::fs::symlink_dir(
-            root.join("packages/utils"),
-            nm.join("@workspace/utils"),
-        );
-    }
+    force_symlink(&root.join("packages/shared"), &nm.join("shared"));
+    force_symlink(&root.join("packages/utils"), &nm.join("@workspace/utils"));
 
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -167,13 +173,11 @@ fn project_state_workspace_queries() {
 fn workspace_exports_map_resolves_subpath_imports() {
     let root = fixture_path("workspace-exports-map");
 
-    // Set up node_modules symlinks for cross-workspace resolution
+    // Set up node_modules symlinks for cross-workspace resolution.
+    // Uses force_symlink to handle stale directories from prior runs.
     let nm = root.join("node_modules");
     let _ = std::fs::create_dir_all(nm.join("@workspace"));
-    #[cfg(unix)]
-    {
-        let _ = std::os::unix::fs::symlink(root.join("packages/ui"), nm.join("@workspace/ui"));
-    }
+    force_symlink(&root.join("packages/ui"), &nm.join("@workspace/ui"));
 
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -230,6 +234,103 @@ fn workspace_exports_map_resolves_subpath_imports() {
     );
 
     // No unresolved imports — exports map subpaths should all resolve
+    assert!(
+        results.unresolved_imports.is_empty(),
+        "should have no unresolved imports, found: {:?}",
+        results
+            .unresolved_imports
+            .iter()
+            .map(|i| &i.specifier)
+            .collect::<Vec<_>>()
+    );
+}
+
+// ── Workspace nested exports map ──────────────────────────────
+
+#[test]
+fn workspace_nested_exports_resolves_dist_to_source() {
+    let root = fixture_path("workspace-nested-exports");
+
+    // Set up node_modules symlinks for cross-workspace resolution.
+    // Uses force_symlink to handle stale directories from prior runs.
+    let nm = root.join("node_modules");
+    let _ = std::fs::create_dir_all(nm.join("@workspace"));
+    force_symlink(&root.join("packages/ui"), &nm.join("@workspace/ui"));
+
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    let unused_file_names: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+
+    // Source files reachable via exports map dist→src fallback should NOT be unused
+    assert!(
+        !unused_file_names.contains(&"index.ts".to_string()),
+        "index.ts should be reachable via exports map root entry, unused: {unused_file_names:?}"
+    );
+    assert!(
+        !unused_file_names.contains(&"utils.ts".to_string()),
+        "utils.ts should be reachable via dist/esm/utils.mjs→src/utils.ts fallback, \
+         unused: {unused_file_names:?}"
+    );
+    assert!(
+        !unused_file_names.contains(&"Button.ts".to_string()),
+        "Button.ts should be reachable via dist/esm/components/Button.mjs→src/components/Button.ts \
+         fallback, unused: {unused_file_names:?}"
+    );
+
+    // Unused exports should still be detected on reachable files
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    // unusedComponent is on index.ts which is the root entry point ("." in exports map),
+    // so its exports are treated as public API and not flagged as unused
+    assert!(
+        !unused_export_names.contains(&"unusedComponent"),
+        "unusedComponent should NOT be flagged (index.ts is an entry point)"
+    );
+
+    // Non-entry-point files resolved via dist→src fallback should still have unused exports flagged
+    assert!(
+        unused_export_names.contains(&"unusedUtil"),
+        "unusedUtil should be unused (utils.ts export not imported by app), \
+         found: {unused_export_names:?}"
+    );
+    assert!(
+        unused_export_names.contains(&"unusedButtonHelper"),
+        "unusedButtonHelper should be unused (Button.ts export not imported by app), \
+         found: {unused_export_names:?}"
+    );
+
+    // Used exports should NOT be flagged
+    assert!(
+        !unused_export_names.contains(&"Card"),
+        "Card should be used (imported by app)"
+    );
+    assert!(
+        !unused_export_names.contains(&"formatColor"),
+        "formatColor should be used (imported by app)"
+    );
+    assert!(
+        !unused_export_names.contains(&"Button"),
+        "Button should be used (imported by app)"
+    );
+
+    // No unresolved imports — nested exports map subpaths should all resolve
     assert!(
         results.unresolved_imports.is_empty(),
         "should have no unresolved imports, found: {:?}",

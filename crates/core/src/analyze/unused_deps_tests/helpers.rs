@@ -51,9 +51,11 @@ pub(super) fn test_config(root: PathBuf) -> ResolvedConfig {
         boundaries: BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 1, true, true)
 }

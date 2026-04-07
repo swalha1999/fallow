@@ -21,6 +21,9 @@ pub fn process_static_patterns(
     result.active_plugins.push(plugin.name().to_string());
 
     let pname = plugin.name().to_string();
+    result
+        .entry_point_roles
+        .insert(pname.clone(), plugin.entry_point_role());
     for pat in plugin.entry_patterns() {
         result
             .entry_patterns
@@ -52,6 +55,11 @@ pub fn process_static_patterns(
     for (prefix, replacement) in plugin.path_aliases(root) {
         result.path_aliases.push((prefix.to_string(), replacement));
     }
+    for pat in plugin.fixture_glob_patterns() {
+        result
+            .fixture_patterns
+            .push(((*pat).to_string(), pname.clone()));
+    }
 }
 
 /// Process external plugin definitions, checking activation and aggregating patterns.
@@ -79,6 +87,9 @@ pub fn process_external_plugins(
         };
         if is_active {
             result.active_plugins.push(ext.name.clone());
+            result
+                .entry_point_roles
+                .insert(ext.name.clone(), ext.entry_point_role);
             result.entry_patterns.extend(
                 ext.entry_points
                     .iter()
@@ -174,6 +185,7 @@ pub fn process_config_result(
             .into_iter()
             .map(|p| (p, pname.clone())),
     );
+    result.used_exports.extend(plugin_result.used_exports);
     result
         .referenced_dependencies
         .extend(plugin_result.referenced_dependencies);
@@ -183,9 +195,21 @@ pub fn process_config_result(
             .into_iter()
             .map(|p| (p, pname.clone())),
     );
+    for (prefix, replacement) in plugin_result.path_aliases {
+        result
+            .path_aliases
+            .retain(|(existing_prefix, _)| existing_prefix != &prefix);
+        result.path_aliases.push((prefix, replacement));
+    }
     result.setup_files.extend(
         plugin_result
             .setup_files
+            .into_iter()
+            .map(|p| (p, pname.clone())),
+    );
+    result.fixture_patterns.extend(
+        plugin_result
+            .fixture_patterns
             .into_iter()
             .map(|p| (p, pname.clone())),
     );

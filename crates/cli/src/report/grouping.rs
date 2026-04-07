@@ -1,10 +1,11 @@
-//! Grouping infrastructure for `--group-by owner|directory`.
+//! Grouping infrastructure for `--group-by owner|directory|package`.
 //!
-//! Partitions `AnalysisResults` into labeled groups by ownership (CODEOWNERS)
-//! or by first directory component.
+//! Partitions `AnalysisResults` into labeled groups by ownership (CODEOWNERS),
+//! by first directory component, or by workspace package.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use fallow_config::WorkspaceInfo;
 use fallow_core::results::AnalysisResults;
 use rustc_hash::FxHashMap;
 
@@ -20,6 +21,45 @@ pub enum OwnershipResolver {
     Owner(CodeOwners),
     /// Group by first directory component.
     Directory,
+    /// Group by workspace package (monorepo).
+    Package(PackageResolver),
+}
+
+/// Resolves file paths to workspace package names via longest-prefix matching.
+///
+/// Stores workspace roots as paths relative to the project root so that
+/// resolution works with the relative paths passed to `OwnershipResolver::resolve`.
+pub struct PackageResolver {
+    /// `(relative_root, package_name)` sorted by path length descending.
+    workspaces: Vec<(PathBuf, String)>,
+}
+
+const ROOT_PACKAGE_LABEL: &str = "(root)";
+
+impl PackageResolver {
+    /// Build a resolver from discovered workspace info.
+    ///
+    /// Workspace roots are stored relative to `project_root` and sorted by path
+    /// length descending so the first match is always the most specific prefix.
+    pub fn new(project_root: &Path, workspaces: &[WorkspaceInfo]) -> Self {
+        let mut ws: Vec<(PathBuf, String)> = workspaces
+            .iter()
+            .map(|w| {
+                let rel = w.root.strip_prefix(project_root).unwrap_or(&w.root);
+                (rel.to_path_buf(), w.name.clone())
+            })
+            .collect();
+        ws.sort_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
+        Self { workspaces: ws }
+    }
+
+    /// Find the workspace package that owns `rel_path`, or `"(root)"` if none match.
+    fn resolve(&self, rel_path: &Path) -> &str {
+        self.workspaces
+            .iter()
+            .find(|(root, _)| rel_path.starts_with(root))
+            .map_or(ROOT_PACKAGE_LABEL, |(_, name)| name.as_str())
+    }
 }
 
 impl OwnershipResolver {
@@ -28,13 +68,14 @@ impl OwnershipResolver {
         match self {
             Self::Owner(co) => co.owner_of(rel_path).unwrap_or(UNOWNED_LABEL).to_string(),
             Self::Directory => codeowners::directory_group(rel_path).to_string(),
+            Self::Package(pr) => pr.resolve(rel_path).to_string(),
         }
     }
 
     /// Resolve the group key and matching rule for a path.
     ///
     /// Returns `(owner, Some(pattern))` for Owner mode,
-    /// `(directory, None)` for Directory mode.
+    /// `(directory, None)` for Directory/Package mode.
     pub fn resolve_with_rule(&self, rel_path: &Path) -> (String, Option<String>) {
         match self {
             Self::Owner(co) => {
@@ -45,6 +86,7 @@ impl OwnershipResolver {
                 }
             }
             Self::Directory => (codeowners::directory_group(rel_path).to_string(), None),
+            Self::Package(pr) => (pr.resolve(rel_path).to_string(), None),
         }
     }
 
@@ -53,6 +95,7 @@ impl OwnershipResolver {
         match self {
             Self::Owner(_) => "owner",
             Self::Directory => "directory",
+            Self::Package(_) => "package",
         }
     }
 }
@@ -522,6 +565,7 @@ mod tests {
             length: 0,
             line: 0,
             col: 0,
+            is_cross_package: false,
         });
 
         let groups = group_analysis_results(&results, &root(), &OwnershipResolver::Directory);
@@ -541,6 +585,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let groups = group_analysis_results(&results, &root(), &OwnershipResolver::Directory);

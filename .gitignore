@@ -21,6 +21,9 @@ benchmarks/knip6/
 # Python cache
 __pycache__/
 
+# Proptest regression files
+proptest-regressions/
+
 # npm pack artifacts
 *.tgz
 

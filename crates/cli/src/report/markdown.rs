@@ -167,13 +167,19 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
             if let Some(first) = chain.first() {
                 display_chain.push(first.clone());
             }
+            let cross_pkg_tag = if cycle.is_cross_package {
+                " *(cross-package)*"
+            } else {
+                ""
+            };
             vec![format!(
-                "- {}",
+                "- {}{}",
                 display_chain
                     .iter()
                     .map(|s| format!("`{s}`"))
                     .collect::<Vec<_>>()
-                    .join(" \u{2192} ")
+                    .join(" \u{2192} "),
+                cross_pkg_tag
             )]
         },
     );
@@ -421,6 +427,7 @@ pub fn build_health_markdown(report: &crate::health_types::HealthReport, root: &
 
     if report.findings.is_empty()
         && report.file_scores.is_empty()
+        && report.coverage_gaps.is_none()
         && report.hotspots.is_empty()
         && report.targets.is_empty()
     {
@@ -438,6 +445,7 @@ pub fn build_health_markdown(report: &crate::health_types::HealthReport, root: &
     }
 
     write_findings_section(&mut out, report, root);
+    write_coverage_gaps_section(&mut out, report, root);
     write_file_scores_section(&mut out, report, root);
     write_hotspots_section(&mut out, report, root);
     write_targets_section(&mut out, report, root);
@@ -644,24 +652,78 @@ fn write_file_scores_section(
         "### File Health Scores ({} files)\n",
         report.file_scores.len(),
     );
-    out.push_str("| File | MI | Fan-in | Fan-out | Dead Code | Density |\n");
-    out.push_str("|:-----|:---|:-------|:--------|:----------|:--------|\n");
+    out.push_str("| File | Maintainability | Fan-in | Fan-out | Dead Code | Density | Risk |\n");
+    out.push_str("|:-----|:---------------|:-------|:--------|:----------|:--------|:-----|\n");
 
     for score in &report.file_scores {
         let file_str = rel(&score.path);
         let _ = writeln!(
             out,
-            "| `{file_str}` | {mi:.1} | {fi} | {fan_out} | {dead:.0}% | {density:.2} |",
+            "| `{file_str}` | {mi:.1} | {fi} | {fan_out} | {dead:.0}% | {density:.2} | {crap:.1} |",
             mi = score.maintainability_index,
             fi = score.fan_in,
             fan_out = score.fan_out,
             dead = score.dead_code_ratio * 100.0,
             density = score.complexity_density,
+            crap = score.crap_max,
         );
     }
 
     if let Some(avg) = report.summary.average_maintainability {
         let _ = write!(out, "\n**Average maintainability index:** {avg:.1}/100\n");
+    }
+}
+
+fn write_coverage_gaps_section(
+    out: &mut String,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    let Some(ref gaps) = report.coverage_gaps else {
+        return;
+    };
+
+    out.push('\n');
+    let _ = writeln!(out, "### Coverage Gaps\n");
+    let _ = writeln!(
+        out,
+        "*{} untested files · {} untested exports · {:.1}% file coverage*\n",
+        gaps.summary.untested_files, gaps.summary.untested_exports, gaps.summary.file_coverage_pct,
+    );
+
+    if gaps.files.is_empty() && gaps.exports.is_empty() {
+        out.push_str("_No coverage gaps found in scope._\n");
+        return;
+    }
+
+    if !gaps.files.is_empty() {
+        out.push_str("#### Files\n");
+        for item in &gaps.files {
+            let file_str = escape_backticks(&normalize_uri(
+                &relative_path(&item.path, root).display().to_string(),
+            ));
+            let _ = writeln!(
+                out,
+                "- `{file_str}` ({count} value export{})",
+                if item.value_export_count == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                count = item.value_export_count,
+            );
+        }
+        out.push('\n');
+    }
+
+    if !gaps.exports.is_empty() {
+        out.push_str("#### Exports\n");
+        for item in &gaps.exports {
+            let file_str = escape_backticks(&normalize_uri(
+                &relative_path(&item.path, root).display().to_string(),
+            ));
+            let _ = writeln!(out, "- `{file_str}`:{} `{}`", item.line, item.export_name);
+        }
     }
 }
 
@@ -755,9 +817,10 @@ fn write_targets_section(
 /// Write the metric legend collapsible section to the output.
 fn write_metric_legend(out: &mut String, report: &crate::health_types::HealthReport) {
     let has_scores = !report.file_scores.is_empty();
+    let has_coverage = report.coverage_gaps.is_some();
     let has_hotspots = !report.hotspots.is_empty();
     let has_targets = !report.targets.is_empty();
-    if !has_scores && !has_hotspots && !has_targets {
+    if !has_scores && !has_coverage && !has_hotspots && !has_targets {
         return;
     }
     out.push_str("\n---\n\n<details><summary>Metric definitions</summary>\n\n");
@@ -767,6 +830,12 @@ fn write_metric_legend(out: &mut String, report: &crate::health_types::HealthRep
         out.push_str("- **Fan-out** — files this file imports (coupling)\n");
         out.push_str("- **Dead Code** — % of value exports with zero references\n");
         out.push_str("- **Density** — cyclomatic complexity / lines of code\n");
+    }
+    if has_coverage {
+        out.push_str(
+            "- **File coverage** — runtime files also reachable from a discovered test root\n",
+        );
+        out.push_str("- **Untested export** — export with no reference chain from any test-reachable module\n");
     }
     if has_hotspots {
         out.push_str("- **Score** — churn \u{00d7} complexity (0\u{2013}100, higher = riskier)\n");
@@ -905,6 +974,7 @@ mod tests {
             length: 2,
             line: 3,
             col: 0,
+            is_cross_package: false,
         });
         let md = build_markdown(&results, &root);
         assert!(md.contains("`src/a.ts`"));
@@ -1018,6 +1088,7 @@ mod tests {
                 line_count: 10,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 10,
                 files_with_clones: 2,
@@ -1064,6 +1135,7 @@ mod tests {
                     estimated_savings: 15,
                 }],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 clone_groups: 1,
                 clone_instances: 1,
@@ -1093,10 +1165,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1130,10 +1204,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1172,10 +1248,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1204,10 +1282,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![
@@ -1259,6 +1339,59 @@ mod tests {
             "should contain recommendation"
         );
         assert!(md.contains("src/legacy.ts"), "should contain second target");
+    }
+
+    #[test]
+    fn health_markdown_with_coverage_gaps() {
+        use crate::health_types::*;
+
+        let root = PathBuf::from("/project");
+        let report = HealthReport {
+            findings: vec![],
+            summary: HealthSummary {
+                files_analyzed: 10,
+                functions_analyzed: 50,
+                functions_above_threshold: 0,
+                max_cyclomatic_threshold: 20,
+                max_cognitive_threshold: 15,
+                files_scored: None,
+                average_maintainability: None,
+                coverage_model: None,
+            },
+            vital_signs: None,
+            health_score: None,
+            file_scores: vec![],
+            coverage_gaps: Some(CoverageGaps {
+                summary: CoverageGapSummary {
+                    runtime_files: 2,
+                    covered_files: 0,
+                    file_coverage_pct: 0.0,
+                    untested_files: 1,
+                    untested_exports: 1,
+                },
+                files: vec![UntestedFile {
+                    path: root.join("src/app.ts"),
+                    value_export_count: 2,
+                }],
+                exports: vec![UntestedExport {
+                    path: root.join("src/app.ts"),
+                    export_name: "loader".into(),
+                    line: 12,
+                    col: 4,
+                }],
+            }),
+            hotspots: vec![],
+            hotspot_summary: None,
+            targets: vec![],
+            target_thresholds: None,
+            health_trend: None,
+        };
+
+        let md = build_health_markdown(&report, &root);
+        assert!(md.contains("### Coverage Gaps"));
+        assert!(md.contains("*1 untested files"));
+        assert!(md.contains("`src/app.ts` (2 value exports)"));
+        assert!(md.contains("`src/app.ts`:12 `loader`"));
     }
 
     // ── Dependency in workspace package ──
@@ -1380,6 +1513,7 @@ mod tests {
                     estimated_savings: 0,
                 }],
             }],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 clone_groups: 1,
                 clone_instances: 1,
@@ -1407,6 +1541,7 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: Some(crate::health_types::VitalSigns {
                 avg_cyclomatic: 3.5,
@@ -1418,9 +1553,11 @@ mod tests {
                 hotspot_count: Some(3),
                 circular_dep_count: Some(1),
                 unused_dep_count: Some(2),
+                counts: None,
             }),
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1464,6 +1601,7 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: Some(1),
                 average_maintainability: Some(65.0),
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
@@ -1478,7 +1616,10 @@ mod tests {
                 total_cognitive: 30,
                 function_count: 10,
                 lines: 200,
+                crap_max: 0.0,
+                crap_above_threshold: 0,
             }],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1487,7 +1628,7 @@ mod tests {
         };
         let md = build_health_markdown(&report, &root);
         assert!(md.contains("### File Health Scores (1 files)"));
-        assert!(md.contains("| File | MI | Fan-in | Fan-out | Dead Code | Density |"));
+        assert!(md.contains("| File | Maintainability | Fan-in | Fan-out | Dead Code | Density |"));
         assert!(md.contains("| `src/utils.ts` | 72.5 | 5 | 3 | 25% | 0.80 |"));
         assert!(md.contains("**Average maintainability index:** 65.0/100"));
     }
@@ -1516,10 +1657,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![crate::health_types::HotspotEntry {
                 path: root.join("src/hot.ts"),
                 score: 85.0,
@@ -1572,6 +1715,7 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: Some(1),
                 average_maintainability: Some(70.0),
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
@@ -1586,7 +1730,10 @@ mod tests {
                 total_cognitive: 8,
                 function_count: 2,
                 lines: 50,
+                crap_max: 0.0,
+                crap_above_threshold: 0,
             }],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1624,10 +1771,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1710,10 +1859,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![crate::health_types::HotspotEntry {
                 path: root.join("src/hot.ts"),
                 score: 50.0,
@@ -1759,6 +1910,7 @@ mod tests {
                 line_count: 5,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 clone_groups: 1,
                 clone_instances: 1,

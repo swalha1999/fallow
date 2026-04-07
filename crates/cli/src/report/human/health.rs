@@ -21,6 +21,7 @@ pub(in crate::report) fn print_health_human(
     let has_score = report.health_score.is_some();
     if report.findings.is_empty()
         && report.file_scores.is_empty()
+        && report.coverage_gaps.is_none()
         && report.hotspots.is_empty()
         && report.targets.is_empty()
         && !has_score
@@ -59,7 +60,14 @@ pub(in crate::report) fn print_health_human(
         parts.push(format!("{} above threshold", s.functions_above_threshold));
         parts.push(format!("{} analyzed", s.functions_analyzed));
         if let Some(avg) = s.average_maintainability {
-            parts.push(format!("MI {avg:.1}"));
+            let label = if avg >= 85.0 {
+                "good"
+            } else if avg >= 65.0 {
+                "moderate"
+            } else {
+                "low"
+            };
+            parts.push(format!("maintainability {avg:.1} ({label})"));
         }
         eprintln!(
             "{}",
@@ -71,6 +79,13 @@ pub(in crate::report) fn print_health_human(
             .red()
             .bold()
         );
+        if s.average_maintainability.is_some_and(|mi| mi < 85.0) {
+            eprintln!(
+                "{}",
+                "  Maintainability scale: good \u{2265}85, moderate \u{2265}65, low <65 (0\u{2013}100)"
+                    .dimmed()
+            );
+        }
     }
 }
 
@@ -84,6 +99,7 @@ pub(in crate::report) fn build_health_human_lines(
     render_health_trend(&mut lines, report);
     render_vital_signs(&mut lines, report);
     render_findings(&mut lines, report, root);
+    render_coverage_gaps(&mut lines, report, root);
     render_file_scores(&mut lines, report, root);
     render_hotspots(&mut lines, report, root);
     render_refactoring_targets(&mut lines, report, root);
@@ -143,7 +159,7 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
     if let Some(mi) = p.maintainability
         && mi > 0.0
     {
-        parts.push(format!("MI -{mi:.1}"));
+        parts.push(format!("maintainability -{mi:.1}"));
     }
     if let Some(hp) = p.hotspots
         && hp > 0.0
@@ -153,15 +169,19 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
     if let Some(ud) = p.unused_deps
         && ud > 0.0
     {
-        parts.push(format!("unused deps -{ud:.1}"));
+        parts.push(format!("unused dependencies -{ud:.1}"));
     }
     if let Some(cd) = p.circular_deps
         && cd > 0.0
     {
-        parts.push(format!("circular deps -{cd:.1}"));
+        parts.push(format!("circular dependencies -{cd:.1}"));
     }
     if !parts.is_empty() {
-        lines.push(format!("  {}", parts.join(" \u{00b7} ").dimmed()));
+        lines.push(format!(
+            "  {} {}",
+            "Deductions:".dimmed(),
+            parts.join(" \u{00b7} ").dimmed()
+        ));
     }
     // Check for N/A components
     let mut na_parts = Vec::new();
@@ -169,7 +189,7 @@ fn render_health_score(lines: &mut Vec<String>, report: &crate::health_types::He
         na_parts.push("dead code");
     }
     if p.maintainability.is_none() {
-        na_parts.push("MI");
+        na_parts.push("maintainability");
     }
     if p.hotspots.is_none() {
         na_parts.push("hotspots");
@@ -306,24 +326,46 @@ fn render_vital_signs(lines: &mut Vec<String>, report: &crate::health_types::Hea
     parts.push(format!("avg cyclomatic {:.1}", vs.avg_cyclomatic));
     parts.push(format!("p90 cyclomatic {}", vs.p90_cyclomatic));
     if let Some(mi) = vs.maintainability_avg {
-        parts.push(format!("MI {mi:.1}"));
+        let label = if mi >= 85.0 {
+            "good"
+        } else if mi >= 65.0 {
+            "moderate"
+        } else {
+            "low"
+        };
+        parts.push(format!("maintainability {mi:.1} ({label})"));
     }
     if let Some(hc) = vs.hotspot_count {
-        parts.push(format!("{hc} hotspot{}", plural(hc as usize)));
+        parts.push(format!("{hc} churn hotspot{}", plural(hc as usize)));
     }
     if let Some(cd) = vs.circular_dep_count
         && cd > 0
     {
-        parts.push(format!("{cd} circular dep{}", plural(cd as usize)));
+        parts.push(format!(
+            "{cd} circular {}",
+            if cd == 1 {
+                "dependency"
+            } else {
+                "dependencies"
+            }
+        ));
     }
     if let Some(ud) = vs.unused_dep_count
         && ud > 0
     {
-        parts.push(format!("{ud} unused dep{}", plural(ud as usize)));
+        parts.push(format!(
+            "{ud} unused {}",
+            if ud == 1 {
+                "dependency"
+            } else {
+                "dependencies"
+            }
+        ));
     }
     lines.push(format!(
-        "{} {}",
+        "{} {} {}",
         "\u{25a0}".dimmed(),
+        "Metrics:".dimmed(),
         parts.join(" \u{00b7} ").dimmed()
     ));
     lines.push(String::new());
@@ -379,11 +421,17 @@ fn render_findings(
             cog_val.dimmed().to_string()
         };
 
-        // Line 1: function name
+        // Line 1: function name (tag likely generated code)
+        let generated_tag = if is_likely_generated(&finding.name, finding.cyclomatic) {
+            format!(" {}", "(generated)".dimmed())
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "    {} {}",
+            "    {} {}{}",
             format!(":{}", finding.line).dimmed(),
             finding.name.bold(),
+            generated_tag,
         ));
         // Line 2: metrics (indented, aligned like hotspots)
         lines.push(format!(
@@ -401,6 +449,50 @@ fn render_findings(
         .dimmed()
     ));
     lines.push(String::new());
+}
+
+/// Detect likely generated code based on function name patterns.
+fn is_likely_generated(name: &str, cyclomatic: u16) -> bool {
+    // AJV-style validators: validate0, validate10, validate123
+    if name.starts_with("validate")
+        && name.len() > 8
+        && name[8..].chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
+    // Extremely high complexity with generic names suggests generated/bundled code
+    if cyclomatic > 200 && (name == "module.exports" || name == "default" || name == "<anonymous>")
+    {
+        return true;
+    }
+    false
+}
+
+/// Check if a refactoring recommendation references a likely-generated function name.
+///
+/// Recommendations from Rule 5 embed function names like `"Extract validate10 (cognitive: 350)"`.
+/// This detects those patterns so the display can tag them.
+fn recommendation_mentions_generated(recommendation: &str) -> bool {
+    // Look for AJV-style validator names: "validate" followed immediately by digits
+    let mut rest = recommendation;
+    while let Some(pos) = rest.find("validate") {
+        let after_validate = &rest[pos + 8..];
+        if !after_validate.is_empty() {
+            let digits: String = after_validate
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                // Ensure next char after digits is not alphanumeric (word boundary)
+                let next = after_validate.chars().nth(digits.len());
+                if !next.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    return true;
+                }
+            }
+        }
+        rest = &rest[pos + 8..];
+    }
+    false
 }
 
 fn render_file_scores(
@@ -442,13 +534,31 @@ fn render_file_scores(
         // Line 1: MI score + path
         lines.push(format!("  {}    {}{}", mi_colored, dir.dimmed(), filename,));
 
-        // Line 2: metrics (indented, dimmed)
+        // Line 2: metrics (indented, dimmed) with optional CRAP risk
+        let risk_suffix = if score.crap_max > 0.0 {
+            let risk_str = if score.crap_max > 999.0 {
+                ">999".to_string()
+            } else {
+                format!("{:.1}", score.crap_max)
+            };
+            let risk_colored = if score.crap_max >= 30.0 {
+                risk_str.red().bold().to_string()
+            } else if score.crap_max >= 15.0 {
+                risk_str.yellow().to_string()
+            } else {
+                risk_str.dimmed().to_string()
+            };
+            format!("  {risk_colored} risk")
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "         {} fan-in  {} fan-out  {} dead  {} density",
+            "         {} fan-in  {} fan-out  {} dead  {} density{}",
             format!("{:>3}", score.fan_in).dimmed(),
             format!("{:>3}", score.fan_out).dimmed(),
             format!("{:>3.0}%", score.dead_code_ratio * 100.0).dimmed(),
             format!("{:.2}", score.complexity_density).dimmed(),
+            risk_suffix,
         ));
 
         // Blank line between entries
@@ -458,7 +568,7 @@ fn render_file_scores(
         lines.push(format!(
             "  {}",
             format!(
-                "... and {} more files",
+                "... and {} more files (--format json for full list)",
                 report.file_scores.len() - MAX_FLAT_ITEMS
             )
             .dimmed()
@@ -467,7 +577,131 @@ fn render_file_scores(
     }
     lines.push(format!(
         "  {}",
-        format!("Composite file quality scores based on complexity, coupling, and dead code \u{2014} {DOCS_HEALTH}#file-health-scores").dimmed()
+        format!("Composite file quality scores based on complexity, coupling, and dead code. Risk: low <15, moderate 15-30, high >=30. Untested files scored CC\u{00b2}+CC instead of CC \u{2014} {DOCS_HEALTH}#file-health-scores").dimmed()
+    ));
+    lines.push(String::new());
+}
+
+fn render_coverage_gaps(
+    lines: &mut Vec<String>,
+    report: &crate::health_types::HealthReport,
+    root: &Path,
+) {
+    let Some(ref gaps) = report.coverage_gaps else {
+        return;
+    };
+
+    lines.push(format!(
+        "{} {}",
+        "\u{25cf}".yellow(),
+        format!(
+            "Coverage gaps ({} untested {}, {} untested {}, {:.1}% file coverage)",
+            gaps.summary.untested_files,
+            if gaps.summary.untested_files == 1 {
+                "file"
+            } else {
+                "files"
+            },
+            gaps.summary.untested_exports,
+            if gaps.summary.untested_exports == 1 {
+                "export"
+            } else {
+                "exports"
+            },
+            gaps.summary.file_coverage_pct,
+        )
+        .yellow()
+        .bold()
+    ));
+    lines.push(String::new());
+
+    if !gaps.files.is_empty() {
+        let shown_files = gaps.files.len().min(MAX_FLAT_ITEMS);
+        lines.push(format!("  {}", "Files".dimmed()));
+        for item in &gaps.files[..shown_files] {
+            let file_str = relative_path(&item.path, root).display().to_string();
+            let (dir, filename) = split_dir_filename(&file_str);
+            lines.push(format!("  {}{}", dir.dimmed(), filename,));
+        }
+        if gaps.files.len() > MAX_FLAT_ITEMS {
+            lines.push(format!(
+                "  {}",
+                format!(
+                    "... and {} more files (--format json for full list)",
+                    gaps.files.len() - MAX_FLAT_ITEMS
+                )
+                .dimmed()
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !gaps.exports.is_empty() {
+        lines.push(format!("  {}", "Exports".dimmed()));
+
+        // Group exports by file for barrel file collapsing
+        let mut by_file: Vec<(&std::path::Path, Vec<&crate::health_types::UntestedExport>)> =
+            Vec::new();
+        for item in &gaps.exports {
+            if let Some(entry) = by_file
+                .last_mut()
+                .filter(|(p, _)| *p == item.path.as_path())
+            {
+                entry.1.push(item);
+            } else {
+                by_file.push((item.path.as_path(), vec![item]));
+            }
+        }
+
+        let mut shown = 0;
+        for (file_path, exports) in &by_file {
+            if shown >= MAX_FLAT_ITEMS {
+                break;
+            }
+            let file_str = relative_path(file_path, root).display().to_string();
+            if exports.len() > 10 {
+                // Barrel file: collapse into a single summary line
+                lines.push(format!(
+                    "  {} ({} untested re-exports)",
+                    file_str.dimmed(),
+                    exports.len(),
+                ));
+                shown += 1;
+            } else {
+                for item in exports {
+                    if shown >= MAX_FLAT_ITEMS {
+                        break;
+                    }
+                    lines.push(format!(
+                        "  {}:{} `{}`",
+                        file_str.dimmed(),
+                        item.line,
+                        item.export_name,
+                    ));
+                    shown += 1;
+                }
+            }
+        }
+        let total_exports = gaps.exports.len();
+        if total_exports > shown {
+            lines.push(format!(
+                "  {}",
+                format!(
+                    "... and {} more exports (--format json for full list)",
+                    total_exports - shown
+                )
+                .dimmed()
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.push(format!(
+        "  {}",
+        format!(
+            "Static test dependency gaps (not line-level coverage): {DOCS_HEALTH}#coverage-gaps"
+        )
+        .dimmed()
     ));
     lines.push(String::new());
 }
@@ -617,6 +851,10 @@ fn render_refactoring_targets(
         effort_parts.push(format!("{high} high"));
     }
     lines.push(format!("  {}", effort_parts.join(" \u{00b7} ").dimmed()));
+    lines.push(format!(
+        "  {}",
+        "  score = quick-win ROI (higher = better) \u{00b7} pri = absolute priority".dimmed()
+    ));
     lines.push(String::new());
 
     let shown_targets = report.targets.len().min(MAX_FLAT_ITEMS);
@@ -659,12 +897,18 @@ fn render_refactoring_targets(
             crate::health_types::Confidence::Medium => confidence.yellow().to_string(),
             crate::health_types::Confidence::Low => confidence.dimmed().to_string(),
         };
+        let generated_tag = if recommendation_mentions_generated(&target.recommendation) {
+            format!(" {}", "(generated)".dimmed())
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "         {} \u{00b7} effort:{} \u{00b7} confidence:{}  {}",
+            "         {} \u{00b7} effort:{} \u{00b7} confidence:{}  {}{}",
             label.yellow(),
             effort_colored,
             confidence_colored,
             target.recommendation.dimmed(),
+            generated_tag,
         ));
 
         // Blank line between entries
@@ -674,7 +918,7 @@ fn render_refactoring_targets(
         lines.push(format!(
             "  {}",
             format!(
-                "... and {} more targets",
+                "... and {} more targets (--format json for full list)",
                 report.targets.len() - MAX_FLAT_ITEMS
             )
             .dimmed()
@@ -689,6 +933,67 @@ fn render_refactoring_targets(
         .dimmed()
     ));
     lines.push(String::new());
+}
+
+/// Print a concise health summary showing only aggregate statistics.
+pub(in crate::report) fn print_health_summary(
+    report: &crate::health_types::HealthReport,
+    elapsed: Duration,
+    quiet: bool,
+) {
+    let s = &report.summary;
+
+    println!("{}", "Health Summary".bold());
+    println!();
+    println!("  {:>6}  Functions analyzed", s.functions_analyzed);
+    println!("  {:>6}  Above threshold", s.functions_above_threshold);
+    if let Some(mi) = s.average_maintainability {
+        let label = if mi >= 85.0 {
+            "good"
+        } else if mi >= 65.0 {
+            "moderate"
+        } else {
+            "low"
+        };
+        println!("  {mi:>5.1}   Average maintainability ({label})");
+    }
+    if let Some(ref score) = report.health_score {
+        println!("  {:>5.0} {}  Health score", score.score, score.grade);
+    }
+    if let Some(ref gaps) = report.coverage_gaps {
+        println!(
+            "  {:>6}  Untested {} ({:.1}% file coverage)",
+            gaps.summary.untested_files,
+            if gaps.summary.untested_files == 1 {
+                "file"
+            } else {
+                "files"
+            },
+            gaps.summary.file_coverage_pct,
+        );
+        println!(
+            "  {:>6}  Untested {}",
+            gaps.summary.untested_exports,
+            if gaps.summary.untested_exports == 1 {
+                "export"
+            } else {
+                "exports"
+            },
+        );
+    }
+
+    if !quiet {
+        eprintln!(
+            "{}",
+            format!(
+                "\u{2713} {} functions analyzed ({:.2}s)",
+                s.functions_analyzed,
+                elapsed.as_secs_f64()
+            )
+            .green()
+            .bold()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -735,10 +1040,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -773,10 +1080,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -816,10 +1125,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -866,10 +1177,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -896,16 +1209,52 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
             target_thresholds: None,
             health_trend: None,
         }
+    }
+
+    #[test]
+    fn health_coverage_gaps_render_section() {
+        use crate::health_types::*;
+
+        let root = PathBuf::from("/project");
+        let mut report = empty_report();
+        report.coverage_gaps = Some(CoverageGaps {
+            summary: CoverageGapSummary {
+                runtime_files: 1,
+                covered_files: 0,
+                file_coverage_pct: 0.0,
+                untested_files: 1,
+                untested_exports: 1,
+            },
+            files: vec![UntestedFile {
+                path: root.join("src/app.ts"),
+                value_export_count: 2,
+            }],
+            exports: vec![UntestedExport {
+                path: root.join("src/app.ts"),
+                export_name: "loader".into(),
+                line: 12,
+                col: 4,
+            }],
+        });
+
+        let text = plain(&build_health_human_lines(&report, &root));
+        assert!(
+            text.contains("Coverage gaps (1 untested file, 1 untested export, 0.0% file coverage)")
+        );
+        assert!(text.contains("src/app.ts"));
+        assert!(text.contains("loader"));
     }
 
     // ── fmt_trend_val / fmt_trend_delta ───────────────────────────
@@ -997,10 +1346,10 @@ mod tests {
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
         assert!(text.contains("76 B"));
-        assert!(text.contains("MI -4.0"));
+        assert!(text.contains("maintainability -4.0"));
         assert!(text.contains("hotspots -2.0"));
-        assert!(text.contains("unused deps -1.0"));
-        assert!(text.contains("circular deps -1.0"));
+        assert!(text.contains("unused dependencies -1.0"));
+        assert!(text.contains("circular dependencies -1.0"));
     }
 
     #[test]
@@ -1069,7 +1418,7 @@ mod tests {
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
-        assert!(text.contains("N/A: dead code, MI, hotspots"));
+        assert!(text.contains("N/A: dead code, maintainability, hotspots"));
         assert!(text.contains("run --score for full pipeline"));
     }
 
@@ -1133,6 +1482,7 @@ mod tests {
                 git_sha: Some("abc1234".into()),
                 score: Some(72.0),
                 grade: Some("B".into()),
+                coverage_model: None,
             },
             metrics: vec![
                 crate::health_types::TrendMetric {
@@ -1183,6 +1533,7 @@ mod tests {
                 git_sha: None,
                 score: None,
                 grade: None,
+                coverage_model: None,
             },
             metrics: vec![crate::health_types::TrendMetric {
                 name: "unused_deps",
@@ -1214,6 +1565,7 @@ mod tests {
                 git_sha: Some("def5678".into()),
                 score: Some(80.0),
                 grade: Some("B".into()),
+                coverage_model: None,
             },
             metrics: vec![
                 crate::health_types::TrendMetric {
@@ -1260,6 +1612,7 @@ mod tests {
                 git_sha: None,
                 score: None,
                 grade: None,
+                coverage_model: None,
             },
             metrics: vec![crate::health_types::TrendMetric {
                 name: "score",
@@ -1298,6 +1651,7 @@ mod tests {
             maintainability_avg: Some(72.4),
             unused_dep_count: Some(3),
             circular_dep_count: Some(1),
+            counts: None,
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
@@ -1305,10 +1659,10 @@ mod tests {
         assert!(text.contains("dead exports 8.1%"));
         assert!(text.contains("avg cyclomatic 4.7"));
         assert!(text.contains("p90 cyclomatic 12"));
-        assert!(text.contains("MI 72.4"));
-        assert!(text.contains("2 hotspots"));
-        assert!(text.contains("3 unused deps"));
-        assert!(text.contains("1 circular dep"));
+        assert!(text.contains("maintainability 72.4"));
+        assert!(text.contains("2 churn hotspots"));
+        assert!(text.contains("3 unused dependencies"));
+        assert!(text.contains("1 circular dependency"));
     }
 
     #[test]
@@ -1325,6 +1679,7 @@ mod tests {
             maintainability_avg: Some(72.4),
             unused_dep_count: None,
             circular_dep_count: None,
+            counts: None,
         });
         report.health_trend = Some(crate::health_types::HealthTrend {
             compared_to: crate::health_types::TrendPoint {
@@ -1332,6 +1687,7 @@ mod tests {
                 git_sha: None,
                 score: None,
                 grade: None,
+                coverage_model: None,
             },
             metrics: vec![],
             snapshots_loaded: 1,
@@ -1358,12 +1714,13 @@ mod tests {
             maintainability_avg: None,
             unused_dep_count: None,
             circular_dep_count: None,
+            counts: None,
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
         assert!(!text.contains("dead files"));
         assert!(!text.contains("dead exports"));
-        assert!(!text.contains("MI "));
+        assert!(!text.contains("maintainability "));
         assert!(!text.contains("hotspot"));
         assert!(text.contains("avg cyclomatic 2.0"));
         assert!(text.contains("p90 cyclomatic 5"));
@@ -1383,12 +1740,13 @@ mod tests {
             maintainability_avg: None,
             unused_dep_count: Some(0),
             circular_dep_count: Some(0),
+            counts: None,
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
         // Zero counts should not appear
-        assert!(!text.contains("unused dep"));
-        assert!(!text.contains("circular dep"));
+        assert!(!text.contains("unused dependenc"));
+        assert!(!text.contains("circular dependenc"));
     }
 
     #[test]
@@ -1405,14 +1763,15 @@ mod tests {
             maintainability_avg: None,
             unused_dep_count: Some(1),
             circular_dep_count: Some(2),
+            counts: None,
         });
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
-        assert!(text.contains("1 hotspot"));
-        assert!(!text.contains("1 hotspots"));
-        assert!(text.contains("1 unused dep"));
-        assert!(!text.contains("1 unused deps"));
-        assert!(text.contains("2 circular deps"));
+        assert!(text.contains("1 churn hotspot"));
+        assert!(!text.contains("1 churn hotspots"));
+        assert!(text.contains("1 unused dependency"));
+        assert!(!text.contains("1 unused dependencies"));
+        assert!(text.contains("2 circular dependencies"));
     }
 
     // ── render_file_scores ───────────────────────────────────────
@@ -1432,6 +1791,8 @@ mod tests {
             total_cognitive: 8,
             function_count: 4,
             lines: 200,
+            crap_max: 0.0,
+            crap_above_threshold: 0,
         }];
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
@@ -1460,6 +1821,8 @@ mod tests {
                 total_cognitive: 1,
                 function_count: 1,
                 lines: 50,
+                crap_max: 0.0,
+                crap_above_threshold: 0,
             },
             crate::health_types::FileHealthScore {
                 path: root.join("src/okay.ts"),
@@ -1472,6 +1835,8 @@ mod tests {
                 total_cognitive: 5,
                 function_count: 3,
                 lines: 100,
+                crap_max: 0.0,
+                crap_above_threshold: 0,
             },
             crate::health_types::FileHealthScore {
                 path: root.join("src/bad.ts"),
@@ -1484,6 +1849,8 @@ mod tests {
                 total_cognitive: 30,
                 function_count: 10,
                 lines: 500,
+                crap_max: 0.0,
+                crap_above_threshold: 0,
             },
         ];
         let lines = build_health_human_lines(&report, &root);
@@ -1513,6 +1880,8 @@ mod tests {
                     total_cognitive: 1,
                     function_count: 1,
                     lines: 50,
+                    crap_max: 0.0,
+                    crap_above_threshold: 0,
                 });
         }
         let lines = build_health_human_lines(&report, &root);
@@ -1542,6 +1911,8 @@ mod tests {
             total_cognitive: 1,
             function_count: 1,
             lines: 50,
+            crap_max: 0.0,
+            crap_above_threshold: 0,
         }];
         let lines = build_health_human_lines(&report, &root);
         let text = plain(&lines);
@@ -1835,7 +2206,7 @@ mod tests {
             ),
             (
                 crate::health_types::RecommendationCategory::BreakCircularDependency,
-                "circular dep",
+                "circular dependency",
             ),
             (
                 crate::health_types::RecommendationCategory::SplitHighImpact,
@@ -1852,6 +2223,10 @@ mod tests {
             (
                 crate::health_types::RecommendationCategory::ExtractDependencies,
                 "coupling",
+            ),
+            (
+                crate::health_types::RecommendationCategory::AddTestCoverage,
+                "untested risk",
             ),
         ];
         for (i, (cat, _label)) in categories.iter().enumerate() {
@@ -1965,6 +2340,8 @@ mod tests {
             total_cognitive: 10,
             function_count: 3,
             lines: 200,
+            crap_max: 0.0,
+            crap_above_threshold: 0,
         }];
         report.hotspots = vec![crate::health_types::HotspotEntry {
             path: root.join("src/complex.ts"),

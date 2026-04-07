@@ -360,20 +360,85 @@ fn ts_module_declaration_identifier() {
 #[test]
 fn ts_namespace_declaration() {
     let info = parse_source("export namespace Utils { export function helper() {} }");
-    // Namespace produces an export for the namespace name, plus inner exports
-    assert!(
-        info.exports
-            .iter()
-            .any(|e| e.name == ExportName::Named("Utils".to_string())),
-        "Should contain the namespace export"
+    // Only the namespace itself is a top-level export; inner exports become members
+    assert_eq!(info.exports.len(), 1);
+    assert_eq!(info.exports[0].name, ExportName::Named("Utils".to_string()));
+    // Runtime namespace (no `declare`) is NOT type-only
+    assert!(!info.exports[0].is_type_only);
+    // Inner function extracted as namespace member
+    assert_eq!(info.exports[0].members.len(), 1);
+    assert_eq!(info.exports[0].members[0].name, "helper");
+    assert_eq!(info.exports[0].members[0].kind, MemberKind::NamespaceMember);
+}
+
+#[test]
+fn ts_declare_namespace_is_type_only() {
+    let info = parse_source("export declare namespace Types { export type Foo = string; }");
+    assert_eq!(info.exports.len(), 1);
+    assert_eq!(info.exports[0].name, ExportName::Named("Types".to_string()));
+    assert!(info.exports[0].is_type_only);
+}
+
+#[test]
+fn ts_namespace_multiple_members() {
+    let info = parse_source(
+        "export namespace BusinessHelper {
+            export async function inviteSupplier() {}
+            export async function toggleSuspension() {}
+            export const API_URL = 'https://example.com';
+        }",
     );
-    assert!(
-        info.exports
-            .iter()
-            .find(|e| e.name == ExportName::Named("Utils".to_string()))
-            .unwrap()
-            .is_type_only
+    assert_eq!(info.exports.len(), 1);
+    assert_eq!(
+        info.exports[0].name,
+        ExportName::Named("BusinessHelper".to_string())
     );
+    assert!(!info.exports[0].is_type_only);
+    assert_eq!(info.exports[0].members.len(), 3);
+    let names: Vec<&str> = info.exports[0]
+        .members
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert!(names.contains(&"inviteSupplier"));
+    assert!(names.contains(&"toggleSuspension"));
+    assert!(names.contains(&"API_URL"));
+    assert!(
+        info.exports[0]
+            .members
+            .iter()
+            .all(|m| m.kind == MemberKind::NamespaceMember)
+    );
+}
+
+#[test]
+fn ts_namespace_inner_exports_not_top_level() {
+    let info = parse_source(
+        "export namespace Ns { export function a() {} export class B {} export enum C {} }",
+    );
+    // Only the namespace should be a top-level export
+    assert_eq!(info.exports.len(), 1);
+    assert_eq!(info.exports[0].name, ExportName::Named("Ns".to_string()));
+    // All inner declarations should be namespace members
+    assert_eq!(info.exports[0].members.len(), 3);
+}
+
+#[test]
+fn ts_nested_namespace() {
+    let info = parse_source(
+        "export namespace Outer { export namespace Inner { export function deep() {} } }",
+    );
+    assert_eq!(info.exports.len(), 1);
+    assert_eq!(info.exports[0].name, ExportName::Named("Outer".to_string()));
+    // Inner namespace and its contents are flattened into Outer's members
+    assert_eq!(info.exports[0].members.len(), 2);
+    let names: Vec<&str> = info.exports[0]
+        .members
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert!(names.contains(&"Inner"));
+    assert!(names.contains(&"deep"));
 }
 
 #[test]

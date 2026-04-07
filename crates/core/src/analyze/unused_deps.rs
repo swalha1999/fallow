@@ -549,6 +549,12 @@ pub fn find_unlisted_dependencies(
         // The import span lookup will fall back to (1, 0) for re-export-only usages.
     }
 
+    let ignore_deps: FxHashSet<&str> = config
+        .ignore_dependencies
+        .iter()
+        .map(String::as_str)
+        .collect();
+
     let mut unlisted: FxHashMap<String, Vec<ImportSite>> = FxHashMap::default();
 
     for (package_name, file_ids) in &graph.package_usage {
@@ -559,6 +565,9 @@ pub fn find_unlisted_dependencies(
             continue;
         }
         if workspace_names.contains(package_name) {
+            continue;
+        }
+        if ignore_deps.contains(package_name.as_str()) {
             continue;
         }
         if plugin_tooling.contains(package_name.as_str()) {
@@ -612,7 +621,6 @@ pub fn find_unlisted_dependencies(
         }
     }
 
-    let _ = config; // future use
     unlisted
         .into_iter()
         .map(|(name, sites)| UnlistedDependency {

@@ -156,6 +156,38 @@ fn namespace_import_makes_all_exports_used() {
     );
 }
 
+// ── Namespace exports (issue #52) ────────────────────────────
+
+#[test]
+fn namespace_export_members_not_reported_as_unused() {
+    let root = fixture_path("namespace-exports");
+    let config = create_config(root);
+    let results = fallow_core::analyze(&config).expect("analysis should succeed");
+
+    // The namespace export `BusinessHelper` is imported and its members
+    // accessed via `BusinessHelper.inviteSupplier()` etc. Neither the
+    // namespace nor its inner functions should be reported as unused.
+    assert!(
+        results.unused_exports.is_empty(),
+        "No unused exports expected, got: {:?}",
+        results
+            .unused_exports
+            .iter()
+            .map(|e| e.export_name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        results.unused_types.is_empty(),
+        "No unused types expected, got: {:?}",
+        results
+            .unused_types
+            .iter()
+            .map(|e| e.export_name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(results.unused_files.is_empty(), "No unused files expected");
+}
+
 // ── Duplicate exports ─────────────────────────────────────────
 
 #[test]
@@ -263,13 +295,8 @@ fn side_effect_import_makes_file_reachable() {
 #[test]
 fn circular_import_does_not_crash() {
     // Create temporary fixture with circular imports
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!("fallow-test-circular-{unique}"));
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
+    let temp_dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(temp_dir.join("src")).unwrap();
 
     std::fs::write(
@@ -290,7 +317,7 @@ fn circular_import_does_not_crash() {
     )
     .unwrap();
 
-    let config = create_config(temp_dir.clone());
+    let config = create_config(temp_dir);
     // This should not crash or infinite loop
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     assert!(
@@ -298,6 +325,4 @@ fn circular_import_does_not_crash() {
         "should detect circular dependency between a.ts and b.ts"
     );
     assert_eq!(results.circular_dependencies[0].length, 2);
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }

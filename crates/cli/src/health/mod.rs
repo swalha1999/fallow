@@ -9,6 +9,7 @@ use fallow_config::{OutputFormat, ResolvedConfig};
 
 use crate::baseline::{HealthBaselineData, filter_new_health_findings, filter_new_health_targets};
 use crate::check::{get_changed_files, resolve_workspace_filter};
+use crate::error::emit_error;
 pub use crate::health_types::*;
 use crate::load_config;
 use crate::report;
@@ -44,13 +45,21 @@ pub struct HealthOptions<'a> {
     pub save_baseline: Option<&'a std::path::Path>,
     pub complexity: bool,
     pub file_scores: bool,
+    pub coverage_gaps: bool,
     pub hotspots: bool,
     pub targets: bool,
+    pub effort: Option<EffortEstimate>,
     pub score: bool,
     pub min_score: Option<f64>,
     pub since: Option<&'a str>,
     pub min_commits: Option<u32>,
     pub explain: bool,
+    /// When true, emit a condensed summary instead of full item-level output.
+    #[allow(
+        dead_code,
+        reason = "wired from CLI but consumed by combined mode, not standalone health"
+    )]
+    pub summary: bool,
     pub save_snapshot: Option<std::path::PathBuf>,
     pub trend: bool,
     pub group_by: Option<crate::GroupBy>,
@@ -81,7 +90,7 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
     } else {
         fallow_core::cache::CacheStore::load(&config.cache_dir)
     };
-    let parse_result = fallow_core::extract::parse_all_files(&files, cache.as_ref());
+    let parse_result = fallow_core::extract::parse_all_files(&files, cache.as_ref(), true);
 
     let ignore_set = build_ignore_set(&config.health.ignore);
     let changed_files = opts
@@ -118,6 +127,7 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
             load_path,
             &mut findings,
             &config.root,
+            opts.output,
         )?)
     } else {
         None
@@ -126,8 +136,13 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
         findings.truncate(top);
     }
 
+    // --coverage-gaps flag overrides Off severity (explicit user intent).
+    // Without the flag, coverage gaps only activate when config severity is not Off.
+    let effective_coverage_gaps = opts.coverage_gaps;
+
     // Compute file-level health scores (needed by hotspots and targets too)
-    let needs_file_scores = opts.file_scores || opts.hotspots || opts.targets;
+    let needs_file_scores =
+        opts.file_scores || effective_coverage_gaps || opts.hotspots || opts.targets;
     let (score_output, files_scored, average_maintainability) = if needs_file_scores {
         compute_filtered_file_scores(
             &config,
@@ -136,6 +151,7 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
             changed_files.as_ref(),
             ws_root.as_deref(),
             &ignore_set,
+            opts.output,
         )?
     } else {
         (None, None, None)
@@ -169,7 +185,14 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
     );
 
     if let Some(save_path) = opts.save_baseline {
-        save_health_baseline(save_path, &findings, &targets, &config.root, opts.quiet)?;
+        save_health_baseline(
+            save_path,
+            &findings,
+            &targets,
+            &config.root,
+            opts.quiet,
+            opts.output,
+        )?;
     }
 
     // Compute vital signs (always needed for report summary)
@@ -205,6 +228,7 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
     // Assemble final report
     let report = assemble_health_report(
         opts,
+        effective_coverage_gaps,
         findings,
         files_analyzed,
         total_functions,
@@ -250,11 +274,10 @@ fn compute_filtered_file_scores(
     changed_files: Option<&rustc_hash::FxHashSet<std::path::PathBuf>>,
     ws_root: Option<&std::path::Path>,
     ignore_set: &globset::GlobSet,
+    output: OutputFormat,
 ) -> Result<FileScoreResult, ExitCode> {
-    let analysis_output = fallow_core::analyze_with_parse_result(config, modules).map_err(|e| {
-        eprintln!("Error: analysis failed: {e}");
-        ExitCode::from(2)
-    })?;
+    let analysis_output = fallow_core::analyze_with_parse_result(config, modules)
+        .map_err(|e| emit_error(&format!("analysis failed: {e}"), 2, output))?;
     match compute_file_scores(modules, file_paths, changed_files, analysis_output) {
         Ok(mut output) => {
             if let Some(ws) = ws_root {
@@ -266,6 +289,14 @@ fn compute_filtered_file_scores(
                     !ignore_set.is_match(relative)
                 });
             }
+            filter_coverage_gaps(
+                &mut output.coverage.report,
+                &mut output.coverage.runtime_paths,
+                config,
+                changed_files,
+                ws_root,
+                ignore_set,
+            );
             // Compute average BEFORE --top truncation so it reflects the full project
             let total_scored = output.scores.len();
             let avg = if total_scored > 0 {
@@ -304,10 +335,70 @@ fn compute_targets(
     if let Some(baseline) = loaded_baseline {
         tgts = filter_new_health_targets(tgts, baseline, config_root);
     }
+    if let Some(ref effort) = opts.effort {
+        tgts.retain(|t| t.effort == *effort);
+    }
     if let Some(top) = opts.top {
         tgts.truncate(top);
     }
     (tgts, Some(thresholds))
+}
+
+fn path_in_health_scope(
+    path: &std::path::Path,
+    config: &ResolvedConfig,
+    changed_files: Option<&rustc_hash::FxHashSet<std::path::PathBuf>>,
+    ws_root: Option<&std::path::Path>,
+    ignore_set: &globset::GlobSet,
+) -> bool {
+    if let Some(changed) = changed_files
+        && !changed.contains(path)
+    {
+        return false;
+    }
+    if let Some(ws) = ws_root
+        && !path.starts_with(ws)
+    {
+        return false;
+    }
+    if !ignore_set.is_empty() {
+        let relative = path.strip_prefix(&config.root).unwrap_or(path);
+        if ignore_set.is_match(relative) {
+            return false;
+        }
+    }
+    true
+}
+
+fn filter_coverage_gaps(
+    coverage_gaps: &mut CoverageGaps,
+    runtime_paths: &mut Vec<std::path::PathBuf>,
+    config: &ResolvedConfig,
+    changed_files: Option<&rustc_hash::FxHashSet<std::path::PathBuf>>,
+    ws_root: Option<&std::path::Path>,
+    ignore_set: &globset::GlobSet,
+) {
+    runtime_paths
+        .retain(|path| path_in_health_scope(path, config, changed_files, ws_root, ignore_set));
+    coverage_gaps.files.retain(|item| {
+        path_in_health_scope(&item.path, config, changed_files, ws_root, ignore_set)
+    });
+    coverage_gaps.exports.retain(|item| {
+        path_in_health_scope(&item.path, config, changed_files, ws_root, ignore_set)
+    });
+
+    runtime_paths.sort();
+    runtime_paths.dedup();
+
+    let runtime_files = runtime_paths.len();
+    let untested_files = coverage_gaps.files.len();
+    let covered_files = runtime_files.saturating_sub(untested_files);
+    coverage_gaps.summary = scoring::build_coverage_summary(
+        runtime_files,
+        covered_files,
+        untested_files,
+        coverage_gaps.exports.len(),
+    );
 }
 
 /// Build vital signs and counts from available analysis data.
@@ -378,10 +469,7 @@ fn save_snapshot(
             }
             Ok(())
         }
-        Err(e) => {
-            eprintln!("Error: {e}");
-            Err(ExitCode::from(2))
-        }
+        Err(e) => Err(emit_error(&e, 2, opts.output)),
     }
 }
 
@@ -423,6 +511,7 @@ fn compute_health_trend(
 )]
 fn assemble_health_report(
     opts: &HealthOptions<'_>,
+    effective_coverage_gaps: bool,
     findings: Vec<HealthFinding>,
     files_analyzed: usize,
     total_functions: usize,
@@ -440,6 +529,12 @@ fn assemble_health_report(
     target_thresholds: Option<TargetThresholds>,
     health_trend: Option<crate::health_types::HealthTrend>,
 ) -> HealthReport {
+    let coverage_gaps = if effective_coverage_gaps {
+        score_output.as_ref().map(|o| o.coverage.report.clone())
+    } else {
+        None
+    };
+
     // Extract file scores for the report (apply --top after hotspot/target computation)
     let file_scores = if opts.file_scores {
         let mut scores = score_output.map(|o| o.scores).unwrap_or_default();
@@ -471,6 +566,15 @@ fn assemble_health_report(
             } else {
                 None
             },
+            coverage_model: if opts.file_scores
+                || effective_coverage_gaps
+                || opts.hotspots
+                || opts.targets
+            {
+                Some(crate::health_types::CoverageModel::StaticBinary)
+            } else {
+                None
+            },
         },
         vital_signs: Some(vital_signs),
         health_score,
@@ -480,6 +584,7 @@ fn assemble_health_report(
             Vec::new()
         },
         file_scores,
+        coverage_gaps,
         hotspots: report_hotspots,
         hotspot_summary: report_hotspot_summary,
         targets,
@@ -572,23 +677,28 @@ fn save_health_baseline(
     targets: &[RefactoringTarget],
     config_root: &std::path::Path,
     quiet: bool,
+    output: OutputFormat,
 ) -> Result<(), ExitCode> {
     let baseline = HealthBaselineData::from_findings(findings, targets, config_root);
     match serde_json::to_string_pretty(&baseline) {
         Ok(json) => {
             if let Err(e) = std::fs::write(save_path, json) {
-                eprintln!("Error: failed to save health baseline: {e}");
-                return Err(ExitCode::from(2));
+                return Err(emit_error(
+                    &format!("failed to save health baseline: {e}"),
+                    2,
+                    output,
+                ));
             }
             if !quiet {
                 eprintln!("Saved health baseline to {}", save_path.display());
             }
             Ok(())
         }
-        Err(e) => {
-            eprintln!("Error: failed to serialize health baseline: {e}");
-            Err(ExitCode::from(2))
-        }
+        Err(e) => Err(emit_error(
+            &format!("failed to serialize health baseline: {e}"),
+            2,
+            output,
+        )),
     }
 }
 
@@ -597,15 +707,12 @@ fn load_health_baseline(
     baseline_path: &std::path::Path,
     findings: &mut Vec<HealthFinding>,
     root: &std::path::Path,
+    output: OutputFormat,
 ) -> Result<HealthBaselineData, ExitCode> {
-    let json = std::fs::read_to_string(baseline_path).map_err(|e| {
-        eprintln!("Error: failed to read health baseline: {e}");
-        ExitCode::from(2)
-    })?;
-    let baseline: HealthBaselineData = serde_json::from_str(&json).map_err(|e| {
-        eprintln!("Error: failed to parse health baseline: {e}");
-        ExitCode::from(2)
-    })?;
+    let json = std::fs::read_to_string(baseline_path)
+        .map_err(|e| emit_error(&format!("failed to read health baseline: {e}"), 2, output))?;
+    let baseline: HealthBaselineData = serde_json::from_str(&json)
+        .map_err(|e| emit_error(&format!("failed to parse health baseline: {e}"), 2, output))?;
     *findings = filter_new_health_findings(std::mem::take(findings), &baseline, root);
     Ok(baseline)
 }
@@ -627,7 +734,13 @@ pub fn run_health(opts: &HealthOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
     // Health grouping is a follow-up — for now, validate the flag and pass None
-    print_health_result(&result, opts.quiet, opts.explain, opts.min_score)
+    print_health_result(
+        &result,
+        opts.quiet,
+        opts.explain,
+        opts.min_score,
+        opts.summary,
+    )
 }
 
 /// Result of executing health analysis without printing.
@@ -643,6 +756,7 @@ pub fn print_health_result(
     quiet: bool,
     explain: bool,
     min_score: Option<f64>,
+    summary: bool,
 ) -> ExitCode {
     let ctx = report::ReportContext {
         root: &result.config.root,
@@ -651,6 +765,8 @@ pub fn print_health_result(
         quiet,
         explain,
         group_by: None,
+        top: None,
+        summary,
     };
     let report_code = report::print_health_report(&result.report, &ctx, result.config.output);
     if report_code != ExitCode::SUCCESS {
@@ -672,6 +788,16 @@ pub fn print_health_result(
     }
 
     if !result.report.findings.is_empty() {
+        return ExitCode::from(1);
+    }
+
+    if result.config.rules.coverage_gaps == fallow_config::Severity::Error
+        && result
+            .report
+            .coverage_gaps
+            .as_ref()
+            .is_some_and(|gaps| !gaps.is_empty())
+    {
         return ExitCode::from(1);
     }
 

@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::suppress::Suppression;
 use crate::{
     DynamicImportInfo, DynamicImportPattern, ExportInfo, ExportName, ImportInfo, MemberAccess,
-    ModuleInfo, ReExportInfo, RequireCallInfo,
+    MemberInfo, ModuleInfo, ReExportInfo, RequireCallInfo,
 };
 
 /// AST visitor that extracts all import/export information in a single pass.
@@ -38,6 +38,13 @@ pub(crate) struct ModuleInfoExtractor {
     /// Maps local_name -> class_name so that `x.method()` member accesses
     /// on an instance `const x = new Foo()` count against `Foo`'s members.
     instance_binding_names: FxHashMap<String, String>,
+    /// Nesting depth inside `TSModuleDeclaration` (namespace) bodies.
+    /// When > 0, inner `export` declarations are collected as namespace members
+    /// instead of being extracted as top-level module exports.
+    namespace_depth: u32,
+    /// Members collected while walking a namespace body.
+    /// Moved to the namespace's `ExportInfo.members` after the walk completes.
+    pending_namespace_members: Vec<MemberInfo>,
 }
 
 impl ModuleInfoExtractor {
@@ -75,7 +82,7 @@ impl ModuleInfoExtractor {
         self.whole_object_uses.extend(additional_whole);
     }
 
-    /// Push a type-only export (type alias, interface, or module declaration).
+    /// Push a type-only export (type alias or interface).
     fn push_type_export(&mut self, name: &str, span: Span) {
         self.exports.push(ExportInfo {
             name: ExportName::Named(name.to_string()),

@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 /// Supported plugin file extensions.
 const PLUGIN_EXTENSIONS: &[&str] = &["toml", "json", "jsonc"];
 
+/// How a plugin's discovered entry points contribute to coverage reachability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EntryPointRole {
+    /// Runtime/application roots that should count toward runtime reachability.
+    Runtime,
+    /// Test roots that should count toward test reachability.
+    Test,
+    /// Support/setup/config roots that should keep files alive but not count as runtime/test.
+    #[default]
+    Support,
+}
+
 /// How to detect if a plugin should be activated.
 ///
 /// When set on an `ExternalPluginDef`, this takes priority over `enablers`.
@@ -76,6 +89,13 @@ pub struct ExternalPluginDef {
     #[serde(default)]
     pub entry_points: Vec<String>,
 
+    /// Coverage role for `entryPoints`.
+    ///
+    /// Defaults to `support`. Set to `runtime` for application entry points
+    /// or `test` for test framework entry points.
+    #[serde(default = "default_external_entry_point_role")]
+    pub entry_point_role: EntryPointRole,
+
     /// Glob patterns for config files (marked as always-used when active).
     #[serde(default)]
     pub config_patterns: Vec<String>,
@@ -101,6 +121,10 @@ pub struct ExternalUsedExport {
     pub pattern: String,
     /// Export names always considered used.
     pub exports: Vec<String>,
+}
+
+fn default_external_entry_point_role() -> EntryPointRole {
+    EntryPointRole::Support
 }
 
 impl ExternalPluginDef {
@@ -188,7 +212,7 @@ pub fn discover_external_plugins(
     let mut seen_names = rustc_hash::FxHashSet::default();
 
     // All paths are checked against the canonical root to prevent symlink escapes
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     // 1. Explicit paths from config
     for path_str in config_plugin_paths {
@@ -233,7 +257,7 @@ pub fn discover_external_plugins(
 
 /// Check if a path resolves within the canonical root (follows symlinks).
 fn is_within_root(path: &Path, canonical_root: &Path) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     canonical.starts_with(canonical_root)
 }
 

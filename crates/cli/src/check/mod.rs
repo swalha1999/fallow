@@ -5,9 +5,10 @@ use fallow_config::{OutputFormat, ResolvedConfig};
 use fallow_core::results::AnalysisResults;
 
 use crate::baseline::{BaselineData, filter_new_issues};
+use crate::error::emit_error;
+use crate::load_config;
 use crate::regression::{self, RegressionOpts, RegressionOutcome};
 use crate::report;
-use crate::{emit_error, load_config};
 
 mod filtering;
 mod output;
@@ -132,6 +133,14 @@ pub struct CheckOptions<'a> {
     pub include_dupes: bool,
     pub trace_opts: &'a TraceOptions,
     pub explain: bool,
+    pub top: Option<usize>,
+    /// When true, emit a condensed summary instead of full item-level output.
+    /// Read by combined mode; not yet consumed by standalone check.
+    #[allow(
+        dead_code,
+        reason = "wired from CLI but consumed by combined mode, not standalone check"
+    )]
+    pub summary: bool,
     pub regression_opts: RegressionOpts<'a>,
 }
 
@@ -142,6 +151,7 @@ pub struct CheckResult {
     pub elapsed: Duration,
     pub fail_on_issues: bool,
     pub regression: Option<RegressionOutcome>,
+    pub baseline_deltas: Option<crate::baseline::BaselineDeltas>,
 }
 
 /// Run analysis, filtering, and baseline handling. Returns results without printing.
@@ -229,8 +239,13 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
     opts.filters.apply(&mut results);
 
     // Baseline handling
-    if let Some(exit) = handle_baseline(&mut results, opts.save_baseline, opts.baseline, opts.quiet)
-    {
+    if let Some(exit) = handle_baseline(
+        &mut results,
+        opts.save_baseline,
+        opts.baseline,
+        opts.quiet,
+        opts.output,
+    ) {
         return Err(exit);
     }
 
@@ -252,7 +267,13 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
     let just_saved_baseline = match opts.regression_opts.save_target {
         regression::SaveRegressionTarget::File(save_path) => {
             let counts = regression::CheckCounts::from_results(&results);
-            regression::save_regression_baseline(save_path, opts.root, Some(&counts), None)?;
+            regression::save_regression_baseline(
+                save_path,
+                opts.root,
+                Some(&counts),
+                None,
+                opts.output,
+            )?;
             Some(counts)
         }
         regression::SaveRegressionTarget::Config => {
@@ -264,7 +285,7 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
                 },
                 |explicit| explicit.clone(),
             );
-            regression::save_baseline_to_config(&config_path, &counts)?;
+            regression::save_baseline_to_config(&config_path, &counts, opts.output)?;
             Some(counts)
         }
         regression::SaveRegressionTarget::None => None,
@@ -291,6 +312,7 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         elapsed,
         fail_on_issues: opts.fail_on_issues,
         regression: regression_outcome,
+        baseline_deltas: None,
     })
 }
 
@@ -301,6 +323,8 @@ pub fn print_check_result(
     explain: bool,
     regression_json: bool,
     group_by: Option<report::OwnershipResolver>,
+    top: Option<usize>,
+    summary: bool,
 ) -> ExitCode {
     let effective_rules = if result.fail_on_issues {
         let mut r = result.config.rules.clone();
@@ -317,6 +341,8 @@ pub fn print_check_result(
         quiet,
         explain,
         group_by,
+        top,
+        summary,
     };
     let report_code = report::print_results(
         &result.results,
@@ -355,6 +381,11 @@ pub fn run_check(opts: &CheckOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
 
+    // Entry-point summary (standalone check mode; combined mode uses orientation header)
+    if !opts.quiet && matches!(opts.output, OutputFormat::Human) {
+        crate::combined::print_entry_point_summary(&result.results);
+    }
+
     let resolver = match crate::build_ownership_resolver(
         opts.group_by,
         opts.root,
@@ -364,7 +395,15 @@ pub fn run_check(opts: &CheckOptions<'_>) -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
-    let exit = print_check_result(&result, opts.quiet, opts.explain, true, resolver);
+    let exit = print_check_result(
+        &result,
+        opts.quiet,
+        opts.explain,
+        true,
+        resolver,
+        opts.top,
+        opts.summary,
+    );
 
     // Cross-reference: run duplication analysis on the full results
     // (the combined command handles this separately)
@@ -386,6 +425,7 @@ fn handle_baseline(
     save_path: Option<&std::path::Path>,
     load_path: Option<&std::path::Path>,
     quiet: bool,
+    output: OutputFormat,
 ) -> Option<ExitCode> {
     // Save baseline if requested
     if let Some(baseline_path) = save_path {
@@ -393,16 +433,22 @@ fn handle_baseline(
         match serde_json::to_string_pretty(&baseline_data) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(baseline_path, json) {
-                    eprintln!("Error: failed to save baseline: {e}");
-                    return Some(ExitCode::from(2));
+                    return Some(emit_error(
+                        &format!("failed to save baseline: {e}"),
+                        2,
+                        output,
+                    ));
                 }
                 if !quiet {
                     eprintln!("Baseline saved to {}", baseline_path.display());
                 }
             }
             Err(e) => {
-                eprintln!("Error: failed to serialize baseline: {e}");
-                return Some(ExitCode::from(2));
+                return Some(emit_error(
+                    &format!("failed to serialize baseline: {e}"),
+                    2,
+                    output,
+                ));
             }
         }
     }
@@ -418,13 +464,19 @@ fn handle_baseline(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: failed to parse baseline: {e}");
-                    return Some(ExitCode::from(2));
+                    return Some(emit_error(
+                        &format!("failed to parse baseline: {e}"),
+                        2,
+                        output,
+                    ));
                 }
             },
             Err(e) => {
-                eprintln!("Error: failed to read baseline: {e}");
-                return Some(ExitCode::from(2));
+                return Some(emit_error(
+                    &format!("failed to read baseline: {e}"),
+                    2,
+                    output,
+                ));
             }
         }
     }
@@ -646,6 +698,7 @@ mod tests {
                 length: 2,
                 line: 1,
                 col: 0,
+                is_cross_package: false,
             });
         let mut f = no_filters();
         f.circular_deps = true;

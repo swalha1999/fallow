@@ -15,7 +15,7 @@ fn path_matches(module_path: &Path, root: &Path, user_path: &str) -> bool {
     if rel_str == user_path || module_path.to_string_lossy() == user_path {
         return true;
     }
-    if root.canonicalize().is_ok_and(|canonical_root| {
+    if dunce::canonicalize(root).is_ok_and(|canonical_root| {
         module_path
             .strip_prefix(&canonical_root)
             .is_ok_and(|rel| rel.to_string_lossy() == user_path)
@@ -170,7 +170,7 @@ pub fn trace_export(
             );
             ExportReference {
                 from_file: from_path,
-                kind: format_reference_kind(&r.kind),
+                kind: format_reference_kind(r.kind),
             }
         })
         .collect();
@@ -204,7 +204,7 @@ pub fn trace_export(
         .collect();
 
     let is_used = !export.references.is_empty();
-    let reason = if !module.is_reachable {
+    let reason = if !module.is_reachable() {
         "File is unreachable from any entry point".to_string()
     } else if is_used {
         format!(
@@ -216,7 +216,7 @@ pub fn trace_export(
                 format!(", re-exported through {} barrel(s)", re_export_chains.len())
             }
         )
-    } else if module.is_entry_point {
+    } else if module.is_entry_point() {
         "No internal references, but file is an entry point (export is externally accessible)"
             .to_string()
     } else if !re_export_chains.is_empty() {
@@ -235,8 +235,8 @@ pub fn trace_export(
             .unwrap_or(&module.path)
             .to_path_buf(),
         export_name: export_name.to_string(),
-        file_reachable: module.is_reachable,
-        is_entry_point: module.is_entry_point,
+        file_reachable: module.is_reachable(),
+        is_entry_point: module.is_entry_point(),
         is_used,
         direct_references,
         re_export_chains,
@@ -269,7 +269,7 @@ pub fn trace_file(graph: &ModuleGraph, root: &Path, file_path: &str) -> Option<F
                     );
                     ExportReference {
                         from_file: from_path,
-                        kind: format_reference_kind(&r.kind),
+                        kind: format_reference_kind(r.kind),
                     }
                 })
                 .collect(),
@@ -326,8 +326,8 @@ pub fn trace_file(graph: &ModuleGraph, root: &Path, file_path: &str) -> Option<F
             .strip_prefix(root)
             .unwrap_or(&module.path)
             .to_path_buf(),
-        is_reachable: module.is_reachable,
-        is_entry_point: module.is_entry_point,
+        is_reachable: module.is_reachable(),
+        is_entry_point: module.is_entry_point(),
         exports,
         imports_from,
         imported_by,
@@ -378,7 +378,7 @@ pub fn trace_dependency(graph: &ModuleGraph, root: &Path, package_name: &str) ->
     }
 }
 
-fn format_reference_kind(kind: &ReferenceKind) -> String {
+fn format_reference_kind(kind: ReferenceKind) -> String {
     match kind {
         ReferenceKind::NamedImport => "named import".to_string(),
         ReferenceKind::DefaultImport => "default import".to_string(),
@@ -754,6 +754,7 @@ mod tests {
                 line_count: 11,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -789,6 +790,7 @@ mod tests {
                 line_count: 11,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 1,
                 files_with_clones: 1,
@@ -833,6 +835,7 @@ mod tests {
                 line_count: 11,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,

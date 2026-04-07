@@ -6,7 +6,7 @@ use fallow_config::OutputFormat;
 
 use crate::check::{CheckOptions, CheckResult, IssueFilters, TraceOptions};
 use crate::dupes::{DupesMode, DupesOptions, DupesResult};
-use crate::emit_error;
+use crate::error::emit_error;
 use crate::health::{HealthOptions, HealthResult, SortBy};
 use crate::report;
 use crate::report::plural;
@@ -326,6 +326,8 @@ fn run_audit_check<'a>(
         include_dupes: false,
         trace_opts: &trace_opts,
         explain: opts.explain,
+        top: None,
+        summary: false,
         regression_opts: crate::regression::RegressionOpts {
             fail_on_regression: false,
             tolerance: crate::regression::Tolerance::Absolute(0),
@@ -365,6 +367,7 @@ fn run_audit_dupes<'a>(
         trace: None,
         changed_since,
         explain: opts.explain,
+        summary: false,
         group_by: opts.group_by,
     }) {
         Ok(r) => Ok(Some(r)),
@@ -395,13 +398,16 @@ fn run_audit_health<'a>(
         save_baseline: None,
         complexity: true,
         file_scores: false,
+        coverage_gaps: false,
         hotspots: false,
         targets: false,
+        effort: None,
         score: false,
         min_score: None,
         since: None,
         min_commits: None,
         explain: opts.explain,
+        summary: false,
         save_snapshot: None,
         trend: false,
         group_by: opts.group_by,
@@ -471,7 +477,7 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
                 eprintln!();
                 eprintln!("── Dead Code ──────────────────────────────────────");
             }
-            crate::check::print_check_result(check, quiet, explain, false, None);
+            crate::check::print_check_result(check, quiet, explain, false, None, None, false);
         }
 
         if has_dupe_groups && let Some(ref dupes) = result.dupes {
@@ -479,7 +485,7 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
                 eprintln!();
                 eprintln!("── Duplication ────────────────────────────────────");
             }
-            crate::dupes::print_dupes_result(dupes, quiet, explain);
+            crate::dupes::print_dupes_result(dupes, quiet, explain, false);
         }
 
         if has_health_findings && let Some(ref health) = result.health {
@@ -487,7 +493,7 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
                 eprintln!();
                 eprintln!("── Complexity ─────────────────────────────────────");
             }
-            crate::health::print_health_result(health, quiet, explain, None);
+            crate::health::print_health_result(health, quiet, explain, None, false);
         }
     }
 
@@ -530,7 +536,12 @@ fn print_audit_vital_signs(result: &AuditResult) {
     ));
 
     let line = parts.join(" \u{00b7} ");
-    println!("{} {}", "\u{25a0}".dimmed(), line.dimmed());
+    println!(
+        "{} {} {}",
+        "\u{25a0}".dimmed(),
+        "Metrics:".dimmed(),
+        line.dimmed()
+    );
 }
 
 /// Build summary parts for the status line (shared between warn and fail).

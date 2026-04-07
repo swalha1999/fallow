@@ -1,4 +1,5 @@
 use super::common::{create_config, fixture_path};
+use fallow_config::{FallowConfig, OutputFormat, Severity};
 
 // ---------------------------------------------------------------------------
 // Hidden directory allowlist
@@ -124,5 +125,67 @@ fn error_no_package_json_produces_empty_results() {
         results.total_issues(),
         0,
         "no package.json should produce empty results"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TOML config file loading
+// ---------------------------------------------------------------------------
+
+#[test]
+fn toml_config_loads_and_applies_rules() {
+    let root = fixture_path("config-toml-project");
+    let config_path = root.join("fallow.toml");
+
+    // Verify the TOML config is discovered and loaded correctly
+    let found = FallowConfig::find_config_path(&root);
+    assert_eq!(
+        found.as_deref(),
+        Some(config_path.as_path()),
+        "find_config_path should discover fallow.toml"
+    );
+
+    let loaded = FallowConfig::load(&config_path).expect("TOML config should load");
+
+    // The fixture sets `unused-files = "warn"` in [rules]
+    assert_eq!(
+        loaded.rules.unused_files,
+        Severity::Warn,
+        "unused-files should be Warn per fallow.toml"
+    );
+
+    // All other rules should still be at their defaults (Error)
+    assert_eq!(
+        loaded.rules.unused_exports,
+        Severity::Error,
+        "unused-exports should default to Error"
+    );
+
+    // Resolve and run analysis to confirm the config is applied end-to-end
+    let resolved = loaded.resolve(root, OutputFormat::Human, 4, true, true);
+    let results = fallow_core::analyze(&resolved).expect("analysis should succeed");
+
+    // orphan.ts is unused, so it should be detected (warn still detects, just doesn't fail CI)
+    let unused_files: Vec<String> = results
+        .unused_files
+        .iter()
+        .map(|f| f.path.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    assert!(
+        unused_files.iter().any(|f| f.ends_with("src/orphan.ts")),
+        "orphan.ts should be in unused_files. Got: {unused_files:?}"
+    );
+
+    // unusedFunction in utils.ts should be detected as an unused export
+    let unused_export_names: Vec<&str> = results
+        .unused_exports
+        .iter()
+        .map(|e| e.export_name.as_str())
+        .collect();
+
+    assert!(
+        unused_export_names.contains(&"unusedFunction"),
+        "unusedFunction should be in unused_exports. Got: {unused_export_names:?}"
     );
 }

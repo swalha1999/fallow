@@ -43,12 +43,17 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// Sets `NO_COLOR=1` and `RUST_LOG=""` for deterministic output.
 /// Injects `--root <fixture_path>` before the caller's args.
 pub fn run_fallow(subcommand: &str, fixture: &str, args: &[&str]) -> CommandOutput {
-    let bin = fallow_bin();
     let root = fixture_path(fixture);
+    run_fallow_in_root(subcommand, &root, args)
+}
+
+/// Run an arbitrary fallow command against an explicit project root.
+pub fn run_fallow_in_root(subcommand: &str, root: &Path, args: &[&str]) -> CommandOutput {
+    let bin = fallow_bin();
     let mut cmd = Command::new(&bin);
     cmd.arg(subcommand)
         .arg("--root")
-        .arg(&root)
+        .arg(root)
         .env("RUST_LOG", "")
         .env("NO_COLOR", "1");
     for arg in args {

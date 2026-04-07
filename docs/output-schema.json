@@ -144,6 +144,18 @@
           "type": "array",
           "items": { "$ref": "#/definitions/BoundaryViolation" }
         },
+        "entry_points": {
+          "$ref": "#/definitions/EntryPoints",
+          "description": "Entry point detection summary. Always present in check output."
+        },
+        "summary": {
+          "$ref": "#/definitions/CheckSummary",
+          "description": "Per-category issue counts. Always present. When --summary is used, individual issue arrays are omitted."
+        },
+        "baseline_deltas": {
+          "$ref": "#/definitions/BaselineDeltas",
+          "description": "Per-category delta comparison against a baseline. Only present when --baseline is used."
+        },
         "regression": {
           "$ref": "#/definitions/RegressionResult",
           "description": "Regression check result. Only present when --fail-on-regression is used."
@@ -153,8 +165,8 @@
     },
 
     "CheckGroupedOutput": {
-      "title": "fallow dead-code --group-by <owner|directory> --format json",
-      "description": "Grouped dead code output produced when --group-by is active. Issues are partitioned into groups (by CODEOWNERS team or directory prefix) instead of flat arrays.",
+      "title": "fallow dead-code --group-by <owner|directory|package> --format json",
+      "description": "Grouped dead code output produced when --group-by is active. Issues are partitioned into groups (by CODEOWNERS team, directory prefix, or workspace package) instead of flat arrays.",
       "type": "object",
       "required": ["schema_version", "version", "elapsed_ms", "grouped_by", "total_issues", "groups"],
       "properties": {
@@ -163,8 +175,8 @@
         "elapsed_ms": { "$ref": "#/definitions/ElapsedMs" },
         "grouped_by": {
           "type": "string",
-          "enum": ["owner", "directory"],
-          "description": "The grouping strategy used. 'owner' groups by CODEOWNERS team, 'directory' groups by top-level directory prefix."
+          "enum": ["owner", "directory", "package"],
+          "description": "The grouping strategy used. 'owner' groups by CODEOWNERS team, 'directory' groups by top-level directory prefix, 'package' groups by workspace package name."
         },
         "total_issues": {
           "type": "integer",
@@ -304,6 +316,10 @@
           "$ref": "#/definitions/HealthTrend",
           "description": "Trend comparison against a previous snapshot. Only present when --trend is used."
         },
+        "coverage_gaps": {
+          "$ref": "#/definitions/CoverageGaps",
+          "description": "Static test coverage gaps. Only present when --coverage-gaps is used."
+        },
         "_meta": { "$ref": "#/definitions/Meta" }
       }
     },
@@ -328,6 +344,11 @@
           "items": { "$ref": "#/definitions/CloneFamily" }
         },
         "stats": { "$ref": "#/definitions/DuplicationStats" },
+        "mirrored_directories": {
+          "type": "array",
+          "description": "Directory pairs with high structural duplication. Only present when mirrored directories are detected.",
+          "items": { "$ref": "#/definitions/MirroredDirectory" }
+        },
         "_meta": { "$ref": "#/definitions/Meta" }
       }
     },
@@ -380,6 +401,11 @@
           "description": "Average maintainability index across all scored files (before --top truncation). Only present when --file-scores is used and at least one file was scored.",
           "minimum": 0,
           "maximum": 100
+        },
+        "coverage_model": {
+          "type": "string",
+          "enum": ["static_binary"],
+          "description": "Coverage model used for CRAP score computation. 'static_binary' uses module graph test reachability (tested = CC, untested = CC^2 + CC). Only present when file scores are computed."
         }
       }
     },
@@ -429,8 +455,8 @@
     },
     "FileHealthScore": {
       "type": "object",
-      "required": ["path", "fan_in", "fan_out", "dead_code_ratio", "complexity_density", "maintainability_index", "total_cyclomatic", "total_cognitive", "function_count", "lines"],
-      "description": "Per-file health score. Formula: MI = 100 - (complexity_density × 30) - (dead_code_ratio × 20) - min(ln(fan_out+1) × 4, 15), clamped to [0, 100]. Type-only exports excluded from dead_code_ratio.",
+      "required": ["path", "fan_in", "fan_out", "dead_code_ratio", "complexity_density", "maintainability_index", "total_cyclomatic", "total_cognitive", "function_count", "lines", "crap_max", "crap_above_threshold"],
+      "description": "Per-file health score. Formula: MI = 100 - (complexity_density x 30) - (dead_code_ratio x 20) - min(ln(fan_out+1) x 4, 15), clamped to [0, 100]. Type-only exports excluded from dead_code_ratio. CRAP scores combine cyclomatic complexity with static test reachability.",
       "properties": {
         "path": {
           "type": "string",
@@ -476,6 +502,16 @@
         "lines": {
           "type": "integer",
           "description": "Total lines of code in the file."
+        },
+        "crap_max": {
+          "type": "number",
+          "description": "Maximum CRAP score among functions in this file. Static binary model: test-reachable file = CC, untested = CC^2 + CC (Savoia & Evans, 2007).",
+          "minimum": 0
+        },
+        "crap_above_threshold": {
+          "type": "integer",
+          "description": "Count of functions with CRAP score >= 30 (CC >= 5 without test dependency path).",
+          "minimum": 0
         }
       }
     },
@@ -676,6 +712,57 @@
       }
     },
 
+    "CoverageGaps": {
+      "type": "object",
+      "description": "Static test coverage gaps derived from the module graph. Shows runtime files and exports with no test dependency path.",
+      "required": ["summary"],
+      "properties": {
+        "summary": { "$ref": "#/definitions/CoverageGapSummary" },
+        "files": {
+          "type": "array",
+          "description": "Runtime files with no test dependency path. Omitted when empty.",
+          "items": { "$ref": "#/definitions/UntestedFile" }
+        },
+        "exports": {
+          "type": "array",
+          "description": "Runtime exports with no test-reachable reference chain. Omitted when empty.",
+          "items": { "$ref": "#/definitions/UntestedExport" }
+        }
+      }
+    },
+    "CoverageGapSummary": {
+      "type": "object",
+      "description": "Aggregate coverage-gap counters for the current analysis scope.",
+      "required": ["runtime_files", "covered_files", "file_coverage_pct", "untested_files", "untested_exports"],
+      "properties": {
+        "runtime_files": { "type": "integer", "description": "Runtime-reachable files in scope." },
+        "covered_files": { "type": "integer", "description": "Runtime-reachable files also reachable from tests." },
+        "file_coverage_pct": { "type": "number", "description": "Percentage of runtime files that are test-reachable.", "minimum": 0, "maximum": 100 },
+        "untested_files": { "type": "integer", "description": "Runtime files with no test dependency path." },
+        "untested_exports": { "type": "integer", "description": "Runtime exports with no test-reachable reference chain." }
+      }
+    },
+    "UntestedFile": {
+      "type": "object",
+      "description": "A runtime file with no test dependency path.",
+      "required": ["path", "value_export_count"],
+      "properties": {
+        "path": { "type": "string", "description": "File path (relative to project root)." },
+        "value_export_count": { "type": "integer", "description": "Number of value exports declared by the file." }
+      }
+    },
+    "UntestedExport": {
+      "type": "object",
+      "description": "A runtime export that no test-reachable module references.",
+      "required": ["path", "export_name", "line", "col"],
+      "properties": {
+        "path": { "type": "string", "description": "File path (relative to project root)." },
+        "export_name": { "type": "string", "description": "Export name." },
+        "line": { "type": "integer", "description": "1-based source line." },
+        "col": { "type": "integer", "description": "0-based source column." }
+      }
+    },
+
     "HealthScore": {
       "type": "object",
       "description": "Project-level health score. Score = 100 minus penalties from dead code, complexity, maintainability, hotspots, unused deps, and circular deps. Use --score to force full pipeline for maximum accuracy.",
@@ -716,7 +803,11 @@
         "hotspot_count": { "type": ["integer", "null"], "description": "Files with hotspot score >= 50. Null if git history unavailable." },
         "maintainability_avg": { "type": ["number", "null"], "description": "Average maintainability index (0-100)." },
         "unused_dep_count": { "type": ["integer", "null"], "description": "Number of unused dependencies." },
-        "circular_dep_count": { "type": ["integer", "null"], "description": "Number of circular dependency chains." }
+        "circular_dep_count": { "type": ["integer", "null"], "description": "Number of circular dependency chains." },
+        "counts": {
+          "$ref": "#/definitions/VitalSignsCounts",
+          "description": "Raw counts behind the vital signs percentages. Always present when vital_signs is present."
+        }
       }
     },
 
@@ -1262,6 +1353,10 @@
           "type": "integer",
           "description": "0-based byte column offset of the import that starts the cycle."
         },
+        "is_cross_package": {
+          "type": "boolean",
+          "description": "Whether this cycle crosses workspace package boundaries. Only present when true."
+        },
         "actions": {
           "type": "array",
           "items": { "$ref": "#/definitions/Action" },
@@ -1479,6 +1574,88 @@
         "tolerance_kind": { "type": "string", "enum": ["absolute", "percentage"] },
         "exceeded": { "type": "boolean" },
         "reason": { "type": "string", "description": "Only present when status is 'skipped'." }
+      }
+    },
+
+    "EntryPoints": {
+      "type": "object",
+      "description": "Entry point detection summary showing total detected entry points and their sources.",
+      "required": ["total", "sources"],
+      "properties": {
+        "total": { "type": "integer", "description": "Total number of detected entry points." },
+        "sources": {
+          "type": "object",
+          "description": "Breakdown of entry points by detection source (e.g., 'package.json', 'next.js', 'config entry').",
+          "additionalProperties": { "type": "integer" }
+        }
+      }
+    },
+
+    "CheckSummary": {
+      "type": "object",
+      "description": "Per-category issue counts for dead code analysis.",
+      "properties": {
+        "unused_files": { "type": "integer" },
+        "unused_exports": { "type": "integer" },
+        "unused_types": { "type": "integer" },
+        "unused_dependencies": { "type": "integer" },
+        "unused_dev_dependencies": { "type": "integer" },
+        "unused_enum_members": { "type": "integer" },
+        "unused_class_members": { "type": "integer" },
+        "unresolved_imports": { "type": "integer" },
+        "unlisted_dependencies": { "type": "integer" },
+        "duplicate_exports": { "type": "integer" },
+        "circular_dependencies": { "type": "integer" },
+        "boundary_violations": { "type": "integer" }
+      }
+    },
+
+    "BaselineDeltas": {
+      "type": "object",
+      "description": "Per-category delta comparison against a saved baseline. Shows current count, baseline count, and delta for each category.",
+      "required": ["total_delta", "per_category"],
+      "properties": {
+        "total_delta": { "type": "integer", "description": "Net change in total issues vs baseline (positive = more issues)." },
+        "per_category": {
+          "type": "object",
+          "description": "Per-category breakdown of current, baseline, and delta counts.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["current", "baseline", "delta"],
+            "properties": {
+              "current": { "type": "integer", "description": "Current issue count for this category." },
+              "baseline": { "type": "integer", "description": "Baseline issue count for this category." },
+              "delta": { "type": "integer", "description": "Change from baseline (current - baseline)." }
+            }
+          }
+        }
+      }
+    },
+
+    "MirroredDirectory": {
+      "type": "object",
+      "description": "A pair of directories with high structural duplication, indicating systematic copy-paste of directory trees.",
+      "required": ["dir_a", "dir_b", "shared_files", "total_lines"],
+      "properties": {
+        "dir_a": { "type": "string", "description": "First directory path (relative to project root)." },
+        "dir_b": { "type": "string", "description": "Second directory path (relative to project root)." },
+        "shared_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File names that appear in both directories with duplicated content."
+        },
+        "total_lines": { "type": "integer", "description": "Total duplicated lines across all shared files." }
+      }
+    },
+
+    "VitalSignsCounts": {
+      "type": "object",
+      "description": "Raw counts behind the vital signs percentages.",
+      "properties": {
+        "total_files": { "type": "integer", "description": "Total number of discovered source files." },
+        "total_exports": { "type": "integer", "description": "Total number of exports across all files." },
+        "dead_files": { "type": "integer", "description": "Number of unreachable files." },
+        "dead_exports": { "type": "integer", "description": "Number of unused exports." }
       }
     },
 

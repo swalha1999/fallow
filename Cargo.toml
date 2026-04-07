@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "2.11.0"
+version = "2.18.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
@@ -14,21 +14,21 @@ keywords = ["typescript", "javascript", "lint", "static-analysis", "code-quality
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-fallow-core = { version = "2.11.0", path = "crates/core" }
-fallow-config = { version = "2.11.0", path = "crates/config" }
-fallow-extract = { version = "2.11.0", path = "crates/extract" }
-fallow-graph = { version = "2.11.0", path = "crates/graph" }
-fallow-types = { version = "2.11.0", path = "crates/types" }
+fallow-core = { version = "2.18.0", path = "crates/core" }
+fallow-config = { version = "2.18.0", path = "crates/config" }
+fallow-extract = { version = "2.18.0", path = "crates/extract" }
+fallow-graph = { version = "2.18.0", path = "crates/graph" }
+fallow-types = { version = "2.18.0", path = "crates/types" }
 
 # Parsing & analysis
-oxc_allocator = "0.122"
-oxc_ast = "0.122"
-oxc_ast_visit = "0.122"
-oxc_parser = "0.122"
+oxc_allocator = "0.123"
+oxc_ast = "0.123"
+oxc_ast_visit = "0.123"
+oxc_parser = "0.123"
 oxc_resolver = "11"
-oxc_semantic = "0.122"
-oxc_span = "0.122"
-oxc_syntax = "0.122"
+oxc_semantic = "0.123"
+oxc_span = "0.123"
+oxc_syntax = "0.123"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -44,6 +44,7 @@ schemars = "1"
 rayon = "1"
 
 # File system
+dunce = "1"
 ignore = "0.4"
 glob = "0.3"
 globset = { version = "0.4", features = ["serde1"] }
@@ -57,12 +58,12 @@ rustc-hash = "2"
 ureq = { version = "3", features = ["rustls"] }
 
 # Caching
-bincode = "2"
+bitcode = "0.6"
 
 # Diagnostics & output
 colored = "3"
 indicatif = "0.18"
-miette = { version = "7", features = ["fancy"] }
+miette = { version = "7" }
 
 # Logging
 tracing = "0.1"
@@ -73,7 +74,7 @@ fixedbitset = "0.5"
 
 # LSP
 tower-lsp = "0.20"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-std", "process", "time"] }
 
 # File watching
 notify = "8"

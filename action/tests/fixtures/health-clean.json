@@ -25,5 +25,13 @@
   "hotspot_summary": {
     "since": "6 months",
     "min_commits": 3
+  },
+  "health_score": {
+    "score": 92.5,
+    "grade": "A",
+    "penalties": {
+      "complexity": 2.5,
+      "p90_complexity": 5.0
+    }
   }
 }

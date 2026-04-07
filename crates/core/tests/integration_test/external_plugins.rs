@@ -19,9 +19,11 @@ fn external_plugin_config(root: &std::path::Path) -> fallow_config::ResolvedConf
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root.to_path_buf(), OutputFormat::Human, 4, true, true)
 }

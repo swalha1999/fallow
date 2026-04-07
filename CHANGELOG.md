@@ -7,6 +7,218 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-04-07
+
+### Added
+
+- **`--score`, `--trend`, `--save-snapshot` on combined command** -- the bare `fallow` command (all analyses) now supports health score computation, snapshot saving, and trend comparison. Previously these flags were only available on the `health` subcommand. Enables the health delta header in CI PR/MR comments for combined runs.
+- **Health delta header uses metric labels** -- the trend delta line now uses the metric's own label (e.g., "avg complexity" from the trend data) instead of hardcoded text, making the output more robust and descriptive.
+- **First-run progressive disclosure** -- when `--score` is enabled but no snapshot exists for trend comparison, the PR comment shows a hint: "Enable `save-snapshot: true` to track score trends over time."
+- **Fixture accuracy** -- test fixtures now include `crap_max` and `crap_above_threshold` fields on all `file_scores` entries, matching the actual CLI output schema.
+
+### Fixed
+
+- **GitLab CI `FALLOW_SCORE` and `FALLOW_TREND` wiring** -- both env vars now work for the combined (empty command) case, not just the `health` subcommand.
+- **`signed(0)` formatting consistency** -- zero deltas now display as "0.0" instead of "0", consistent with non-zero values like "7.2".
+- **GitLab test parity** -- dead export delta assertion (`(-3.8%)`) added to GitLab CI tests, matching the GitHub Action test coverage.
+- **CI input descriptions** -- `action.yml` descriptions for `score`, `trend`, and `save-snapshot` now mention bare command support and snapshot storage location.
+
+## [2.17.1] - 2026-04-07
+
+### Added
+
+- **GitHub Action `score` input** -- new `score: true` input enables the `--score` flag on the health command, adding a health delta header to PR summaries showing grade, score change, dead export drift, and complexity trends.
+- **Health delta header in CI summaries** -- when `--score` is used, both GitHub Action and GitLab CI summaries display a one-line health score comparison against the previous snapshot.
+
+### Fixed
+
+- **Summary section links** -- all section headers (Code issues, Duplication, Complexity, Codebase health) and table metrics now link to their respective docs pages. Fixes broken markdown link in the Duplication `<summary>` tag.
+
+## [2.17.0] - 2026-04-07
+
+### Added
+
+- **Nuxt runtime convention hardening** -- `plugins/`, `middleware/`, `server/middleware/`, and `components/` directories now have their default exports and named exports (`defineNuxtPlugin`, `defineNuxtRouteMiddleware`, `defineEventHandler`, `defineNuxtComponent`) treated as framework-used. Nested directory scanning for plugins, composables, and utils. Nuxt config `plugins`, `css`, and `modules` entries discovered as runtime entry points with path normalization. ([#60](https://github.com/fallow-rs/fallow/pull/60))
+- **Vue SFC edge case hardening** -- `<script src="...">` external script references in Vue SFCs now generate graph edges. `<script>` blocks with `generic="T extends Foo<Bar>"` containing `>` in type parameters are parsed correctly. HTML comments in Vue templates are stripped before import extraction. ([#60](https://github.com/fallow-rs/fallow/pull/60))
+
+### Fixed
+
+- **HTML root-relative path resolution** -- root-relative paths in HTML files (e.g., `<script src="/src/main.tsx">`) are now resolved against the project root instead of being treated as absolute filesystem paths. This fixes false unresolved-import reports in Vite, Parcel, and similar dev server setups. ([#61](https://github.com/fallow-rs/fallow/pull/61))
+
+## [2.16.0] - 2026-04-07
+
+### Added
+
+- **Untested complexity risk (CRAP) scores** -- per-function risk scoring combining cyclomatic complexity with static test reachability from the module graph. Binary model: test-reachable files score CC, untested files score CC^2+CC. Threshold at >=30 (CC>=5 untested), based on the CRAP metric (Savoia & Evans, 2007). Adds `crap_max` and `crap_above_threshold` fields to `FileHealthScore`, `coverage_model: "static_binary"` to `HealthSummary` and `TrendPoint`. Gated behind `--file-scores`. Extreme values (>999) capped in human output; JSON stays uncapped.
+- **AddTestCoverage refactoring target** -- new recommendation category (Rule 7) fires when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. Contributing factor `crap_max` appears on targets with high untested risk. Evidence links to the top complex functions.
+- **SvelteKit `$types` route group parentheses coverage** -- route groups with parentheses in path segments are now handled correctly for `$types` imports. ([#54](https://github.com/fallow-rs/fallow/pull/54))
+
+### Changed
+
+- **Lazy complexity computation** -- cyclomatic/cognitive complexity is now computed on-demand rather than eagerly, reducing parse time for pipelines that don't need it.
+- **Packed ModuleNode flags** -- boolean flags on `ModuleNode` packed into a bitfield for tighter memory layout.
+- **Smarter BFS reachability** -- reachability analysis uses optimized graph traversal.
+- **Duplicate detection improvements** -- faster clone detection with reduced memory allocation.
+
+### Fixed
+
+- **Windows path separator normalization** -- health coverage-gaps tests now normalize backslashes for Windows CI compatibility.
+- **GitHub Action fork PR handling** -- PR comment tests are skipped on fork PRs where write permissions are unavailable.
+
+## [2.15.0] - 2026-04-06
+
+### Added
+
+- **Next.js convention export tracking** -- App Router special files (`loading`, `error`, `not-found`, `template`, `default`, `global-error`, `forbidden`, `unauthorized`, `global-not-found`) and route segment config exports (`revalidate`, `dynamic`, `runtime`, `fetchCache`, `preferredRegion`, `maxDuration`, `viewport`, `generateViewport`) are now treated as framework-used. Pages Router `_app` (`reportWebVitals`), API routes (`config`), `middleware`, `proxy`, `instrumentation` (`register`, `onRequestError`), `instrumentation-client` (`onRouterTransitionStart`), and `mdx-components` (`useMDXComponents`) are also covered. Entry-point files still report genuinely unused helper exports alongside framework-used ones. ([#59](https://github.com/fallow-rs/fallow/pull/59) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Next.js `transpilePackages` support** -- packages listed in `next.config.{ts,js}` `transpilePackages` are treated as referenced dependencies, preventing false unused-dependency reports. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Config-defined alias resolution for Vite, Nuxt, and SvelteKit** -- aliases defined in `vite.config.ts` (`resolve.alias`), `nuxt.config.ts` (`alias`), and `svelte.config.ts` (`kit.alias`) are extracted at analysis time and fed into the resolver as fallbacks. Supports object form, array form, `fileURLToPath(new URL(...))`, `path.resolve(__dirname, ...)`, and `path.join(...)` patterns. Eliminates false unresolved-import, unlisted-dependency, and unused-file reports for config-aliased paths. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Nuxt `srcDir` support** -- when `srcDir` is set in `nuxt.config.ts`, fallow remaps `~/` and `@/` aliases to the configured source directory, adds entry patterns and always-used files under that directory, and resolves `imports.dirs` and `components` paths relative to srcDir. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Nuxt custom directories** -- `imports.dirs`, `components` (string arrays and `{ path: "..." }` objects), and `components.dirs` from `nuxt.config.ts` are now discovered as auto-import roots and component directories. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Nuxt `@/` and `@@/` alias recognition** -- `@/` (srcDir synonym for `~/`) and `@@/` (rootDir synonym for `~~/`) are now recognized as path aliases in both static analysis and resolver fallback. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **SvelteKit param matcher support** -- files in `src/params/**/*.{ts,js}` have their `match` export treated as framework-used. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Vue component tag tracking** -- imported components used as template tags (`<FancyCard />`, `<fancy-card />`, `<Form.Input />`) are now credited as used. Supports PascalCase, kebab-case-to-PascalCase conversion, and namespace member access. Built-in components (`Transition`, `KeepAlive`, `Teleport`, `Suspense`, `Slot`) are excluded. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Vue custom directive tracking** -- custom directives like `v-focus-trap` are mapped to their imported binding name (`vFocusTrap`) and credited as used. Built-in directives (`v-if`, `v-for`, `v-model`, etc.) are excluded. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Vue `v-on` and `v-bind` object syntax** -- `v-on="handlers"` and `v-bind="attrs"` now credit the bound expression as used. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Svelte component tag tracking** -- imported components used as Svelte markup tags (`<FancyButton />`, `<Icons.Alert />`) are credited as used, including namespace member access. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Svelte directive and attribute tracking** -- `use:tooltip`, `transition:fade`, `animate:flip`, `in:fly`, `out:slide` directives credit their imported action/transition binding as used. Attribute value expressions (`class:active={isActive}`) and shorthand attributes (`{page}`) are also tracked. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Svelte `$store` subscription tracking** -- `$page.url.pathname` in Svelte templates now credits the `page` import as used, with `url` tracked as a member access. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+
+### Fixed
+
+- **Svelte template scanner index advancement** -- the HTML tag scanner was advancing by only 1 byte instead of jumping to the end of the scanned tag, causing every HTML tag to be re-parsed from its second byte. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+- **Panic on malformed Svelte brace attributes** -- `parse_markup_tag` used `.expect()` on `scan_curly_section` which could panic on unterminated brace expressions in Svelte templates. Replaced with graceful fallback. ([#59](https://github.com/fallow-rs/fallow/pull/59))
+
+## [2.14.2] - 2026-04-06
+
+### Added
+
+- **Svelte/Vue template-visible import tracking** -- imports used only in SFC template markup (e.g., `{formatDate(x)}` in Svelte, `{{ utils.format() }}` in Vue) are now credited as used, preventing false unused-export/import reports. Namespace member access in templates (e.g., `utils.formatDate`) is tracked as member usage. Vue credits only `<script setup>` bindings; Svelte excludes `context="module"` scripts. ([#58](https://github.com/fallow-rs/fallow/pull/58) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Type-only circular dependency filtering** -- `import type` edges are excluded from cycle detection since they are erased at compile time and cannot cause runtime cycles. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+- **Duplicate export common-importer filter** -- duplicate exports are only reported when the files sharing the same export name also share a common importer. Unrelated leaf files (e.g., SvelteKit route modules in different directories) are no longer flagged. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+
+### Fixed
+
+- **Workspace plugin merge: generated imports and path aliases** -- `generated_import_patterns` (e.g., SvelteKit `$types`) and `path_aliases` (e.g., SvelteKit `$lib/`) from workspace-level plugins were not propagated to the root analysis, causing false-positive unresolved imports and resolution failures in monorepo setups. ([#54](https://github.com/fallow-rs/fallow/issues/54))
+- **Windows path prefix** -- replaced `std::fs::canonicalize()` with `dunce::canonicalize()` to avoid `\\?\` extended-length path prefix on Windows, which broke `oxc_resolver` tsconfig discovery and caused all path-aliased imports to be reported as unresolved. ([#55](https://github.com/fallow-rs/fallow/pull/55) by [@KamilDev](https://github.com/KamilDev))
+
+## [2.14.1] - 2026-04-06
+
+### Added
+
+- **HTML entry file parsing** -- when an HTML file is reachable (e.g., Vite's `index.html` entry point), fallow now parses `<script src>`, `<link rel="stylesheet" href>`, and `<link rel="modulepreload" href>` to create graph edges to referenced local assets. This prevents false-positive dead-code reports for JS/CSS files and their transitive imports in Vite/Parcel-style apps. HTML files are exempt from unused-file detection. ([#57](https://github.com/fallow-rs/fallow/issues/57))
+- **Parcel `index.html` entry pattern** -- the Parcel plugin now auto-detects `index.html` as a runtime entry point, matching the Vite plugin's behavior.
+
+### Fixed
+
+- **Coverage gaps inline suppression** -- `coverage-gaps` issue kind can now be suppressed with `// fallow-ignore-next-line coverage-gaps` comments.
+
+## [2.14.0] - 2026-04-06
+
+### Added
+
+- **Static test coverage gaps** (`fallow health --coverage-gaps`) -- reports runtime files and exports that no test dependency path reaches through the module graph. Splits entry points into runtime, test, and support roles across 84+ framework plugins. All 6 output formats supported. ([#53](https://github.com/fallow-rs/fallow/pull/53) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Coverage gaps severity control** -- `coverage-gaps` rule in config (`error`/`warn`/`off`, default `off`). When set to `error`, non-zero exit on any gap. When `warn`, reports gaps without failing CI.
+- **Coverage gap actions** -- JSON output includes `add-tests` and `add-test-import` actions for AI agents on untested files and exports.
+- **Entry point roles for external plugins** -- `entryPointRole` field (`runtime`/`test`/`support`) on external plugin definitions, allowing custom frameworks to declare how their entry points affect coverage reachability.
+
+### Fixed
+
+- **Workspace entry point fallback scoping** -- `discover_workspace_entry_points` fallback now correctly scopes to the workspace root instead of searching the entire project.
+- **External plugin default role** -- external plugin `entryPointRole` now defaults to `support` (matching unknown builtins) instead of `runtime`.
+
+## [2.13.4] - 2026-04-06
+
+### Fixed
+
+- **False positive unused exports from namespace exports** -- `export namespace Foo { export function bar() {} }` no longer reports inner declarations (`bar`) as unused top-level exports. Inner exports are now tracked as namespace members. Runtime namespaces (no `declare`) are correctly classified as non-type-only. ([#52](https://github.com/fallow-rs/fallow/issues/52))
+
+## [2.13.3] - 2026-04-05
+
+### Changed
+
+- **Human output readability** -- all abbreviations spelled out in user-facing output: "deps" → "dependencies", "MI" → "maintainability", "dep" → "dependency". Affects health vital signs, dead-code summary footer, combined orientation header, markdown tables, and score deductions.
+- **Section headers in dead-code output** -- human format now groups findings under `── Unused Code ──`, `── Dependencies ──`, and `── Structure ──` headers for faster scanning.
+- **Labeled metrics and deductions** -- health score deductions line now prefixed with "Deductions:", metrics lines prefixed with "Metrics:" across health, combined, and audit commands.
+
+### Fixed
+
+- **Boundaries excluded from default `fallow list`** -- `fallow list` no longer shows "Boundaries: not configured" noise; use `--boundaries` to inspect zones and rules. ([#49](https://github.com/fallow-rs/fallow/pull/49) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Ecosystem runner error handling** -- `install_deps()` no longer swallows failures via `|| true`, and stderr is separated from JSON output files. Also uses canonical `dead-code` command with `--quiet`. ([#48](https://github.com/fallow-rs/fallow/pull/48) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Audit vital signs labeled** -- the audit command's vital signs line now includes a "Metrics:" prefix, consistent with health and combined commands.
+- **Stale `fallow check` in scripts** -- replaced legacy command name in `bench-ci.sh` and `conformance/run.sh`.
+
+## [2.13.2] - 2026-04-05
+
+### Fixed
+
+- **Plugin entry points included in `--entry-points` mode** -- `fallow list --entry-points` now includes plugin-discovered entry points, matching the behavior of the default `fallow list` output. Previously, plugin detection was skipped when `--entry-points` was used without `--plugins`. ([#45](https://github.com/fallow-rs/fallow/pull/45) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **`Failed` summary line uses canonical command name** -- the summary line printed on analysis failure now says `fallow dead-code` instead of the legacy `fallow check`.
+- **Documentation `cargo run` examples** -- all `cargo run` examples in CONTRIBUTING.md and CLAUDE.md now include `--bin fallow` (required for multi-binary workspaces) and use `dead-code` instead of the legacy `check` command. ([#44](https://github.com/fallow-rs/fallow/pull/44) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+
+## [2.13.1] - 2026-04-05
+
+### Fixed
+
+- **Init hook uses canonical command name** -- `fallow init --hooks` now generates hooks with `fallow dead-code` instead of the legacy `fallow check` alias, and the internal `--base` field is renamed to `--branch` to match the CLI flag. ([#43](https://github.com/fallow-rs/fallow/pull/43) by [@M-Hassan-Raza](https://github.com/M-Hassan-Raza))
+- **Legacy command name cleanup** -- replaced `fallow check` with `fallow dead-code` in 4 user-facing messages: combined output suggestion, GitHub Action PR review body, VS Code extension diagram, and conformance test script.
+- **Documentation consistency** -- fixed stale `--base` references to `--branch` in `AGENTS.md`, `docs/backwards-compatibility.md`, and companion repos.
+
+## [2.13.0] - 2026-04-04
+
+### Added
+
+- **Bun built-in module support** -- `bun:sqlite`, `bun:test`, `bun:ffi`, and other `bun:` prefixed imports are now recognized as platform builtins and never flagged as unlisted dependencies. ([#40](https://github.com/fallow-rs/fallow/issues/40))
+- **`ignoreDependencies` suppresses unlisted warnings** -- dependencies listed in `ignoreDependencies` are now excluded from both unused dependency AND unlisted dependency detection. Useful for runtime-provided packages like `bun:sqlite` or globally available dependencies. ([#40](https://github.com/fallow-rs/fallow/issues/40))
+- **MCP server distributed via npm** -- `fallow-mcp` binary is now included in the npm package. After `npm install fallow`, the `fallow-mcp` command is available for MCP server integration with Claude, OpenCode, and other AI agents. ([#42](https://github.com/fallow-rs/fallow/issues/42))
+
+### Fixed
+
+- **`$schema` accepted in `.fallowrc.json`** -- the JSON schema now includes `$schema` as a valid property, so JSON editors no longer show "unknown key" warnings when using the schema reference. ([#39](https://github.com/fallow-rs/fallow/issues/39))
+- **VS Code extension LSP download on Windows** -- the release workflow now names LSP binaries with the correct platform identifier (e.g., `fallow-lsp-win32-x64-msvc.exe`), matching what the VS Code extension expects. Previously, Windows users saw "no LSP binary found" errors. ([#38](https://github.com/fallow-rs/fallow/issues/38))
+
+## [2.12.1] - 2026-04-04
+
+### Fixed
+
+- **Tab indentation preserved in export auto-fix** -- `fallow fix` no longer silently converts tab indentation to spaces when removing the `export` keyword. The original whitespace prefix is now preserved exactly. ([#36](https://github.com/fallow-rs/fallow/issues/36), [#37](https://github.com/fallow-rs/fallow/pull/37) by [@swalha1999](https://github.com/swalha1999))
+
+## [2.12.0] - 2026-04-03
+
+### Added
+
+- **Vital signs percentage referents** -- the orientation header now shows denominators: `dead files 0.6% (1 of 173)` instead of just `0.6%`. Raw counts are also exposed in the health JSON `vital_signs.counts` object for CI dashboards.
+- **Entry-point detection inline** -- combined and standalone check modes display `130 entry points detected (124 plugin, 6 package.json)` on stderr, with a yellow warning when zero entry points are found. Entry-point summary is also in the check JSON `entry_points` object.
+- **Baseline-aware deltas** -- when `--baseline` is active, the `Failed:` summary line shows `+N since baseline` or `-N since baseline`. A `baseline_deltas` object with per-category deltas is added to the check JSON output.
+- **`--summary` flag** -- global flag that shows only category counts without individual items. Works across check (severity-colored counts), dupes (families, groups, lines, rate), and health (functions analyzed, MI, score). JSON output always includes the full `summary` counts object regardless of this flag.
+- **`--effort` filter** -- `fallow health --effort low|medium|high` filters refactoring targets by estimated effort level.
+- **`--group-by package`** -- groups dead-code findings by workspace package in monorepos. Discovers workspaces automatically from `package.json`/`pnpm-workspace.yaml`.
+- **`publicPackages` config** -- workspace package name patterns (exact or glob) whose exports are treated as public API and excluded from unused-export detection.
+- **`dynamicallyLoaded` config** -- glob patterns for files loaded at runtime (plugin directories, locale files) that are treated as always-used entry points.
+- **`fixture_glob_patterns()` Plugin trait method** -- plugins can now declare test fixture patterns that are implicitly used. Added for Jest, Vitest, and Playwright.
+- **Cross-package circular dependency flag** -- `CircularDependency.is_cross_package` indicates cycles crossing workspace boundaries. Shown as `(cross-package)` in human output, present in JSON/SARIF/compact/markdown/CodeClimate.
+- **Mirrored directories in JSON** -- `DuplicationReport.mirrored_directories` array with `dir_a`, `dir_b`, `shared_files`, and `total_lines` for CI consumption.
+- **Smarter `fallow init`** -- detects project structure (TypeScript, monorepo tool, test framework, UI framework, Storybook) and generates a tailored `.fallowrc.json` with workspace patterns, ignore rules, and entry points.
+- **Undeclared workspace diagnostic** -- warns when directories with `package.json` exist but aren't declared in workspace patterns.
+- **Second-level directory rollup** -- when one directory holds >80% of unused files, the rollup automatically shows per-subdirectory breakdown (e.g., `packages/svelte/ 4463 files` instead of just `packages/ 4463`).
+- **Test-only dependencies in CI summaries** -- `test_only_dependencies` category now appears in GitHub Action and GitLab CI PR summary comments.
+
+### Changed
+
+- **MI legend gated** -- the `MI scale: good ≥85, moderate ≥65, low <65 (0–100)` legend only appears when the average MI is below 85 (moderate or low). Projects with good health scores no longer see it.
+- **Config quality note threshold** -- raised from 50% to 80%, reducing noise for projects with moderate test directory concentration.
+- **Plugin discovery hint** -- unresolved imports footer now mentions framework plugins: "Framework-specific imports may need a plugin".
+- **Scale-aware start-here nudge** -- when total issues exceed 500, the nudge suggests `--workspace <name>` instead of pointing to a specific file.
+- **Summary footer filtered counts** -- the `✗ N files · N exports` summary line now reflects visible counts after export suppression, not raw totals.
+- **Advisory note stream consistency** -- all advisory notes now consistently use stderr.
+- **Rollup suppress hint** -- directory rollup sections suggest `ignorePatterns` in config instead of inline `fallow-ignore-next-line` comments.
+
+### Fixed
+
+- **Unlisted deps false positives** -- shell variables (`$DIR`), pure numbers (`1`), and bundler-internal specifiers (`__barrel_optimize__?...`) are no longer classified as npm package names. Reduces next.js false positives from 761 to 753.
+- **Start-here noise filter** -- the "start with X" recommendation no longer points to test fixtures, playground files, or generated files (e.g., `a0.js`). When all targets are noise, the nudge is omitted entirely.
+- **Nested node_modules exclusion** -- workspace glob expansion now skips directories inside `node_modules`, preventing third-party package.json files from being analyzed as workspace packages.
+- **Init config serialization** -- changed `unwrap_or_else` with silent `{}` fallback to `expect()` for infallible JSON serialization.
+
 ## [2.11.0] - 2026-04-03
 
 ### Added
@@ -749,7 +961,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.11.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/fallow-rs/fallow/compare/v2.17.1...v2.18.0
+[2.17.1]: https://github.com/fallow-rs/fallow/compare/v2.17.0...v2.17.1
+[2.17.0]: https://github.com/fallow-rs/fallow/compare/v2.16.0...v2.17.0
+[2.16.0]: https://github.com/fallow-rs/fallow/compare/v2.15.0...v2.16.0
+[2.15.0]: https://github.com/fallow-rs/fallow/compare/v2.14.2...v2.15.0
+[2.14.2]: https://github.com/fallow-rs/fallow/compare/v2.14.1...v2.14.2
+[2.14.1]: https://github.com/fallow-rs/fallow/compare/v2.14.0...v2.14.1
+[2.14.0]: https://github.com/fallow-rs/fallow/compare/v2.13.4...v2.14.0
+[2.13.4]: https://github.com/fallow-rs/fallow/compare/v2.13.3...v2.13.4
+[2.13.3]: https://github.com/fallow-rs/fallow/compare/v2.13.2...v2.13.3
+[2.13.2]: https://github.com/fallow-rs/fallow/compare/v2.13.1...v2.13.2
+[2.13.1]: https://github.com/fallow-rs/fallow/compare/v2.13.0...v2.13.1
+[2.13.0]: https://github.com/fallow-rs/fallow/compare/v2.12.1...v2.13.0
+[2.12.1]: https://github.com/fallow-rs/fallow/compare/v2.12.0...v2.12.1
+[2.12.0]: https://github.com/fallow-rs/fallow/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/fallow-rs/fallow/compare/v2.10.1...v2.11.0
 [2.10.1]: https://github.com/fallow-rs/fallow/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/fallow-rs/fallow/compare/v2.9.3...v2.10.0

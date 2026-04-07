@@ -63,12 +63,17 @@ pub struct ResolvedConfig {
     pub quiet: bool,
     /// External plugin definitions (from plugin files + inline framework definitions).
     pub external_plugins: Vec<ExternalPluginDef>,
+    /// Glob patterns for dynamically loaded files (treated as always-used).
+    pub dynamically_loaded: Vec<String>,
     /// Per-file rule overrides with pre-compiled glob matchers.
     pub overrides: Vec<ResolvedOverride>,
     /// Regression config (passed through from user config, not resolved).
     pub regression: Option<super::RegressionConfig>,
     /// Optional CODEOWNERS file path (passed through for `--group-by owner`).
     pub codeowners: Option<String>,
+    /// Workspace package name patterns that are public libraries.
+    /// Exports from these packages are not flagged as unused.
+    pub public_packages: Vec<String>,
 }
 
 impl FallowConfig {
@@ -196,9 +201,11 @@ impl FallowConfig {
             production,
             quiet,
             external_plugins,
+            dynamically_loaded: self.dynamically_loaded,
             overrides,
             regression: self.regression,
             codeowners: self.codeowners,
+            public_packages: self.public_packages,
         }
     }
 }
@@ -272,9 +279,11 @@ mod tests {
             boundaries: BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         };
         let resolved = config.resolve(
             PathBuf::from("/project"),
@@ -304,6 +313,7 @@ mod tests {
             boundaries: BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![ConfigOverride {
                 files: vec!["*.test.ts".to_string()],
                 rules: PartialRulesConfig {
@@ -313,6 +323,7 @@ mod tests {
             }],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         };
         let resolved = config.resolve(
             PathBuf::from("/project"),
@@ -349,6 +360,7 @@ mod tests {
             boundaries: BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![
                 ConfigOverride {
                     files: vec!["*.ts".to_string()],
@@ -367,6 +379,7 @@ mod tests {
             ],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         };
         let resolved = config.resolve(
             PathBuf::from("/project"),
@@ -402,9 +415,11 @@ mod tests {
             boundaries: BoundaryConfig::default(),
             production,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
     }
 
@@ -468,10 +483,10 @@ mod tests {
         );
         assert_eq!(
             resolved.rules.unused_dev_dependencies,
-            Severity::Error,
+            Severity::Warn,
             "non-production should keep default severity"
         );
-        assert_eq!(resolved.rules.unused_optional_dependencies, Severity::Error);
+        assert_eq!(resolved.rules.unused_optional_dependencies, Severity::Warn);
     }
 
     #[test]
@@ -884,7 +899,7 @@ mod tests {
                 let resolved = arb_resolved_config(false);
                 prop_assert_eq!(
                     resolved.rules.unused_dev_dependencies,
-                    Severity::Error,
+                    Severity::Warn,
                     "Non-production should keep default dev dep severity"
                 );
             }

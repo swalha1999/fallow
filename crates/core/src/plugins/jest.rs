@@ -27,6 +27,11 @@ const ALWAYS_USED: &[&str] = &["jest.config.{ts,js,mjs,cjs}", "jest.setup.{ts,js
 
 const TOOLING_DEPENDENCIES: &[&str] = &["jest", "jest-environment-jsdom", "ts-jest", "babel-jest"];
 
+const FIXTURE_PATTERNS: &[&str] = &[
+    "**/__fixtures__/**/*.{ts,tsx,js,jsx,json}",
+    "**/fixtures/**/*.{ts,tsx,js,jsx,json}",
+];
+
 /// Built-in Jest reporter names that should not be treated as dependencies.
 const BUILTIN_REPORTERS: &[&str] = &["default", "verbose", "summary"];
 
@@ -53,6 +58,10 @@ impl Plugin for JestPlugin {
 
     fn tooling_dependencies(&self) -> &'static [&'static str] {
         TOOLING_DEPENDENCIES
+    }
+
+    fn fixture_glob_patterns(&self) -> &'static [&'static str] {
+        FIXTURE_PATTERNS
     }
 
     fn package_json_config_key(&self) -> Option<&'static str> {

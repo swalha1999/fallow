@@ -24,7 +24,7 @@ use normalize::normalize_and_hash_resolved;
 use tokenize::{tokenize_file, tokenize_file_cross_language};
 pub use types::{
     CloneFamily, CloneGroup, CloneInstance, DetectionMode, DuplicatesConfig, DuplicationReport,
-    DuplicationStats, RefactoringKind, RefactoringSuggestion,
+    DuplicationStats, MirroredDirectory, RefactoringKind, RefactoringSuggestion,
 };
 
 use crate::discover::{self, DiscoveredFile};
@@ -132,6 +132,10 @@ pub fn find_duplicates(
 
     // Step 6: Group into families with refactoring suggestions
     report.clone_families = families::group_into_families(&report.clone_groups, root);
+
+    // Step 7: Detect mirrored directory trees
+    report.mirrored_directories =
+        families::detect_mirrored_directories(&report.clone_families, root);
 
     // Sort all result arrays for deterministic output ordering.
     // Parallel tokenization (par_iter) doesn't guarantee collection order.

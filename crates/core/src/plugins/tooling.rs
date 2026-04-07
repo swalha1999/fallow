@@ -106,6 +106,7 @@ const GENERAL_TOOLING_EXACT: &[&str] = &[
     "rolldown",
     "rolldown-vite",
     "oxc-transform",
+    "playwright",
     "puppeteer",
     "madge",
     "patch-package",
@@ -382,6 +383,7 @@ mod tests {
     #[test]
     fn playwright_prefix_matches() {
         assert!(is_known_tooling_dependency("@playwright/test"));
+        assert!(is_known_tooling_dependency("playwright"));
     }
 
     #[test]

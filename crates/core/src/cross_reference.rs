@@ -188,6 +188,7 @@ mod tests {
         let duplication = DuplicationReport {
             clone_groups: vec![],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 0,
                 files_with_clones: 0,
@@ -215,6 +216,7 @@ mod tests {
                 make_instance("src/b.ts", 1, 10),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -249,6 +251,7 @@ mod tests {
                 make_instance("src/b.ts", 5, 15),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -289,6 +292,7 @@ mod tests {
                 make_instance("src/b.ts", 5, 15),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -331,6 +335,7 @@ mod tests {
                 ]),
             ],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 4,
                 files_with_clones: 4,
@@ -364,6 +369,7 @@ mod tests {
                 make_instance("src/b.ts", 5, 15),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -409,6 +415,7 @@ mod tests {
                 make_instance("src/other.ts", 1, 20),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 2,
                 files_with_clones: 2,
@@ -470,6 +477,7 @@ mod tests {
                 ]),
             ],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats {
                 total_files: 6,
                 files_with_clones: 6,
@@ -517,6 +525,7 @@ mod tests {
                 make_instance("src/b.ts", 1, 5),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats::default(),
         };
         let mut dead_code = AnalysisResults::default();
@@ -543,6 +552,7 @@ mod tests {
                 make_instance("src/b.ts", 5, 15),
             ])],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: crate::duplicates::types::DuplicationStats::default(),
         };
         let mut dead_code = AnalysisResults::default();

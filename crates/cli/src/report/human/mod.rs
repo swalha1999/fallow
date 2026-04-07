@@ -1,7 +1,7 @@
-mod check;
+pub(super) mod check;
 mod cross_ref;
-mod dupes;
-mod health;
+pub(super) mod dupes;
+pub(super) mod health;
 mod perf;
 mod traces;
 
@@ -54,31 +54,39 @@ pub(super) fn build_section_header(title: &str, count: usize, level: Level) -> S
 fn section_footer_text(title: &str) -> Option<(&'static str, &'static str)> {
     match title {
         "Unused files" => Some((
-            "Files not imported or referenced by any entry point",
+            "Files not reachable from any entry point",
             "https://docs.fallow.tools/explanations/dead-code#unused-files",
         )),
         "Unused exports" => Some((
-            "Exported symbols not imported by any reachable file",
+            "Exported symbols with no known consumers",
             "https://docs.fallow.tools/explanations/dead-code#unused-exports",
         )),
         "Unused type exports" => Some((
-            "Exported types/interfaces not imported by any reachable file",
+            "Type exports with no known consumers",
             "https://docs.fallow.tools/explanations/dead-code#unused-types",
         )),
-        "Unused dependencies" | "Unused devDependencies" | "Unused optionalDependencies" => Some((
-            "Packages in package.json not imported anywhere in the project",
+        "Unused dependencies" => Some((
+            "Listed in dependencies but never imported",
+            "https://docs.fallow.tools/explanations/dead-code#unused-dependencies",
+        )),
+        "Unused devDependencies" => Some((
+            "Listed in devDependencies but never imported or referenced",
+            "https://docs.fallow.tools/explanations/dead-code#unused-dependencies",
+        )),
+        "Unused optionalDependencies" => Some((
+            "Listed in optionalDependencies but never imported",
             "https://docs.fallow.tools/explanations/dead-code#unused-dependencies",
         )),
         "Unused enum members" => Some((
-            "Enum variants never referenced outside their declaration",
+            "Enum members never referenced outside their declaration",
             "https://docs.fallow.tools/explanations/dead-code#unused-enum-members",
         )),
         "Unused class members" => Some((
-            "Class methods/properties never referenced outside their class",
+            "Class methods or properties never referenced outside their class",
             "https://docs.fallow.tools/explanations/dead-code#unused-class-members",
         )),
         "Unresolved imports" => Some((
-            "Import specifiers that could not be resolved to a file",
+            "Import paths that could not be resolved \u{2014} check for missing packages or broken paths. Framework-specific imports may need a plugin: https://docs.fallow.tools/plugins",
             "https://docs.fallow.tools/explanations/dead-code#unresolved-imports",
         )),
         "Unlisted dependencies" => Some((
@@ -86,25 +94,104 @@ fn section_footer_text(title: &str) -> Option<(&'static str, &'static str)> {
             "https://docs.fallow.tools/explanations/dead-code#unlisted-dependencies",
         )),
         "Duplicate exports" => Some((
-            "Same export name defined in multiple files",
+            "Same export name defined in multiple files \u{2014} barrel re-exports may resolve ambiguously",
             "https://docs.fallow.tools/explanations/dead-code#duplicate-exports",
         )),
         "Circular dependencies" => Some((
-            "Files that import each other, forming dependency cycles",
+            "Import cycles that can cause initialization failures and prevent tree-shaking",
             "https://docs.fallow.tools/explanations/dead-code#circular-dependencies",
         )),
+        "Boundary violations" => Some((
+            "Imports that cross defined architecture zone boundaries",
+            "https://docs.fallow.tools/explanations/dead-code#boundary-violations",
+        )),
         t if t.starts_with("Type-only") => Some((
-            "Dependencies only used for type imports, safe to move to devDependencies",
+            "Dependencies only used for type imports \u{2014} consider moving to devDependencies",
             "https://docs.fallow.tools/explanations/dead-code#type-only-dependencies",
         )),
         _ => None,
     }
 }
 
-/// Push a dimmed section footer line: description — docs_url
-pub(super) fn push_section_footer(lines: &mut Vec<String>, title: &str) {
+/// Map section title to the corresponding fallow-ignore rule name.
+fn section_suppress_rule(title: &str) -> Option<&'static str> {
+    match title {
+        "Unused files" => Some("unused-files"),
+        "Unused exports" => Some("unused-exports"),
+        "Unused type exports" => Some("unused-types"),
+        "Unused dependencies" | "Unused devDependencies" | "Unused optionalDependencies" => {
+            Some("unused-dependencies")
+        }
+        "Unused enum members" => Some("unused-enum-members"),
+        "Unused class members" => Some("unused-class-members"),
+        "Unresolved imports" => Some("unresolved-imports"),
+        "Unlisted dependencies" => Some("unlisted-dependencies"),
+        "Duplicate exports" => Some("duplicate-exports"),
+        "Circular dependencies" => Some("circular-dependencies"),
+        "Boundary violations" => Some("boundary-violations"),
+        _ => None,
+    }
+}
+
+/// Rules that only support file-level suppression (not next-line).
+fn is_file_level_only(rule: &str) -> bool {
+    matches!(rule, "circular-dependencies" | "boundary-violations")
+}
+
+/// Categories that support `fallow fix --dry-run` auto-fix.
+fn is_auto_fixable(title: &str) -> bool {
+    matches!(
+        title,
+        "Unused exports"
+            | "Unused type exports"
+            | "Unused dependencies"
+            | "Unused devDependencies"
+            | "Unused optionalDependencies"
+            | "Unused enum members"
+    )
+}
+
+/// Push a dimmed section footer line: description — docs_url, plus suppression hint.
+///
+/// The `item_count` controls whether the suppress hint is shown (only for sections
+/// with 3+ items, to reduce noise for power users scanning many small sections).
+pub(super) fn push_section_footer_with_count(
+    lines: &mut Vec<String>,
+    title: &str,
+    item_count: usize,
+) {
+    push_section_footer_impl(lines, title, item_count, false);
+}
+
+/// Push section footer for directory-rollup sections (suggests ignorePatterns config).
+pub(super) fn push_section_footer_rollup(lines: &mut Vec<String>, title: &str, item_count: usize) {
+    push_section_footer_impl(lines, title, item_count, true);
+}
+
+fn push_section_footer_impl(lines: &mut Vec<String>, title: &str, item_count: usize, rollup: bool) {
     if let Some((desc, url)) = section_footer_text(title) {
         lines.push(format!("  {}", format!("{desc} \u{2014} {url}").dimmed()));
+    }
+    // Only show suppress/fix hints for sections with 3+ items to reduce noise
+    if item_count >= 3 {
+        // Auto-fix hint for fixable categories
+        if is_auto_fixable(title) {
+            lines.push(format!(
+                "  {}",
+                "To auto-fix: fallow fix --dry-run".dimmed()
+            ));
+        }
+        // Suppress hint: config-level for rollup, inline for individual items
+        if let Some(rule) = section_suppress_rule(title) {
+            let comment = if rollup {
+                "To suppress a directory: add to ignorePatterns in .fallowrc.json".to_string()
+            } else if is_file_level_only(rule) {
+                format!("To suppress: // fallow-ignore-file {rule}")
+            } else {
+                format!("To suppress: // fallow-ignore-next-line {rule}")
+            };
+            lines.push(format!("  {}", comment.dimmed()));
+        }
     }
 }
 
@@ -153,7 +240,11 @@ pub(super) fn build_grouped_by_file<'a, T>(
         if indices.len() > max_items_per_file {
             lines.push(format!(
                 "    {}",
-                format!("... and {} more", indices.len() - max_items_per_file).dimmed()
+                format!(
+                    "... and {} more (--format json for full list)",
+                    indices.len() - max_items_per_file
+                )
+                .dimmed()
             ));
         }
     }
@@ -167,7 +258,7 @@ pub(super) fn build_grouped_by_file<'a, T>(
         lines.push(format!(
             "  {}",
             format!(
-                "... and {} more in {} file{}",
+                "... and {} more in {} file{} (--format json for full list)",
                 hidden_items,
                 hidden_files,
                 plural(hidden_files)

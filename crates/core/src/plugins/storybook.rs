@@ -255,4 +255,37 @@ mod tests {
         );
         assert!(!result.referenced_dependencies.iter().any(|d| d == "false"));
     }
+
+    #[test]
+    fn resolve_config_typed_const_variable_reference() {
+        let source = r#"
+            import type { StorybookConfig } from '@storybook/react-vite';
+
+            const config: StorybookConfig = {
+                "stories": ["../src/**/*.mdx", "../src/**/*.stories.@(js|jsx|mjs|ts|tsx)"],
+                "addons": [
+                    "@chromatic-com/storybook",
+                    "@storybook/addon-vitest",
+                    "@storybook/addon-a11y",
+                    "@storybook/addon-docs",
+                    "@storybook/addon-onboarding"
+                ],
+                "framework": "@storybook/react-vite"
+            };
+            export default config;
+        "#;
+        let plugin = StorybookPlugin;
+        let result = plugin.resolve_config(
+            std::path::Path::new(".storybook/main.ts"),
+            source,
+            std::path::Path::new("/project"),
+        );
+        let deps = &result.referenced_dependencies;
+        assert!(deps.contains(&"@chromatic-com/storybook".to_string()));
+        assert!(deps.contains(&"@storybook/addon-vitest".to_string()));
+        assert!(deps.contains(&"@storybook/addon-a11y".to_string()));
+        assert!(deps.contains(&"@storybook/addon-docs".to_string()));
+        assert!(deps.contains(&"@storybook/addon-onboarding".to_string()));
+        assert!(deps.contains(&"@storybook/react-vite".to_string()));
+    }
 }

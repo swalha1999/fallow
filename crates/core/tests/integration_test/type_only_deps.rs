@@ -17,9 +17,11 @@ fn create_production_config(root: std::path::PathBuf) -> fallow_config::Resolved
         boundaries: fallow_config::BoundaryConfig::default(),
         production: true,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, true, true)
 }

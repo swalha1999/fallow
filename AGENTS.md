@@ -74,7 +74,8 @@ These flags work with any subcommand:
 | `--regression-baseline <PATH>` | Path to regression baseline file (overrides config-embedded baseline) |
 | `--save-regression-baseline [PATH]` | Save current counts as regression baseline. No path = write into config file |
 | `--sarif-file <PATH>` | Write SARIF alongside primary output |
-| `--group-by owner\|directory` | Group output by CODEOWNERS ownership or first directory component |
+| `--group-by owner\|directory\|package` | Group output by CODEOWNERS ownership, first directory component, or workspace package |
+| `--summary` | Show only category counts (no individual issues) |
 | `--performance` | Show pipeline timing breakdown |
 
 ## Commands
@@ -92,6 +93,9 @@ fallow --skip health --format json        # check + dupes only
 **Flags:**
 - `--only <dead-code,dupes,health>` -- run only these analyses (comma-separated)
 - `--skip <dead-code,dupes,health>` -- skip these analyses (comma-separated)
+- `--score` -- compute health score (0-100 with letter grade). Enables the health delta header in PR comments.
+- `--trend` -- compare current health metrics against saved snapshot. Implies `--score`.
+- `--save-snapshot [PATH]` -- save vital signs snapshot for trend tracking
 - `--ci` -- CI mode: sarif + quiet + fail-on-issues
 - `--fail-on-issues` -- exit 1 if any issues are found
 
@@ -187,6 +191,8 @@ fallow health --format json --quiet --targets
 - `--file-scores` -- compute per-file maintainability index (fan-in, fan-out, dead code ratio, complexity density). Runs the full analysis pipeline.
 - `--hotspots` -- identify files that are both complex and frequently changing (combines git churn with complexity). Requires a git repository.
 - `--targets` -- ranked refactoring recommendations based on complexity, coupling, churn, and dead code signals. Sorted by efficiency (priority/effort) to surface quick wins. Categories: churn+complexity, circular dep, high impact, dead code, complexity, coupling.
+- `--effort <low|medium|high>` -- filter refactoring targets by effort level (use with `--targets`)
+- `--coverage-gaps` -- show static test coverage gaps: runtime files and exports with no test dependency path. Based on module graph reachability, not line-level coverage.
 - `--score` -- show only the project health score (0-100) with letter grade (A/B/C/D/F). The score is included by default when no section flags are set. JSON output includes `health_score` object with `score`, `grade`, and `penalties` breakdown. Penalties are reproducible: `100 - sum(penalties) == score`.
 - `--min-score <N>` -- fail if health score is below threshold (exit code 1). Implies `--score`. Use as a CI quality gate.
 - `--since <DURATION>` -- git history window for hotspot analysis (default: 6m). Accepts durations (6m, 90d, 1y, 2w) or ISO dates (2025-06-01).
@@ -197,7 +203,7 @@ fallow health --format json --quiet --targets
 
 **Exit codes:** 0 = no functions exceed thresholds, 1 = findings exist.
 
-**JSON output** includes a `findings` array, a `summary` object, and a `vital_signs` object (project-wide metrics: `dead_file_pct`, `dead_export_pct`, `avg_cyclomatic`, `p90_cyclomatic`, `maintainability_avg`, `hotspot_count`, `circular_dep_count`, `unused_dep_count`; null when data source not available). With `--score`, includes a `health_score` object (`score`, `grade`, `penalties` breakdown). With `--file-scores`, also includes a `file_scores` array with per-file metrics and `summary.files_scored` / `summary.average_maintainability`. With `--targets`, includes a `targets` array with `path`, `priority`, `efficiency` (priority/effort — default sort), `recommendation`, `category`, `effort` (low/medium/high), `confidence` (high/medium/low — based on data source reliability), `factors` (with raw `value`/`threshold`), and `evidence` (unused export names, complex function names+lines, cycle paths). A `target_thresholds` object exposes the adaptive percentile-based thresholds (`fan_in_p95`, `fan_in_p75`, `fan_out_p95`, `fan_out_p90`) used for scoring. Target baselines are supported via `--save-baseline` / `--baseline`.
+**JSON output** includes a `findings` array, a `summary` object, and a `vital_signs` object (project-wide metrics: `dead_file_pct`, `dead_export_pct`, `avg_cyclomatic`, `p90_cyclomatic`, `maintainability_avg`, `hotspot_count`, `circular_dep_count`, `unused_dep_count`; null when data source not available). With `--score`, includes a `health_score` object (`score`, `grade`, `penalties` breakdown). With `--file-scores`, also includes a `file_scores` array with per-file metrics and `summary.files_scored` / `summary.average_maintainability`. With `--coverage-gaps`, includes a `coverage_gaps` object with `summary` (runtime_files, covered_files, file_coverage_pct, untested_files, untested_exports), `files` (untested runtime files), and `exports` (untested runtime exports). With `--targets`, includes a `targets` array with `path`, `priority`, `efficiency` (priority/effort, default sort), `recommendation`, `category`, `effort` (low/medium/high), `confidence` (high/medium/low, based on data source reliability), `factors` (with raw `value`/`threshold`), and `evidence` (unused export names, complex function names+lines, cycle paths). A `target_thresholds` object exposes the adaptive percentile-based thresholds (`fan_in_p95`, `fan_in_p75`, `fan_out_p95`, `fan_out_p90`) used for scoring. Target baselines are supported via `--save-baseline` / `--baseline`.
 
 **Vital signs snapshots:** `--save-snapshot` persists a `VitalSignsSnapshot` JSON file containing `vital_signs` (metrics), `counts` (raw numerators/denominators), and git metadata (`git_sha`, `git_branch`, `shallow_clone`). Snapshot schema version is independent of the report schema_version. Snapshots automatically include the health score and grade.
 
@@ -240,7 +246,7 @@ Create a config file in the project root. Defaults to `.fallowrc.json` (JSON wit
 fallow init                  # creates .fallowrc.json
 fallow init --toml           # creates fallow.toml
 fallow init --hooks          # scaffold pre-commit hook (auto-detects base branch)
-fallow init --hooks --base develop  # use custom base branch
+fallow init --hooks --branch develop  # use custom base branch
 ```
 
 ### `migrate`
@@ -443,6 +449,13 @@ Fallow reads config from the project root in priority order: `.fallowrc.json` > 
 - `warn` -- report but exit 0
 - `off` -- skip detection entirely
 - `--fail-on-issues` promotes all `warn` to `error`
+
+### Additional config fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dynamicallyLoaded` | `string[]` | Glob patterns for files loaded dynamically at runtime (e.g., plugin systems). Matched files are treated as entry points. |
+| `publicPackages` | `string[]` | Workspace package names whose exports are considered public API. Exports from these packages are never reported as unused. |
 
 ### Inline suppression
 

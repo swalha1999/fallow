@@ -96,11 +96,17 @@ pub fn build_compact_lines(results: &AnalysisResults, root: &Path) -> Vec<String
             display_chain.push(first.clone());
         }
         let first_file = chain.first().map_or_else(String::new, Clone::clone);
+        let cross_pkg_tag = if cycle.is_cross_package {
+            " (cross-package)"
+        } else {
+            ""
+        };
         lines.push(format!(
-            "circular-dependency:{}:{}:{}",
+            "circular-dependency:{}:{}:{}{}",
             first_file,
             cycle.line,
-            display_chain.join(" \u{2192} ")
+            display_chain.join(" \u{2192} "),
+            cross_pkg_tag
         ));
     }
     for v in &results.boundary_violations {
@@ -167,14 +173,40 @@ pub(super) fn print_health_compact(report: &crate::health_types::HealthReport, r
     for score in &report.file_scores {
         let relative = normalize_uri(&relative_path(&score.path, root).display().to_string());
         println!(
-            "file-score:{}:mi={:.1},fan_in={},fan_out={},dead={:.2},density={:.2}",
+            "file-score:{}:mi={:.1},fan_in={},fan_out={},dead={:.2},density={:.2},crap_max={:.1},crap_above={}",
             relative,
             score.maintainability_index,
             score.fan_in,
             score.fan_out,
             score.dead_code_ratio,
             score.complexity_density,
+            score.crap_max,
+            score.crap_above_threshold,
         );
+    }
+    if let Some(ref gaps) = report.coverage_gaps {
+        println!(
+            "coverage-gap-summary:runtime_files={},covered_files={},file_coverage_pct={:.1},untested_files={},untested_exports={}",
+            gaps.summary.runtime_files,
+            gaps.summary.covered_files,
+            gaps.summary.file_coverage_pct,
+            gaps.summary.untested_files,
+            gaps.summary.untested_exports,
+        );
+        for item in &gaps.files {
+            let relative = normalize_uri(&relative_path(&item.path, root).display().to_string());
+            println!(
+                "untested-file:{}:value_exports={}",
+                relative, item.value_export_count,
+            );
+        }
+        for item in &gaps.exports {
+            let relative = normalize_uri(&relative_path(&item.path, root).display().to_string());
+            println!(
+                "untested-export:{}:{}:{}",
+                relative, item.line, item.export_name,
+            );
+        }
     }
     for entry in &report.hotspots {
         let relative = normalize_uri(&relative_path(&entry.path, root).display().to_string());
@@ -536,6 +568,7 @@ mod tests {
             length: 2,
             line: 3,
             col: 0,
+            is_cross_package: false,
         });
 
         let lines = build_compact_lines(&results, &root);
@@ -560,6 +593,7 @@ mod tests {
             length: 3,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
 
         let lines = build_compact_lines(&results, &root);

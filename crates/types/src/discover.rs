@@ -77,6 +77,7 @@ impl std::fmt::Display for EntryPointSource {
             Self::DefaultIndex => f.write_str("default index"),
             Self::ManualEntry => f.write_str("manual entry"),
             Self::InfrastructureConfig => f.write_str("infrastructure config"),
+            Self::DynamicallyLoaded => f.write_str("dynamically loaded"),
         }
     }
 }
@@ -107,6 +108,8 @@ pub enum EntryPointSource {
     ManualEntry,
     /// Discovered from infrastructure config files (Dockerfile, Procfile, fly.toml).
     InfrastructureConfig,
+    /// Declared in `dynamicallyLoaded` config as a runtime-loaded file.
+    DynamicallyLoaded,
 }
 
 #[cfg(test)]
@@ -245,6 +248,7 @@ mod tests {
         let _ = EntryPointSource::DefaultIndex;
         let _ = EntryPointSource::ManualEntry;
         let _ = EntryPointSource::InfrastructureConfig;
+        let _ = EntryPointSource::DynamicallyLoaded;
     }
 
     #[test]
@@ -328,6 +332,10 @@ mod tests {
         assert_eq!(
             EntryPointSource::InfrastructureConfig.to_string(),
             "infrastructure config"
+        );
+        assert_eq!(
+            EntryPointSource::DynamicallyLoaded.to_string(),
+            "dynamically loaded"
         );
     }
 }

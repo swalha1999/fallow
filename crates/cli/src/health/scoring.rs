@@ -1,8 +1,17 @@
-use crate::health_types::FileHealthScore;
+use crate::health_types::{
+    CoverageGapSummary, CoverageGaps, FileHealthScore, UntestedExport, UntestedFile,
+};
+
+pub(super) struct CoverageGapData {
+    pub report: CoverageGaps,
+    pub runtime_paths: Vec<std::path::PathBuf>,
+}
 
 /// Output from `compute_file_scores`, including auxiliary data for refactoring targets.
 pub(super) struct FileScoreOutput {
     pub scores: Vec<FileHealthScore>,
+    /// Static coverage gaps derived from runtime-vs-test reachability.
+    pub coverage: CoverageGapData,
     /// Files participating in circular dependencies (absolute paths).
     pub circular_files: rustc_hash::FxHashSet<std::path::PathBuf>,
     /// Top 3 functions by cognitive complexity per file (name, line, cognitive score).
@@ -80,6 +89,41 @@ pub(super) fn compute_complexity_density(total_cyclomatic: u32, lines: u32) -> f
     }
 }
 
+/// CRAP score threshold (inclusive). CC=5 untested gives exactly 30 (5^2 + 5),
+/// matching the canonical CRAP threshold from Savoia & Evans (2007).
+pub(super) const CRAP_THRESHOLD: f64 = 30.0;
+
+/// Compute per-function CRAP scores using the static binary model.
+///
+/// Binary model: test-reachable file -> CRAP = CC, untested -> CRAP = CC^2 + CC.
+/// Files suppressed via `// fallow-ignore-file coverage-gaps` should be treated
+/// as test-reachable by the caller.
+///
+/// Returns `(max_crap, count_above_threshold)`.
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "cc * cc + cc matches the CRAP formula specification"
+)]
+fn compute_crap_scores(
+    complexity: &[fallow_types::extract::FunctionComplexity],
+    is_test_reachable: bool,
+) -> (f64, usize) {
+    if complexity.is_empty() {
+        return (0.0, 0);
+    }
+    let mut max = 0.0_f64;
+    let mut above = 0usize;
+    for f in complexity {
+        let cc = f64::from(f.cyclomatic);
+        let crap = if is_test_reachable { cc } else { cc * cc + cc };
+        max = max.max(crap);
+        if crap >= CRAP_THRESHOLD {
+            above += 1;
+        }
+    }
+    ((max * 10.0).round() / 10.0, above)
+}
+
 /// Count unused VALUE exports per file path for O(1) lookup.
 ///
 /// Type-only exports (interfaces, type aliases) are intentionally excluded ---
@@ -92,6 +136,138 @@ pub(super) fn count_unused_exports_by_path(
         *map.entry(exp.path.as_path()).or_default() += 1;
     }
     map
+}
+
+pub(super) fn build_coverage_summary(
+    runtime_files: usize,
+    covered_files: usize,
+    untested_files: usize,
+    untested_exports: usize,
+) -> CoverageGapSummary {
+    let file_coverage_pct = if runtime_files == 0 {
+        100.0
+    } else {
+        ((covered_files as f64 / runtime_files as f64) * 1000.0).round() / 10.0
+    };
+
+    CoverageGapSummary {
+        runtime_files,
+        covered_files,
+        file_coverage_pct,
+        untested_files,
+        untested_exports,
+    }
+}
+
+fn compute_coverage_gaps(
+    graph: &fallow_core::graph::ModuleGraph,
+    file_paths: &rustc_hash::FxHashMap<fallow_core::discover::FileId, &std::path::PathBuf>,
+    module_by_id: &rustc_hash::FxHashMap<
+        fallow_core::discover::FileId,
+        &fallow_core::extract::ModuleInfo,
+    >,
+) -> CoverageGapData {
+    let mut runtime_files = 0usize;
+    let mut covered_files = 0usize;
+    let mut runtime_paths = Vec::new();
+    let mut files = Vec::new();
+    let mut exports = Vec::new();
+
+    for node in &graph.modules {
+        if !node.is_runtime_reachable() {
+            continue;
+        }
+
+        let Some(path) = file_paths.get(&node.file_id) else {
+            continue;
+        };
+
+        // Skip non-executable assets (CSS/SCSS/LESS/SASS) from coverage gap analysis.
+        // These are runtime-reachable (imported by JS) but not testable in the same way.
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| matches!(ext, "css" | "scss" | "less" | "sass"))
+        {
+            continue;
+        }
+
+        // Check inline suppression: // fallow-ignore-file coverage-gaps
+        let module = module_by_id.get(&node.file_id);
+        if module.is_some_and(|m| {
+            fallow_core::suppress::is_file_suppressed(
+                &m.suppressions,
+                fallow_types::suppress::IssueKind::CoverageGaps,
+            )
+        }) {
+            continue;
+        }
+
+        runtime_paths.push((*path).clone());
+
+        runtime_files += 1;
+        if node.is_test_reachable() {
+            covered_files += 1;
+        } else {
+            files.push(UntestedFile {
+                path: (*path).clone(),
+                value_export_count: node.exports.iter().filter(|e| !e.is_type_only).count(),
+            });
+        }
+
+        let Some(module) = module else {
+            continue;
+        };
+
+        for export in &node.exports {
+            if export.is_type_only {
+                continue;
+            }
+
+            let has_test_dependency = export.references.iter().any(|reference| {
+                graph
+                    .modules
+                    .get(reference.from_file.0 as usize)
+                    .is_some_and(|module| module.is_test_reachable())
+            });
+            if has_test_dependency {
+                continue;
+            }
+
+            let (line, col) = fallow_types::extract::byte_offset_to_line_col(
+                &module.line_offsets,
+                export.span.start,
+            );
+            exports.push(UntestedExport {
+                path: (*path).clone(),
+                export_name: export.name.to_string(),
+                line,
+                col,
+            });
+        }
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    exports.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| a.export_name.cmp(&b.export_name))
+            .then_with(|| a.line.cmp(&b.line))
+    });
+
+    CoverageGapData {
+        report: CoverageGaps {
+            summary: build_coverage_summary(
+                runtime_files,
+                covered_files,
+                files.len(),
+                exports.len(),
+            ),
+            files,
+            exports,
+        },
+        runtime_paths,
+    }
 }
 
 /// Compute the maintainability index for a single file.
@@ -211,6 +387,7 @@ pub(super) fn compute_file_scores(
         fallow_core::discover::FileId,
         &fallow_core::extract::ModuleInfo,
     > = modules.iter().map(|m| (m.file_id, m)).collect();
+    let coverage = compute_coverage_gaps(&graph, file_paths, &module_by_id);
 
     let mut scores = Vec::with_capacity(graph.modules.len());
 
@@ -220,7 +397,7 @@ pub(super) fn compute_file_scores(
         };
 
         // Track entry points for refactoring target exclusion
-        if node.is_entry_point {
+        if node.is_entry_point() {
             entry_points.insert((*path).clone());
         }
 
@@ -279,6 +456,23 @@ pub(super) fn compute_file_scores(
             fan_out,
         );
 
+        // CRAP scoring: combine per-function CC with binary test reachability.
+        // Files suppressed via `// fallow-ignore-file coverage-gaps` are treated
+        // as test-reachable to stay consistent with coverage gap output.
+        let module = module_by_id.get(&node.file_id);
+        let is_coverage_suppressed = module.is_some_and(|m| {
+            fallow_core::suppress::is_file_suppressed(
+                &m.suppressions,
+                fallow_types::suppress::IssueKind::CoverageGaps,
+            )
+        });
+        let (crap_max, crap_above_threshold) = module.map_or((0.0, 0), |m| {
+            compute_crap_scores(
+                &m.complexity,
+                node.is_test_reachable() || is_coverage_suppressed,
+            )
+        });
+
         scores.push(FileHealthScore {
             path: path_owned,
             fan_in,
@@ -290,6 +484,8 @@ pub(super) fn compute_file_scores(
             total_cognitive,
             function_count,
             lines,
+            crap_max,
+            crap_above_threshold,
         });
     }
 
@@ -323,6 +519,7 @@ pub(super) fn compute_file_scores(
 
     Ok(FileScoreOutput {
         scores,
+        coverage,
         circular_files,
         top_complex_fns,
         entry_points,
@@ -1474,6 +1671,7 @@ mod tests {
                 length: 2,
                 line: 1,
                 col: 0,
+                is_cross_package: false,
             });
 
         let output = fallow_core::AnalysisOutput {
@@ -1850,5 +2048,75 @@ mod tests {
         let result = compute_file_scores(&modules, &file_paths, None, output).unwrap();
         // Top function has cognitive=0, so it should not be included
         assert!(!result.top_complex_fns.contains_key(&path_a));
+    }
+
+    // --- compute_crap_scores ---
+
+    fn make_fn_complexity(cyclomatic: u16) -> fallow_types::extract::FunctionComplexity {
+        fallow_types::extract::FunctionComplexity {
+            name: "test_fn".into(),
+            line: 1,
+            col: 0,
+            cyclomatic,
+            cognitive: 0,
+            line_count: 10,
+        }
+    }
+
+    #[test]
+    fn crap_scores_empty_complexity() {
+        let (max, above) = compute_crap_scores(&[], true);
+        assert!((max).abs() < f64::EPSILON);
+        assert_eq!(above, 0);
+    }
+
+    #[test]
+    fn crap_scores_test_reachable() {
+        // Test-reachable: CRAP = CC, so CC=5 -> 5.0 (below threshold)
+        let funcs = vec![make_fn_complexity(5)];
+        let (max, above) = compute_crap_scores(&funcs, true);
+        assert!((max - 5.0).abs() < f64::EPSILON);
+        assert_eq!(above, 0);
+    }
+
+    #[test]
+    fn crap_scores_untested_at_threshold() {
+        // Untested: CC=5 -> 5^2 + 5 = 30.0 (exactly at threshold, inclusive)
+        let funcs = vec![make_fn_complexity(5)];
+        let (max, above) = compute_crap_scores(&funcs, false);
+        assert!((max - 30.0).abs() < f64::EPSILON);
+        assert_eq!(above, 1);
+    }
+
+    #[test]
+    fn crap_scores_untested_above_threshold() {
+        // Untested: CC=6 -> 6^2 + 6 = 42.0
+        let funcs = vec![make_fn_complexity(6)];
+        let (max, above) = compute_crap_scores(&funcs, false);
+        assert!((max - 42.0).abs() < f64::EPSILON);
+        assert_eq!(above, 1);
+    }
+
+    #[test]
+    fn crap_scores_untested_below_threshold() {
+        // Untested: CC=4 -> 4^2 + 4 = 20.0 (below 30)
+        let funcs = vec![make_fn_complexity(4)];
+        let (max, above) = compute_crap_scores(&funcs, false);
+        assert!((max - 20.0).abs() < f64::EPSILON);
+        assert_eq!(above, 0);
+    }
+
+    #[test]
+    fn crap_scores_mixed_functions_untested() {
+        // Three untested functions: CC=2->6, CC=5->30, CC=8->72
+        let funcs = vec![
+            make_fn_complexity(2),
+            make_fn_complexity(5),
+            make_fn_complexity(8),
+        ];
+        let (max, above) = compute_crap_scores(&funcs, false);
+        assert!((max - 72.0).abs() < f64::EPSILON);
+        // CC=5 (30.0) and CC=8 (72.0) are >= threshold
+        assert_eq!(above, 2);
     }
 }

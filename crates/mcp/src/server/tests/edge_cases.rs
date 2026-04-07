@@ -647,6 +647,7 @@ fn health_args_with_all_options_including_targets_and_snapshot() {
         file_scores: Some(true),
         hotspots: Some(true),
         targets: Some(true),
+        coverage_gaps: Some(true),
         score: Some(true),
         min_score: Some(70.0),
         since: Some("6m".to_string()),
@@ -659,10 +660,13 @@ fn health_args_with_all_options_including_targets_and_snapshot() {
         no_cache: Some(true),
         threads: Some(4),
         trend: Some(true),
+        effort: Some("high".to_string()),
+        summary: Some(true),
     };
     let args = build_health_args(&params);
     // Every single flag should be present
     assert!(args.contains(&"--targets".to_string()));
+    assert!(args.contains(&"--coverage-gaps".to_string()));
     assert!(args.contains(&"--score".to_string()));
     assert!(args.contains(&"--min-score".to_string()));
     assert!(args.contains(&"70".to_string()));
@@ -672,6 +676,9 @@ fn health_args_with_all_options_including_targets_and_snapshot() {
     assert!(args.contains(&"--file-scores".to_string()));
     assert!(args.contains(&"--hotspots".to_string()));
     assert!(args.contains(&"--production".to_string()));
+    assert!(args.contains(&"--effort".to_string()));
+    assert!(args.contains(&"high".to_string()));
+    assert!(args.contains(&"--summary".to_string()));
     assert!(args.contains(&"--no-cache".to_string()));
     assert!(args.contains(&"--trend".to_string()));
 }

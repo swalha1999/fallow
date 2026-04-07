@@ -76,6 +76,20 @@ pub struct CloneFamily {
     pub suggestions: Vec<RefactoringSuggestion>,
 }
 
+/// A detected mirrored directory pattern: two directory prefixes that contain
+/// identical files (e.g., `src/` and `deno/lib/`).
+#[derive(Debug, Clone, Serialize)]
+pub struct MirroredDirectory {
+    /// First directory path (lexically smaller).
+    pub dir_a: String,
+    /// Second directory path.
+    pub dir_b: String,
+    /// Filenames shared between the two directories.
+    pub shared_files: Vec<String>,
+    /// Total duplicated lines across all shared files.
+    pub total_lines: usize,
+}
+
 /// Overall duplication analysis report.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DuplicationReport {
@@ -83,6 +97,9 @@ pub struct DuplicationReport {
     pub clone_groups: Vec<CloneGroup>,
     /// Clone families: groups of clone groups sharing the same file set.
     pub clone_families: Vec<CloneFamily>,
+    /// Detected mirrored directory trees (directories with many identical files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mirrored_directories: Vec<MirroredDirectory>,
     /// Aggregate statistics.
     pub stats: DuplicationStats,
 }

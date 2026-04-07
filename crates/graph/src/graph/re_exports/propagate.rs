@@ -27,7 +27,7 @@ pub(in crate::graph) fn propagate_star_re_export(
 ) -> bool {
     // Entry point barrels with star re-exports: all source exports are
     // transitively exposed to external consumers — mark them as used.
-    if modules[barrel_idx].is_entry_point {
+    if modules[barrel_idx].is_entry_point() {
         return propagate_entry_point_star(modules, barrel_id, source_idx);
     }
 
@@ -59,11 +59,7 @@ pub(in crate::graph) fn propagate_star_re_export(
     let barrel_export_refs: Vec<(String, SymbolReference)> = modules[barrel_idx]
         .exports
         .iter()
-        .flat_map(|e| {
-            e.references
-                .iter()
-                .map(move |r| (e.name.to_string(), r.clone()))
-        })
+        .flat_map(|e| e.references.iter().map(move |r| (e.name.to_string(), *r)))
         .collect();
 
     // Check if the source module itself has star re-exports (for multi-level chains).
@@ -94,7 +90,7 @@ pub(in crate::graph) fn propagate_star_re_export(
                 .iter()
                 .all(|r| r.from_file != ref_item.from_file)
             {
-                export.references.push(ref_item.clone());
+                export.references.push(*ref_item);
                 changed = true;
             }
         } else if source_has_star_re_exports {
@@ -107,7 +103,7 @@ pub(in crate::graph) fn propagate_star_re_export(
                 is_type_only: false,
                 is_public: false,
                 span: oxc_span::Span::new(0, 0),
-                references: vec![ref_item.clone()],
+                references: vec![*ref_item],
                 members: Vec::new(),
             });
             changed = true;
@@ -159,14 +155,14 @@ pub(in crate::graph) fn propagate_named_re_export(
         .exports
         .iter()
         .filter(|e| e.name.matches_str(exported_name))
-        .flat_map(|e| e.references.iter().cloned())
+        .flat_map(|e| e.references.iter().copied())
         .collect();
 
     if refs_on_barrel.is_empty() {
         // Entry point barrels' re-exports are consumed externally (not
         // tracked in the graph). Synthesize a ReExport reference so the
         // source export is correctly marked as used.
-        if modules[barrel_idx].is_entry_point {
+        if modules[barrel_idx].is_entry_point() {
             return propagate_entry_point_named(modules, barrel_id, source_idx, imported_name);
         }
         return false;
@@ -193,7 +189,7 @@ pub(in crate::graph) fn propagate_named_re_export(
         );
         for ref_item in &refs_on_barrel {
             if !existing_refs.contains(&ref_item.from_file) {
-                source.exports[export_idx].references.push(ref_item.clone());
+                source.exports[export_idx].references.push(*ref_item);
                 changed = true;
             }
         }
@@ -229,9 +225,7 @@ fn propagate_entry_point_named(
             .iter()
             .all(|r| r.from_file != barrel_id)
         {
-            source.exports[export_idx]
-                .references
-                .push(synthetic_ref.clone());
+            source.exports[export_idx].references.push(synthetic_ref);
             changed = true;
         }
     }

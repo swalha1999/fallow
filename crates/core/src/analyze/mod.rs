@@ -50,6 +50,35 @@ fn read_source(path: &std::path::Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+/// Check whether any two files in a cycle belong to different workspace packages.
+/// Uses longest-prefix-match to assign each file to a workspace root.
+/// Files outside all workspace roots (e.g., root-level shared code) are ignored —
+/// only cycles between two distinct named workspaces are flagged.
+fn is_cross_package_cycle(
+    files: &[std::path::PathBuf],
+    workspaces: &[fallow_config::WorkspaceInfo],
+) -> bool {
+    let find_workspace = |path: &std::path::Path| -> Option<&std::path::Path> {
+        workspaces
+            .iter()
+            .map(|w| w.root.as_path())
+            .filter(|root| path.starts_with(root))
+            .max_by_key(|root| root.components().count())
+    };
+
+    let mut seen_workspace: Option<&std::path::Path> = None;
+    for file in files {
+        if let Some(ws) = find_workspace(file) {
+            match &seen_workspace {
+                None => seen_workspace = Some(ws),
+                Some(prev) if *prev != ws => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 /// Find all dead code in the project.
 #[must_use]
 pub fn find_dead_code(graph: &ModuleGraph, config: &ResolvedConfig) -> AnalysisResults {
@@ -268,15 +297,49 @@ pub fn find_dead_code_full(
                     length,
                     line,
                     col,
+                    is_cross_package: false,
                 }
             })
             .collect();
+
+        // Mark cycles that cross workspace package boundaries
+        if !workspaces.is_empty() {
+            for dep in &mut results.circular_dependencies {
+                dep.is_cross_package = is_cross_package_cycle(&dep.files, workspaces);
+            }
+        }
     }
 
     // Collect export usage counts for Code Lens (LSP feature).
     // Skipped in CLI mode since the field is #[serde(skip)] in all output formats.
     if collect_usages {
         results.export_usages = collect_export_usages(graph, &line_offsets_by_file);
+    }
+
+    // Filter out unused exports/types from public packages.
+    // Public packages are workspace packages whose exports are intended for external consumers.
+    if !config.public_packages.is_empty() && !workspaces.is_empty() {
+        let public_roots: Vec<&std::path::Path> = workspaces
+            .iter()
+            .filter(|ws| {
+                config.public_packages.iter().any(|pattern| {
+                    ws.name == *pattern
+                        || globset::Glob::new(pattern)
+                            .ok()
+                            .is_some_and(|g| g.compile_matcher().is_match(&ws.name))
+                })
+            })
+            .map(|ws| ws.root.as_path())
+            .collect();
+
+        if !public_roots.is_empty() {
+            results
+                .unused_exports
+                .retain(|e| !public_roots.iter().any(|root| e.path.starts_with(root)));
+            results
+                .unused_types
+                .retain(|e| !public_roots.iter().any(|root| e.path.starts_with(root)));
+        }
     }
 
     // Sort all result arrays for deterministic output ordering.
@@ -420,9 +483,11 @@ mod tests {
                 boundaries: BoundaryConfig::default(),
                 production: false,
                 plugins: vec![],
+                dynamically_loaded: vec![],
                 overrides: vec![],
                 regression: None,
                 codeowners: None,
+                public_packages: vec![],
             }
             .resolve(
                 PathBuf::from("/tmp/orchestration-test"),
@@ -480,6 +545,7 @@ mod tests {
                 circular_dependencies: Severity::Off,
                 test_only_dependencies: Severity::Off,
                 boundary_violation: Severity::Off,
+                coverage_gaps: Severity::Off,
             };
             let config = make_config_with_rules(rules);
             let results = find_dead_code(&graph, &config);

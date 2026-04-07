@@ -445,7 +445,15 @@ pub fn build_sarif(
             SarifFields {
                 rule_id: "fallow/circular-dependency",
                 level: severity_to_sarif_level(rules.circular_dependencies),
-                message: format!("Circular dependency: {}", display_chain.join(" \u{2192} ")),
+                message: format!(
+                    "Circular dependency{}: {}",
+                    if cycle.is_cross_package {
+                        " (cross-package)"
+                    } else {
+                        ""
+                    },
+                    display_chain.join(" \u{2192} ")
+                ),
                 uri: first_uri,
                 region: if cycle.line > 0 {
                     Some((cycle.line, cycle.col + 1))
@@ -513,7 +521,7 @@ pub(super) fn print_grouped_sarif(
     root: &Path,
     rules: &RulesConfig,
     resolver: &OwnershipResolver,
-) {
+) -> ExitCode {
     let mut sarif = build_sarif(results, root, rules);
 
     // Post-process each result to inject the owner property.
@@ -544,7 +552,7 @@ pub(super) fn print_grouped_sarif(
         }
     }
 
-    let _ = emit_json(&sarif, "SARIF");
+    emit_json(&sarif, "SARIF")
 }
 
 #[expect(
@@ -664,6 +672,43 @@ pub fn build_health_sarif(
         ));
     }
 
+    if let Some(ref gaps) = report.coverage_gaps {
+        for item in &gaps.files {
+            let uri = relative_uri(&item.path, root);
+            let message = format!(
+                "File is runtime-reachable but has no test dependency path ({} value export{})",
+                item.value_export_count,
+                if item.value_export_count == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            );
+            sarif_results.push(sarif_result(
+                "fallow/untested-file",
+                "warning",
+                &message,
+                &uri,
+                None,
+            ));
+        }
+
+        for item in &gaps.exports {
+            let uri = relative_uri(&item.path, root);
+            let message = format!(
+                "Export '{}' is runtime-reachable but never referenced by test-reachable modules",
+                item.export_name
+            );
+            sarif_results.push(sarif_result(
+                "fallow/untested-export",
+                "warning",
+                &message,
+                &uri,
+                Some((item.line, item.col + 1)),
+            ));
+        }
+    }
+
     let health_rules = vec![
         sarif_rule(
             "fallow/high-cyclomatic-complexity",
@@ -683,6 +728,16 @@ pub fn build_health_sarif(
         sarif_rule(
             "fallow/refactoring-target",
             "File identified as a high-priority refactoring candidate",
+            "warning",
+        ),
+        sarif_rule(
+            "fallow/untested-file",
+            "Runtime-reachable file has no test dependency path",
+            "warning",
+        ),
+        sarif_rule(
+            "fallow/untested-export",
+            "Runtime-reachable export has no test dependency path",
             "warning",
         ),
     ];
@@ -1029,10 +1084,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1046,7 +1103,7 @@ mod tests {
         let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 4);
+        assert_eq!(rules.len(), 6);
     }
 
     #[test]
@@ -1071,10 +1128,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1122,10 +1181,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1167,10 +1228,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],
@@ -1336,6 +1399,7 @@ mod tests {
             length: 2,
             line: 0,
             col: 0,
+            is_cross_package: false,
         });
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
@@ -1353,6 +1417,7 @@ mod tests {
             length: 2,
             line: 5,
             col: 2,
+            is_cross_package: false,
         });
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
@@ -1465,6 +1530,7 @@ mod tests {
                 line_count: 10,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats::default(),
         };
 
@@ -1579,10 +1645,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![RefactoringTarget {
@@ -1611,6 +1679,77 @@ mod tests {
         assert!(msg.contains("42.5"));
     }
 
+    #[test]
+    fn health_sarif_includes_coverage_gaps() {
+        use crate::health_types::*;
+
+        let root = PathBuf::from("/project");
+        let report = HealthReport {
+            findings: vec![],
+            summary: HealthSummary {
+                files_analyzed: 10,
+                functions_analyzed: 50,
+                functions_above_threshold: 0,
+                max_cyclomatic_threshold: 20,
+                max_cognitive_threshold: 15,
+                files_scored: None,
+                average_maintainability: None,
+                coverage_model: None,
+            },
+            vital_signs: None,
+            health_score: None,
+            file_scores: vec![],
+            coverage_gaps: Some(CoverageGaps {
+                summary: CoverageGapSummary {
+                    runtime_files: 2,
+                    covered_files: 0,
+                    file_coverage_pct: 0.0,
+                    untested_files: 1,
+                    untested_exports: 1,
+                },
+                files: vec![UntestedFile {
+                    path: root.join("src/app.ts"),
+                    value_export_count: 2,
+                }],
+                exports: vec![UntestedExport {
+                    path: root.join("src/app.ts"),
+                    export_name: "loader".into(),
+                    line: 12,
+                    col: 4,
+                }],
+            }),
+            hotspots: vec![],
+            hotspot_summary: None,
+            targets: vec![],
+            target_thresholds: None,
+            health_trend: None,
+        };
+
+        let sarif = build_health_sarif(&report, &root);
+        let entries = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["ruleId"], "fallow/untested-file");
+        assert_eq!(
+            entries[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "src/app.ts"
+        );
+        assert!(
+            entries[0]["message"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("2 value exports")
+        );
+        assert_eq!(entries[1]["ruleId"], "fallow/untested-export");
+        assert_eq!(
+            entries[1]["locations"][0]["physicalLocation"]["region"]["startLine"],
+            12
+        );
+        assert_eq!(
+            entries[1]["locations"][0]["physicalLocation"]["region"]["startColumn"],
+            5
+        );
+    }
+
     // ── Health SARIF rules include fullDescription from explain module ──
 
     #[test]
@@ -1626,10 +1765,12 @@ mod tests {
                 max_cognitive_threshold: 15,
                 files_scored: None,
                 average_maintainability: None,
+                coverage_model: None,
             },
             vital_signs: None,
             health_score: None,
             file_scores: vec![],
+            coverage_gaps: None,
             hotspots: vec![],
             hotspot_summary: None,
             targets: vec![],

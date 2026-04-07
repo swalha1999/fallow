@@ -580,6 +580,9 @@ fn merge_results(target: &mut AnalysisResults, source: AnalysisResults) {
 fn merge_duplication(target: &mut DuplicationReport, source: DuplicationReport) {
     target.clone_groups.extend(source.clone_groups);
     target.clone_families.extend(source.clone_families);
+    target
+        .mirrored_directories
+        .extend(source.mirrored_directories);
     target.stats.clone_groups += source.stats.clone_groups;
     target.stats.clone_instances += source.stats.clone_instances;
     target.stats.total_files += source.stats.total_files;
@@ -764,6 +767,7 @@ mod tests {
             length: 2,
             line: 10,
             col: 0,
+            is_cross_package: false,
         });
 
         merge_results(&mut target, source);
@@ -818,6 +822,7 @@ mod tests {
                 line_count: 5,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 10,
                 files_with_clones: 2,
@@ -845,6 +850,7 @@ mod tests {
         let mut target = DuplicationReport {
             clone_groups: vec![],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 5,
                 files_with_clones: 1,
@@ -860,6 +866,7 @@ mod tests {
         let source = DuplicationReport {
             clone_groups: vec![],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 3,
                 files_with_clones: 1,
@@ -908,6 +915,7 @@ mod tests {
                 line_count: 3,
             }],
             clone_families: vec![],
+            mirrored_directories: vec![],
             stats: DuplicationStats {
                 total_files: 5,
                 files_with_clones: 1,

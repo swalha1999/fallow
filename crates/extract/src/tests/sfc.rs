@@ -6,7 +6,7 @@ use fallow_types::extract::ModuleInfo;
 use crate::parse::parse_source_to_module;
 
 fn parse_sfc(source: &str, filename: &str) -> ModuleInfo {
-    parse_source_to_module(FileId(0), Path::new(filename), source, 0)
+    parse_source_to_module(FileId(0), Path::new(filename), source, 0, false)
 }
 
 #[test]
@@ -43,6 +43,225 @@ const count = ref(0);
 }
 
 #[test]
+fn vue_script_setup_template_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { formatDate } from './utils';
+</script>
+<template><p>{{ formatDate(value) }}</p></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"formatDate".to_string()),
+        "script setup template usage should mark formatDate as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_normal_script_import_is_not_visible_to_template() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { formatDate } from './utils';
+export default {};
+</script>
+<template><p>{{ formatDate(value) }}</p></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        info.unused_import_bindings
+            .contains(&"formatDate".to_string()),
+        "normal script imports should not get template credit, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_v_for_alias_shadows_import_name() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { item } from './utils';
+</script>
+<template><li v-for="item in items">{{ item }}</li></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        info.unused_import_bindings.contains(&"item".to_string()),
+        "v-for alias should shadow imported item, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_template_namespace_access_marks_member_usage() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import * as utils from './utils';
+</script>
+<template><p>{{ utils.formatDate(value) }}</p></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        info.member_accesses
+            .iter()
+            .any(|access| access.object == "utils" && access.member == "formatDate"),
+        "template namespace access should be recorded, got: {:?}",
+        info.member_accesses
+    );
+}
+
+#[test]
+fn vue_component_tag_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import FancyCard from './FancyCard.vue';
+</script>
+<template><FancyCard /><fancy-card /></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"FancyCard".to_string()),
+        "component tag usage should mark FancyCard as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_custom_directive_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { vFocusTrap } from './directives';
+</script>
+<template><input v-focus-trap /></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"vFocusTrap".to_string()),
+        "custom directive usage should mark vFocusTrap as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_custom_directive_value_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { tooltipText } from './utils';
+</script>
+<template><input v-tooltip="tooltipText" /></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"tooltipText".to_string()),
+        "custom directive values should mark tooltipText as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_v_on_object_syntax_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { handlers } from './utils';
+</script>
+<template><button v-on="handlers">Add</button></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"handlers".to_string()),
+        "v-on object syntax should mark handlers as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn vue_dynamic_directive_arguments_clear_unused_import_bindings() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { activeField, dynamicAttr, dynamicEvent, fieldMap, slotName } from './utils';
+</script>
+<template>
+  <button v-on:[dynamicEvent]="handleClick" />
+  <div v-bind:[dynamicAttr]="value" />
+  <section v-bind:[fieldMap[activeField]]="value" />
+  <List v-slot:[slotName]="{ slotName }">{{ slotName }}</List>
+</template>
+"#,
+        "Comp.vue",
+    );
+
+    for binding in [
+        "activeField",
+        "dynamicAttr",
+        "dynamicEvent",
+        "fieldMap",
+        "slotName",
+    ] {
+        assert!(
+            !info.unused_import_bindings.contains(&binding.to_string()),
+            "{binding} should be marked used via a dynamic directive argument, got: {:?}",
+            info.unused_import_bindings
+        );
+    }
+}
+
+#[test]
+fn vue_slot_default_initializer_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script setup lang="ts">
+import { fallbackItem } from './utils';
+</script>
+<template><List v-slot="{ item = fallbackItem }">{{ item }}</List></template>
+"#,
+        "Comp.vue",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"fallbackItem".to_string()),
+        "slot default initializers should mark fallbackItem as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
 fn extracts_vue_both_scripts() {
     let info = parse_sfc(
         r#"
@@ -75,6 +294,171 @@ import { helper } from './utils';
     assert_eq!(info.imports.len(), 2);
     assert!(info.imports.iter().any(|i| i.source == "svelte"));
     assert!(info.imports.iter().any(|i| i.source == "./utils"));
+}
+
+#[test]
+fn svelte_template_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { formatDate } from './utils';
+</script>
+<p>{formatDate(value)}</p>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"formatDate".to_string()),
+        "template usage should mark formatDate as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_unused_import_binding_is_preserved() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { formatDate } from './utils';
+</script>
+<p>Hello</p>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        info.unused_import_bindings
+            .contains(&"formatDate".to_string()),
+        "unused script import should remain unused, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_module_context_import_is_not_visible_to_template() {
+    let info = parse_sfc(
+        r#"
+<script context="module" lang="ts">
+import { formatDate } from './utils';
+</script>
+<script lang="ts">
+const value = new Date();
+</script>
+<p>{formatDate(value)}</p>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        info.unused_import_bindings
+            .contains(&"formatDate".to_string()),
+        "module-context import should not get template credit, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_template_namespace_access_marks_member_usage() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import * as utils from './utils';
+</script>
+<p>{utils.formatDate(value)}</p>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        info.member_accesses
+            .iter()
+            .any(|access| access.object == "utils" && access.member == "formatDate"),
+        "template namespace access should be recorded, got: {:?}",
+        info.member_accesses
+    );
+}
+
+#[test]
+fn svelte_component_tag_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import FancyButton from './FancyButton.svelte';
+</script>
+<FancyButton />
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"FancyButton".to_string()),
+        "component tag usage should mark FancyButton as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_directive_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { tooltip } from './actions';
+</script>
+<button use:tooltip>Hi</button>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        !info.unused_import_bindings.contains(&"tooltip".to_string()),
+        "directive name usage should mark tooltip as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_attribute_value_usage_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { isActive } from './utils';
+</script>
+<button class:active={isActive}>Hi</button>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        !info
+            .unused_import_bindings
+            .contains(&"isActive".to_string()),
+        "attribute value expressions should mark isActive as used, got: {:?}",
+        info.unused_import_bindings
+    );
+}
+
+#[test]
+fn svelte_store_subscription_clears_unused_import_binding() {
+    let info = parse_sfc(
+        r#"
+<script lang="ts">
+import { page } from './stores';
+</script>
+<p>{$page.url.pathname}</p>
+"#,
+        "App.svelte",
+    );
+
+    assert!(
+        !info.unused_import_bindings.contains(&"page".to_string()),
+        "store subscription usage should mark page as used, got: {:?}",
+        info.unused_import_bindings
+    );
 }
 
 #[test]

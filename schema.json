@@ -4,6 +4,14 @@
   "description": "User-facing configuration loaded from `.fallowrc.json` or `fallow.toml`.\n\n# Examples\n\n```\nuse fallow_config::FallowConfig;\n\n// Default config has sensible defaults\nlet config = FallowConfig::default();\nassert!(config.entry.is_empty());\nassert!(!config.production);\n\n// Deserialize from JSON\nlet config: FallowConfig = serde_json::from_str(r#\"{\n    \"entry\": [\"src/main.ts\"],\n    \"production\": true\n}\"#).unwrap();\nassert_eq!(config.entry, vec![\"src/main.ts\"]);\nassert!(config.production);\n```",
   "type": "object",
   "properties": {
+    "$schema": {
+      "description": "JSON Schema reference (ignored during deserialization).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "writeOnly": true
+    },
     "extends": {
       "description": "Base config files to extend from.\n\nSupports three resolution strategies:\n- **Relative paths**: `\"./base.json\"` — resolved relative to the config file.\n- **npm packages**: `\"npm:@co/config\"` — resolved by walking up `node_modules/`.\n  Package resolution checks `package.json` `exports`/`main` first, then falls back\n  to standard config file names. Subpaths are supported (e.g., `npm:@co/config/strict.json`).\n- **HTTPS URLs**: `\"https://example.com/fallow-base.json\"` — fetched remotely.\n  Only HTTPS is supported (no plain HTTP). URL-sourced configs may extend other\n  URLs or `npm:` packages, but not relative paths. Only JSON/JSONC format is\n  supported for remote configs. Timeout is configurable via\n  `FALLOW_EXTENDS_TIMEOUT_SECS` (default: 5s).\n\nBase configs are loaded first, then this config's values override them.\nLater entries in the array override earlier ones.\n\n**Note:** `npm:` resolution uses `node_modules/` directory walk-up and is\nincompatible with Yarn Plug'n'Play (PnP), which has no `node_modules/`.\nURL extends fetch on every run (no caching). For reliable CI, prefer `npm:`\nfor private or critical configs.",
       "type": "array",
@@ -49,7 +57,7 @@
       "default": null
     },
     "ignoreDependencies": {
-      "description": "Dependencies to ignore (always considered used).",
+      "description": "Dependencies to ignore (always considered used and always considered available).\n\nListed dependencies are excluded from both unused dependency and unlisted\ndependency detection. Useful for runtime-provided packages like `bun:sqlite`\nor implicitly available dependencies.",
       "type": "array",
       "items": {
         "type": "string"
@@ -96,8 +104,8 @@
         "unused-exports": "error",
         "unused-types": "error",
         "unused-dependencies": "error",
-        "unused-dev-dependencies": "error",
-        "unused-optional-dependencies": "error",
+        "unused-dev-dependencies": "warn",
+        "unused-optional-dependencies": "warn",
         "unused-enum-members": "error",
         "unused-class-members": "error",
         "unresolved-imports": "error",
@@ -106,7 +114,8 @@
         "type-only-dependencies": "warn",
         "test-only-dependencies": "warn",
         "circular-dependencies": "error",
-        "boundary-violation": "error"
+        "boundary-violation": "error",
+        "coverage-gaps": "off"
       }
     },
     "boundaries": {
@@ -130,6 +139,14 @@
       },
       "default": []
     },
+    "dynamicallyLoaded": {
+      "description": "Glob patterns for files that are dynamically loaded at runtime\n(plugin directories, locale files, etc.). These files are treated as\nalways-used and will never be flagged as unused.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
     "overrides": {
       "description": "Per-file rule overrides matching oxlint's overrides pattern.",
       "type": "array",
@@ -144,6 +161,14 @@
         "string",
         "null"
       ]
+    },
+    "publicPackages": {
+      "description": "Workspace package name patterns that are public libraries.\nExports from these packages are not flagged as unused.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     },
     "regression": {
       "description": "Regression detection baseline embedded in config.\nStores issue counts from a known-good state for CI regression checks.\nPopulated by `--save-regression-baseline` (no path), read by `--fail-on-regression`.",
@@ -194,6 +219,11 @@
             "type": "string"
           },
           "default": []
+        },
+        "entryPointRole": {
+          "description": "Coverage role for `entryPoints`.\n\nDefaults to `support`. Set to `runtime` for application entry points\nor `test` for test framework entry points.",
+          "$ref": "#/$defs/EntryPointRole",
+          "default": "support"
         },
         "configPatterns": {
           "description": "Glob patterns for config files (marked as always-used when active).",
@@ -308,6 +338,26 @@
             "type",
             "conditions"
           ]
+        }
+      ]
+    },
+    "EntryPointRole": {
+      "description": "How a plugin's discovered entry points contribute to coverage reachability.",
+      "oneOf": [
+        {
+          "description": "Runtime/application roots that should count toward runtime reachability.",
+          "type": "string",
+          "const": "runtime"
+        },
+        {
+          "description": "Test roots that should count toward test reachability.",
+          "type": "string",
+          "const": "test"
+        },
+        {
+          "description": "Support/setup/config roots that should keep files alive but not count as runtime/test.",
+          "type": "string",
+          "const": "support"
         }
       ]
     },
@@ -530,11 +580,11 @@
         },
         "unused-dev-dependencies": {
           "$ref": "#/$defs/Severity",
-          "default": "error"
+          "default": "warn"
         },
         "unused-optional-dependencies": {
           "$ref": "#/$defs/Severity",
-          "default": "error"
+          "default": "warn"
         },
         "unused-enum-members": {
           "$ref": "#/$defs/Severity",
@@ -569,6 +619,10 @@
           "default": "error"
         },
         "boundary-violation": {
+          "$ref": "#/$defs/Severity",
+          "default": "error"
+        },
+        "coverage-gaps": {
           "$ref": "#/$defs/Severity",
           "default": "error"
         }
@@ -867,6 +921,16 @@
           ]
         },
         "boundary-violation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage-gaps": {
           "anyOf": [
             {
               "$ref": "#/$defs/Severity"

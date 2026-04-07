@@ -76,6 +76,7 @@ fn collect_import_edge(
                     imported_name: import.info.imported_name.clone(),
                     local_name: import.info.local_name.clone(),
                     import_span: import.info.span,
+                    is_type_only: import.info.is_type_only,
                 });
         }
         ResolveResult::NpmPackage(name) => {
@@ -113,6 +114,7 @@ fn collect_edges_for_module(
                     imported_name: ImportedName::SideEffect,
                     local_name: String::new(),
                     import_span: oxc_span::Span::new(0, 0),
+                    is_type_only: re_export.info.is_type_only,
                 });
         } else if let ResolveResult::NpmPackage(name) = &re_export.target {
             record_package_usage(acc, name, file_id, re_export.info.is_type_only);
@@ -137,6 +139,7 @@ fn collect_edges_for_module(
                     imported_name: ImportedName::Namespace,
                     local_name: String::new(),
                     import_span: oxc_span::Span::new(0, 0),
+                    is_type_only: false,
                 });
         }
     }
@@ -240,9 +243,7 @@ fn build_module_node(
         edge_range,
         exports,
         re_exports: re_export_edges,
-        is_entry_point: entry_point_ids.contains(&file.id),
-        is_reachable: false,
-        has_cjs_exports,
+        flags: ModuleNode::flags_from(entry_point_ids.contains(&file.id), false, has_cjs_exports),
     }
 }
 
@@ -279,13 +280,13 @@ fn mark_all_exports_referenced(
     exports: &mut Vec<ExportSymbol>,
     source_id: FileId,
     import_span: oxc_span::Span,
-    kind: &ReferenceKind,
+    kind: ReferenceKind,
 ) {
     for export in exports {
         if export.references.iter().all(|r| r.from_file != source_id) {
             export.references.push(SymbolReference {
                 from_file: source_id,
-                kind: kind.clone(),
+                kind,
                 import_span,
             });
         }
@@ -300,7 +301,7 @@ fn mark_member_exports_referenced(
     source_id: FileId,
     accessed_members: &[String],
     import_span: oxc_span::Span,
-    kind: &ReferenceKind,
+    kind: ReferenceKind,
 ) -> FxHashSet<String> {
     let member_set: FxHashSet<&str> = accessed_members.iter().map(String::as_str).collect();
     let mut found_members: FxHashSet<String> = FxHashSet::default();
@@ -314,7 +315,7 @@ fn mark_member_exports_referenced(
             if export.references.iter().all(|r| r.from_file != source_id) {
                 export.references.push(SymbolReference {
                     from_file: source_id,
-                    kind: kind.clone(),
+                    kind,
                     import_span,
                 });
             }
@@ -406,7 +407,7 @@ fn narrow_namespace_references(
             &mut module.exports,
             source_id,
             sym_import_span,
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
     } else {
         // Narrow: only mark accessed members as referenced
@@ -415,7 +416,7 @@ fn narrow_namespace_references(
             source_id,
             &accessed_members,
             sym_import_span,
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
 
         // For members not found on the target (e.g., barrel with
@@ -456,7 +457,7 @@ fn narrow_css_module_references(
             exports,
             source_id,
             sym_import_span,
-            &ReferenceKind::DefaultImport,
+            ReferenceKind::DefaultImport,
         );
     } else {
         mark_member_exports_referenced(
@@ -464,7 +465,7 @@ fn narrow_css_module_references(
             source_id,
             &accessed_members,
             sym_import_span,
-            &ReferenceKind::DefaultImport,
+            ReferenceKind::DefaultImport,
         );
     }
 }
@@ -522,7 +523,7 @@ fn attach_symbol_reference(
                 &mut target_module.exports,
                 source_id,
                 sym.import_span,
-                &ReferenceKind::NamespaceImport,
+                ReferenceKind::NamespaceImport,
             );
         } else {
             narrow_namespace_references(
@@ -561,6 +562,8 @@ impl ModuleGraph {
         files: &[DiscoveredFile],
         module_by_id: &FxHashMap<FileId, &ResolvedModule>,
         entry_point_ids: &FxHashSet<FileId>,
+        runtime_entry_point_ids: &FxHashSet<FileId>,
+        test_entry_point_ids: &FxHashSet<FileId>,
         module_count: usize,
         total_capacity: usize,
     ) -> Self {
@@ -609,6 +612,8 @@ impl ModuleGraph {
             package_usage: acc.package_usage,
             type_only_package_usage: acc.type_only_package_usage,
             entry_points: entry_point_ids.clone(),
+            runtime_entry_points: runtime_entry_point_ids.clone(),
+            test_entry_points: test_entry_point_ids.clone(),
             reverse_deps,
             namespace_imported: acc.namespace_imported,
         }
@@ -1309,7 +1314,7 @@ mod tests {
             &mut exports,
             FileId(5),
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
         assert_eq!(exports[0].references.len(), 1);
         assert_eq!(exports[0].references[0].from_file, FileId(5));
@@ -1335,7 +1340,7 @@ mod tests {
             &mut exports,
             FileId(5),
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
         assert_eq!(exports[0].references.len(), 1);
     }
@@ -1368,7 +1373,7 @@ mod tests {
             FileId(0),
             &accessed,
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
 
         assert_eq!(exports[0].references.len(), 1);
@@ -1996,7 +2001,7 @@ mod tests {
             FileId(0),
             &accessed,
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
         assert_eq!(exports[0].references.len(), 1);
         assert!(found.contains("default"));
@@ -2022,7 +2027,7 @@ mod tests {
             FileId(0), // same file as existing reference
             &accessed,
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
         // Should not add duplicate reference from same file
         assert_eq!(exports[0].references.len(), 1);
@@ -2045,7 +2050,7 @@ mod tests {
             FileId(0),
             &accessed,
             oxc_span::Span::new(0, 10),
-            &ReferenceKind::NamespaceImport,
+            ReferenceKind::NamespaceImport,
         );
         assert!(exports[0].references.is_empty());
         assert!(found.is_empty());

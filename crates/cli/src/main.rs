@@ -16,6 +16,7 @@ mod check;
 mod codeowners;
 mod combined;
 mod dupes;
+mod error;
 mod explain;
 mod fix;
 mod health;
@@ -32,6 +33,7 @@ mod watch;
 
 use check::{CheckOptions, IssueFilters, TraceOptions};
 use dupes::{DupesMode, DupesOptions};
+use error::emit_error;
 use health::{HealthOptions, SortBy};
 use list::ListOptions;
 
@@ -116,6 +118,10 @@ struct Cli {
     #[arg(long, global = true)]
     explain: bool,
 
+    /// Show only category counts without individual items
+    #[arg(long, global = true)]
+    summary: bool,
+
     /// CI mode: equivalent to --format sarif --fail-on-issues --quiet
     #[arg(long, global = true)]
     ci: bool,
@@ -162,6 +168,25 @@ struct Cli {
     /// Skip specific analyses when no subcommand is given (comma-separated: dead-code,dupes,health)
     #[arg(long, value_delimiter = ',')]
     skip: Vec<AnalysisKind>,
+
+    /// Compute health score (0-100 with letter grade) in combined mode.
+    /// Use with `--trend` to show score deltas in PR comments.
+    #[arg(long)]
+    score: bool,
+
+    /// Compare current health metrics against the most recent saved snapshot
+    /// and show per-metric deltas. Implies --score.
+    #[arg(long)]
+    trend: bool,
+
+    /// Save a vital signs snapshot for trend tracking in combined mode.
+    /// Provide a path or omit for the default `.fallow/snapshots/` location.
+    #[expect(
+        clippy::option_option,
+        reason = "clap pattern: None=not passed, Some(None)=default path, Some(Some(path))=custom path"
+    )]
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
+    save_snapshot: Option<Option<String>>,
 }
 
 #[derive(Subcommand)]
@@ -228,6 +253,10 @@ enum Command {
         /// Trace where a dependency is used
         #[arg(long, value_name = "PACKAGE")]
         trace_dependency: Option<String>,
+
+        /// Show only the top N items per category
+        #[arg(long)]
+        top: Option<usize>,
     },
 
     /// Watch for changes and re-run analysis
@@ -325,9 +354,9 @@ enum Command {
 
     /// Analyze function complexity (cyclomatic + cognitive)
     ///
-    /// By default, shows all sections: health score, complexity findings, file scores,
-    /// hotspots, and refactoring targets. When any section flag is specified, only those
-    /// sections are shown.
+    /// By default, shows all existing sections: health score, complexity findings,
+    /// file scores, hotspots, and refactoring targets. When any section flag is
+    /// specified, only those sections are shown.
     Health {
         /// Maximum cyclomatic complexity threshold (overrides config)
         #[arg(long)]
@@ -357,6 +386,11 @@ enum Command {
         #[arg(long)]
         file_scores: bool,
 
+        /// Show only static test coverage gaps: runtime files and exports with no
+        /// dependency path from any discovered test root. Requires full analysis pipeline.
+        #[arg(long)]
+        coverage_gaps: bool,
+
         /// Show only hotspots: files that are both complex and frequently changing.
         /// Combines git churn history with complexity data. Requires a git repository.
         #[arg(long)]
@@ -366,6 +400,11 @@ enum Command {
         /// coupling, churn, and dead code signals. Requires full analysis pipeline.
         #[arg(long)]
         targets: bool,
+
+        /// Filter refactoring targets by effort level (low, medium, high).
+        /// Implies --targets.
+        #[arg(long, value_enum)]
+        effort: Option<EffortFilter>,
 
         /// Show only the project health score (0–100) with letter grade (A/B/C/D/F).
         /// The score is included by default when no section flags are set.
@@ -473,27 +512,31 @@ pub enum GroupBy {
     Owner,
     /// Group by first directory component of the file path.
     Directory,
+    /// Group by workspace package (monorepo).
+    #[value(alias = "workspace", alias = "pkg")]
+    Package,
 }
 
-// ── Structured error output ──────────────────────────────────────
+/// Filter refactoring targets by effort level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum EffortFilter {
+    Low,
+    Medium,
+    High,
+}
 
-/// Emit an error as structured JSON on stdout when `--format json` is active,
-/// then return the given exit code. For non-JSON formats, emit to stderr as usual.
-fn emit_error(message: &str, exit_code: u8, output: fallow_config::OutputFormat) -> ExitCode {
-    if matches!(output, fallow_config::OutputFormat::Json) {
-        let error_obj = serde_json::json!({
-            "error": true,
-            "message": message,
-            "exit_code": exit_code,
-        });
-        if let Ok(json) = serde_json::to_string_pretty(&error_obj) {
-            println!("{json}");
+impl EffortFilter {
+    /// Convert to the corresponding `EffortEstimate` for comparison.
+    const fn to_estimate(self) -> health_types::EffortEstimate {
+        match self {
+            Self::Low => health_types::EffortEstimate::Low,
+            Self::Medium => health_types::EffortEstimate::Medium,
+            Self::High => health_types::EffortEstimate::High,
         }
-    } else {
-        eprintln!("Error: {message}");
     }
-    ExitCode::from(exit_code)
 }
+
+// See `error.rs` — `emit_error` is re-exported via `use error::emit_error`.
 
 // ── Environment variable helpers ─────────────────────────────────
 
@@ -540,6 +583,21 @@ fn build_ownership_resolver(
             Err(e) => Err(emit_error(&e, 2, output)),
         },
         GroupBy::Directory => Ok(Some(report::OwnershipResolver::Directory)),
+        GroupBy::Package => {
+            let workspaces = fallow_config::discover_workspaces(root);
+            if workspaces.is_empty() {
+                Err(emit_error(
+                    "--group-by package requires a monorepo with workspace packages \
+                     (package.json workspaces, pnpm-workspace.yaml, or tsconfig references)",
+                    2,
+                    output,
+                ))
+            } else {
+                Ok(Some(report::OwnershipResolver::Package(
+                    report::grouping::PackageResolver::new(root, &workspaces),
+                )))
+            }
+        }
     }
 }
 
@@ -905,9 +963,13 @@ fn dispatch_bare_command(
         group_by: cli.group_by,
         explain: cli.explain,
         performance: cli.performance,
+        summary: cli.summary,
         run_check,
         run_dupes,
         run_health,
+        score: cli.score || cli.trend,
+        trend: cli.trend,
+        save_snapshot: cli.save_snapshot.as_ref(),
         regression_opts: build_regression_opts(
             cli.fail_on_regression,
             tolerance,
@@ -953,6 +1015,7 @@ fn dispatch_subcommand(
             trace,
             trace_file,
             trace_dependency,
+            top,
         } => {
             let (output, quiet, fail_on_issues) = apply_ci_defaults(
                 cli.ci,
@@ -999,6 +1062,8 @@ fn dispatch_subcommand(
                 include_dupes,
                 trace_opts: &trace_opts,
                 explain: cli.explain,
+                top,
+                summary: cli.summary,
                 regression_opts: build_regression_opts(
                     cli.fail_on_regression,
                     tolerance,
@@ -1040,7 +1105,7 @@ fn dispatch_subcommand(
             root,
             use_toml: toml,
             hooks,
-            base: branch.as_deref(),
+            branch: branch.as_deref(),
         }),
         Command::ConfigSchema => init::run_config_schema(),
         Command::PluginSchema => init::run_plugin_schema(),
@@ -1098,6 +1163,7 @@ fn dispatch_subcommand(
                 trace: trace.as_deref(),
                 changed_since: cli.changed_since.as_deref(),
                 explain: cli.explain,
+                summary: cli.summary,
                 group_by: cli.group_by,
             })
         }
@@ -1108,8 +1174,10 @@ fn dispatch_subcommand(
             sort,
             complexity,
             file_scores,
+            coverage_gaps,
             hotspots,
             targets,
+            effort,
             score,
             min_score,
             since,
@@ -1129,8 +1197,10 @@ fn dispatch_subcommand(
             sort,
             complexity,
             file_scores,
+            coverage_gaps,
             hotspots,
             targets,
+            effort,
             score,
             min_score,
             since.as_deref(),
@@ -1178,8 +1248,10 @@ fn dispatch_health(
     sort: health::SortBy,
     complexity: bool,
     file_scores: bool,
+    coverage_gaps: bool,
     hotspots: bool,
     targets: bool,
+    effort: Option<EffortFilter>,
     score: bool,
     min_score: Option<f64>,
     since: Option<&str>,
@@ -1194,17 +1266,20 @@ fn dispatch_health(
         quiet,
         cli_format_was_explicit,
     );
+    // --effort implies --targets
+    let targets = targets || effort.is_some();
     // --min-score, --save-snapshot, --trend, and --format badge imply --score
     let badge_format = matches!(output, fallow_config::OutputFormat::Badge);
     let score = score || min_score.is_some() || trend || badge_format;
     let snapshot_requested = save_snapshot.is_some();
     // No section flags = show all (including score). Any flag set = show only those.
     // --save-snapshot and --trend are orthogonal (not section flags) but force score.
-    let any_section = complexity || file_scores || hotspots || targets || score;
+    let any_section = complexity || file_scores || coverage_gaps || hotspots || targets || score;
     let eff_score = if any_section { score } else { true } || snapshot_requested;
     // Score needs full pipeline for accuracy
     let force_full = snapshot_requested || eff_score;
     let eff_file_scores = if any_section { file_scores } else { true } || force_full;
+    let eff_coverage_gaps = if any_section { coverage_gaps } else { false };
     let eff_hotspots = if any_section { hotspots } else { true } || force_full;
     let eff_complexity = if any_section { complexity } else { true };
     let eff_targets = if any_section { targets } else { true };
@@ -1226,13 +1301,16 @@ fn dispatch_health(
         save_baseline: cli.save_baseline.as_deref(),
         complexity: eff_complexity,
         file_scores: eff_file_scores,
+        coverage_gaps: eff_coverage_gaps,
         hotspots: eff_hotspots,
         targets: eff_targets,
+        effort: effort.map(EffortFilter::to_estimate),
         score: eff_score,
         min_score,
         since,
         min_commits,
         explain: cli.explain,
+        summary: cli.summary,
         save_snapshot: save_snapshot.map(|opt| PathBuf::from(opt.as_deref().unwrap_or_default())),
         trend,
         group_by: cli.group_by,

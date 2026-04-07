@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 use crate::extract::MemberKind;
 use crate::serde_path;
 
+/// Summary of detected entry points, grouped by discovery source.
+///
+/// Used to surface entry-point detection status in human and JSON output,
+/// so library authors can verify that fallow found the right entry points.
+#[derive(Debug, Clone, Default)]
+pub struct EntryPointSummary {
+    /// Total number of entry points detected.
+    pub total: usize,
+    /// Breakdown by source category (e.g., "package.json" -> 3, "plugin" -> 12).
+    /// Sorted by key for deterministic output.
+    pub by_source: Vec<(String, usize)>,
+}
+
 /// Complete analysis results.
 ///
 /// # Examples
@@ -65,6 +78,11 @@ pub struct AnalysisResults {
     /// Skipped during serialization: this is internal LSP data, not part of the JSON output schema.
     #[serde(skip)]
     pub export_usages: Vec<ExportUsage>,
+    /// Summary of detected entry points, grouped by discovery source.
+    /// Not included in issue counts -- this is informational metadata.
+    /// Skipped during serialization: rendered separately in JSON output.
+    #[serde(skip)]
+    pub entry_point_summary: Option<EntryPointSummary>,
 }
 
 impl AnalysisResults {
@@ -428,6 +446,9 @@ pub struct CircularDependency {
     /// 0-based byte column offset of the import that starts the cycle.
     #[serde(default)]
     pub col: u32,
+    /// Whether this cycle crosses workspace package boundaries.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_cross_package: bool,
 }
 
 /// An import that crosses an architecture boundary rule.
@@ -623,6 +644,7 @@ mod tests {
             length: 2,
             line: 3,
             col: 0,
+            is_cross_package: false,
         });
         results.boundary_violations.push(BoundaryViolation {
             from_path: PathBuf::from("src/ui/Button.tsx"),

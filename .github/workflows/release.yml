@@ -13,6 +13,7 @@ env:
 jobs:
   publish-crates:
     name: Publish Rust crates
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,36 +88,43 @@ jobs:
             os: macos-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: darwin-x64
           - target: aarch64-apple-darwin
             os: macos-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: darwin-arm64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: linux-x64-gnu
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: linux-arm64-gnu
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: linux-x64-musl
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             binary: fallow
             lsp_binary: fallow-lsp
+            mcp_binary: fallow-mcp
             npm_dir: linux-arm64-musl
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             binary: fallow.exe
             lsp_binary: fallow-lsp.exe
+            mcp_binary: fallow-mcp.exe
             npm_dir: win32-x64-msvc
 
     steps:
@@ -151,17 +159,23 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
 
+      - name: Build MCP release binary
+        run: cargo build --release --target ${{ matrix.target }} -p fallow-mcp
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+
       - name: Package binaries (unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../fallow-${{ matrix.target }}.tar.gz ${{ matrix.binary }} ${{ matrix.lsp_binary }}
+          tar czf ../../../fallow-${{ matrix.target }}.tar.gz ${{ matrix.binary }} ${{ matrix.lsp_binary }} ${{ matrix.mcp_binary }}
 
       - name: Package binaries (windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../fallow-${{ matrix.target }}.zip ${{ matrix.binary }} ${{ matrix.lsp_binary }}
+          7z a ../../../fallow-${{ matrix.target }}.zip ${{ matrix.binary }} ${{ matrix.lsp_binary }} ${{ matrix.mcp_binary }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -169,17 +183,37 @@ jobs:
           name: fallow-${{ matrix.target }}
           path: fallow-${{ matrix.target }}.*
 
+      - name: Rename LSP and MCP binaries with target identifier (unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.lsp_binary }} fallow-lsp-${{ matrix.npm_dir }}
+          cp target/${{ matrix.target }}/release/${{ matrix.mcp_binary }} fallow-mcp-${{ matrix.npm_dir }}
+
+      - name: Rename LSP and MCP binaries with target identifier (windows)
+        if: runner.os == 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.lsp_binary }} fallow-lsp-${{ matrix.npm_dir }}.exe
+          cp target/${{ matrix.target }}/release/${{ matrix.mcp_binary }} fallow-mcp-${{ matrix.npm_dir }}.exe
+
       - name: Upload LSP artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
-          name: fallow-lsp-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.lsp_binary }}
+          name: fallow-lsp-${{ matrix.npm_dir }}
+          path: fallow-lsp-${{ matrix.npm_dir }}${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      - name: Upload MCP artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: fallow-mcp-${{ matrix.npm_dir }}
+          path: fallow-mcp-${{ matrix.npm_dir }}${{ runner.os == 'Windows' && '.exe' || '' }}
 
       - name: Upload npm binary
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: npm-${{ matrix.npm_dir }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.binary }}
+            target/${{ matrix.target }}/release/${{ matrix.mcp_binary }}
 
   release:
     name: Create Release
@@ -230,7 +264,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Ensure latest npm (for trusted publishing)
-        run: npm install -g npm@10.9.8 && npm install -g npm@latest
+        run: npm install -g npm@latest
 
       - name: Download all npm binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -248,7 +282,7 @@ jobs:
 
       - name: Set binary permissions
         run: |
-          for bin in npm/*/fallow; do
+          for bin in npm/*/fallow npm/*/fallow-mcp; do
             [ -f "$bin" ] && chmod +x "$bin"
           done
 

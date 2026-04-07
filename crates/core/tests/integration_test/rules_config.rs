@@ -91,9 +91,11 @@ fn ignore_exports_wildcard() {
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, true, true);
 
@@ -136,9 +138,11 @@ fn ignore_exports_specific() {
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, true, true);
 
@@ -180,9 +184,11 @@ fn ignore_dependencies_config() {
         boundaries: fallow_config::BoundaryConfig::default(),
         production: false,
         plugins: vec![],
+        dynamically_loaded: vec![],
         overrides: vec![],
         regression: None,
         codeowners: None,
+        public_packages: vec![],
     }
     .resolve(root, OutputFormat::Human, 4, true, true);
 

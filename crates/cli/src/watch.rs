@@ -108,6 +108,8 @@ fn analyze_and_report(config: &fallow_config::ResolvedConfig, opts: &WatchOption
         quiet: opts.quiet,
         explain: opts.explain,
         group_by: None,
+        top: None,
+        summary: false,
     };
     let report_code = report::print_results(&results, &ctx, config.output, None);
     if report_code != ExitCode::SUCCESS {
@@ -383,9 +385,11 @@ mod tests {
             boundaries: fallow_config::BoundaryConfig::default(),
             production: false,
             plugins: vec![],
+            dynamically_loaded: vec![],
             overrides: vec![],
             regression: None,
             codeowners: None,
+            public_packages: vec![],
         }
         .resolve(root.to_path_buf(), output, threads, false, quiet)
     }

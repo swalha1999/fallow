@@ -159,6 +159,43 @@ pub fn build_json(
         serde_json::json!(results.total_issues()),
     );
 
+    // Entry-point detection summary (metadata, not serialized via serde)
+    if let Some(ref ep) = results.entry_point_summary {
+        let sources: serde_json::Map<String, serde_json::Value> = ep
+            .by_source
+            .iter()
+            .map(|(k, v)| (k.replace(' ', "_"), serde_json::json!(v)))
+            .collect();
+        map.insert(
+            "entry_points".to_string(),
+            serde_json::json!({
+                "total": ep.total,
+                "sources": sources,
+            }),
+        );
+    }
+
+    // Per-category summary counts for CI dashboard consumption
+    let summary = serde_json::json!({
+        "total_issues": results.total_issues(),
+        "unused_files": results.unused_files.len(),
+        "unused_exports": results.unused_exports.len(),
+        "unused_types": results.unused_types.len(),
+        "unused_dependencies": results.unused_dependencies.len()
+            + results.unused_dev_dependencies.len()
+            + results.unused_optional_dependencies.len(),
+        "unused_enum_members": results.unused_enum_members.len(),
+        "unused_class_members": results.unused_class_members.len(),
+        "unresolved_imports": results.unresolved_imports.len(),
+        "unlisted_dependencies": results.unlisted_dependencies.len(),
+        "duplicate_exports": results.duplicate_exports.len(),
+        "type_only_dependencies": results.type_only_dependencies.len(),
+        "test_only_dependencies": results.test_only_dependencies.len(),
+        "circular_dependencies": results.circular_dependencies.len(),
+        "boundary_violations": results.boundary_violations.len(),
+    });
+    map.insert("summary".to_string(), summary);
+
     if let serde_json::Value::Object(results_map) = results_value {
         for (key, value) in results_map {
             map.insert(key, value);
@@ -459,6 +496,32 @@ fn inject_actions(output: &mut serde_json::Value) {
 
 // ── Health action injection ─────────────────────────────────────
 
+/// Build a JSON representation of baseline deltas for the combined JSON envelope.
+///
+/// Accepts a total delta and an iterator of per-category entries to avoid
+/// coupling the report module (compiled in both lib and bin) to the
+/// binary-only `baseline` module.
+pub fn build_baseline_deltas_json<'a>(
+    total_delta: i64,
+    per_category: impl Iterator<Item = (&'a str, usize, usize, i64)>,
+) -> serde_json::Value {
+    let mut per_cat = serde_json::Map::new();
+    for (cat, current, baseline, delta) in per_category {
+        per_cat.insert(
+            cat.to_string(),
+            serde_json::json!({
+                "current": current,
+                "baseline": baseline,
+                "delta": delta,
+            }),
+        );
+    }
+    serde_json::json!({
+        "total_delta": total_delta,
+        "per_category": per_cat
+    })
+}
+
 /// Inject `actions` arrays into complexity findings in a health JSON output.
 ///
 /// Walks `findings` and `targets` arrays, appending machine-actionable
@@ -498,6 +561,26 @@ pub(crate) fn inject_health_actions(output: &mut serde_json::Value) {
             let actions = build_hotspot_actions(item);
             if let serde_json::Value::Object(obj) = item {
                 obj.insert("actions".to_string(), actions);
+            }
+        }
+    }
+
+    // Coverage gaps: untested files and exports
+    if let Some(gaps) = map.get_mut("coverage_gaps").and_then(|v| v.as_object_mut()) {
+        if let Some(files) = gaps.get_mut("files").and_then(|v| v.as_array_mut()) {
+            for item in files {
+                let actions = build_untested_file_actions(item);
+                if let serde_json::Value::Object(obj) = item {
+                    obj.insert("actions".to_string(), actions);
+                }
+            }
+        }
+        if let Some(exports) = gaps.get_mut("exports").and_then(|v| v.as_array_mut()) {
+            for item in exports {
+                let actions = build_untested_export_actions(item);
+                if let serde_json::Value::Object(obj) = item {
+                    obj.insert("actions".to_string(), actions);
+                }
             }
         }
     }
@@ -583,6 +666,56 @@ fn build_refactoring_target_actions(item: &serde_json::Value) -> serde_json::Val
     }
 
     serde_json::Value::Array(actions)
+}
+
+/// Build the `actions` array for an untested file.
+fn build_untested_file_actions(item: &serde_json::Value) -> serde_json::Value {
+    let path = item
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("file");
+
+    serde_json::Value::Array(vec![
+        serde_json::json!({
+            "type": "add-tests",
+            "auto_fixable": false,
+            "description": format!("Add test coverage for `{path}`"),
+            "note": "No test dependency path reaches this runtime file",
+        }),
+        serde_json::json!({
+            "type": "suppress-file",
+            "auto_fixable": false,
+            "description": format!("Suppress coverage gap reporting for `{path}`"),
+            "comment": "// fallow-ignore-file coverage-gaps",
+        }),
+    ])
+}
+
+/// Build the `actions` array for an untested export.
+fn build_untested_export_actions(item: &serde_json::Value) -> serde_json::Value {
+    let path = item
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("file");
+    let export_name = item
+        .get("export_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("export");
+
+    serde_json::Value::Array(vec![
+        serde_json::json!({
+            "type": "add-test-import",
+            "auto_fixable": false,
+            "description": format!("Import and test `{export_name}` from `{path}`"),
+            "note": "This export is runtime-reachable but no test-reachable module references it",
+        }),
+        serde_json::json!({
+            "type": "suppress-file",
+            "auto_fixable": false,
+            "description": format!("Suppress coverage gap reporting for `{path}`"),
+            "comment": "// fallow-ignore-file coverage-gaps",
+        }),
+    ])
 }
 
 // ── Duplication action injection ────────────────────────────────
@@ -1004,6 +1137,7 @@ mod tests {
             length: 2,
             line: 1,
             col: 0,
+            is_cross_package: false,
         });
         let elapsed = Duration::from_millis(0);
         let output = build_json(&results, &root, elapsed).expect("should serialize");
@@ -1274,6 +1408,7 @@ mod tests {
             length: 3,
             line: 5,
             col: 0,
+            is_cross_package: false,
         });
         let elapsed = Duration::from_millis(0);
         let output = build_json(&results, &root, elapsed).expect("should serialize");

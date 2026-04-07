@@ -109,6 +109,7 @@ pub(super) fn sample_results(root: &Path) -> AnalysisResults {
         length: 2,
         line: 3,
         col: 0,
+        is_cross_package: false,
     });
     r.boundary_violations.push(BoundaryViolation {
         from_path: root.join("src/ui/Button.tsx"),

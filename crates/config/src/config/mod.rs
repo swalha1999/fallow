@@ -49,7 +49,6 @@ use crate::workspace::WorkspaceConfig;
 pub struct FallowConfig {
     /// JSON Schema reference (ignored during deserialization).
     #[serde(rename = "$schema", default, skip_serializing)]
-    #[schemars(skip)]
     pub schema: Option<String>,
 
     /// Base config files to extend from.
@@ -91,7 +90,11 @@ pub struct FallowConfig {
     #[serde(default)]
     pub workspaces: Option<WorkspaceConfig>,
 
-    /// Dependencies to ignore (always considered used).
+    /// Dependencies to ignore (always considered used and always considered available).
+    ///
+    /// Listed dependencies are excluded from both unused dependency and unlisted
+    /// dependency detection. Useful for runtime-provided packages like `bun:sqlite`
+    /// or implicitly available dependencies.
     #[serde(default)]
     pub ignore_dependencies: Vec<String>,
 
@@ -129,6 +132,12 @@ pub struct FallowConfig {
     #[serde(default)]
     pub plugins: Vec<String>,
 
+    /// Glob patterns for files that are dynamically loaded at runtime
+    /// (plugin directories, locale files, etc.). These files are treated as
+    /// always-used and will never be flagged as unused.
+    #[serde(default)]
+    pub dynamically_loaded: Vec<String>,
+
     /// Per-file rule overrides matching oxlint's overrides pattern.
     #[serde(default)]
     pub overrides: Vec<ConfigOverride>,
@@ -140,6 +149,11 @@ pub struct FallowConfig {
     /// non-standard location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codeowners: Option<String>,
+
+    /// Workspace package name patterns that are public libraries.
+    /// Exports from these packages are not flagged as unused.
+    #[serde(default)]
+    pub public_packages: Vec<String>,
 
     /// Regression detection baseline embedded in config.
     /// Stores issue counts from a known-good state for CI regression checks.
@@ -218,7 +232,9 @@ mod tests {
         assert!(config.ignore_dependencies.is_empty());
         assert!(config.ignore_exports.is_empty());
         assert!(config.plugins.is_empty());
+        assert!(config.dynamically_loaded.is_empty());
         assert!(config.overrides.is_empty());
+        assert!(config.public_packages.is_empty());
         assert!(!config.production);
     }
 
@@ -299,6 +315,22 @@ mod tests {
     fn deserialize_json_production_mode_true() {
         let config: FallowConfig = serde_json::from_str(r#"{"production": true}"#).unwrap();
         assert!(config.production);
+    }
+
+    #[test]
+    fn deserialize_json_dynamically_loaded() {
+        let json = r#"{"dynamicallyLoaded": ["plugins/**/*.ts", "locales/**/*.json"]}"#;
+        let config: FallowConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.dynamically_loaded,
+            vec!["plugins/**/*.ts", "locales/**/*.json"]
+        );
+    }
+
+    #[test]
+    fn deserialize_json_dynamically_loaded_defaults_empty() {
+        let config: FallowConfig = serde_json::from_str("{}").unwrap();
+        assert!(config.dynamically_loaded.is_empty());
     }
 
     // ── TOML deserialization ────────────────────────────────────────
@@ -605,5 +637,56 @@ unused-files = "off"
         let config: FallowConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.ignore_exports.len(), 3);
         assert_eq!(config.ignore_exports[2].exports, vec!["default"]);
+    }
+
+    // ── Public packages ───────────────────────────────────────────
+
+    #[test]
+    fn deserialize_json_public_packages_camel_case() {
+        let json = r#"{"publicPackages": ["@myorg/shared-lib", "@myorg/utils"]}"#;
+        let config: FallowConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.public_packages,
+            vec!["@myorg/shared-lib", "@myorg/utils"]
+        );
+    }
+
+    #[test]
+    fn deserialize_json_public_packages_rejects_snake_case() {
+        let json = r#"{"public_packages": ["@myorg/shared-lib"]}"#;
+        let result: Result<FallowConfig, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "snake_case should be rejected by deny_unknown_fields + rename_all camelCase"
+        );
+    }
+
+    #[test]
+    fn deserialize_json_public_packages_empty() {
+        let config: FallowConfig = serde_json::from_str("{}").unwrap();
+        assert!(config.public_packages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_toml_public_packages() {
+        let toml_str = r#"
+publicPackages = ["@myorg/shared-lib", "@myorg/ui"]
+"#;
+        let config: FallowConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.public_packages,
+            vec!["@myorg/shared-lib", "@myorg/ui"]
+        );
+    }
+
+    #[test]
+    fn public_packages_serialize_roundtrip() {
+        let config = FallowConfig {
+            public_packages: vec!["@myorg/shared-lib".to_string()],
+            ..FallowConfig::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: FallowConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.public_packages, vec!["@myorg/shared-lib"]);
     }
 }

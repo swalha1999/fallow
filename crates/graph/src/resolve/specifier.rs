@@ -61,6 +61,28 @@ pub(super) fn resolve_specifier(
         return ResolveResult::ExternalFile(PathBuf::from(specifier));
     }
 
+    // In HTML files, root-relative paths (`/src/main.tsx`) are a web convention meaning
+    // "relative to the project root". Vite, Parcel, and other dev servers resolve them
+    // this way. Use `resolve(directory, specifier)` with the project root as the base
+    // directory, so resolution works regardless of where the HTML file lives (e.g.,
+    // `public/index.html` referencing `/src/main.tsx`).
+    // Scoped to HTML files only — in JS/TS, `/foo` is an absolute filesystem path.
+    if specifier.starts_with('/') && from_file.extension().is_some_and(|e| e == "html") {
+        let relative = format!(".{specifier}");
+        if let Ok(resolved) = ctx.resolver.resolve(ctx.root, &relative) {
+            let resolved_path = resolved.path();
+            if let Some(&file_id) = ctx.raw_path_to_id.get(resolved_path) {
+                return ResolveResult::InternalModule(file_id);
+            }
+            if let Ok(canonical) = dunce::canonicalize(resolved_path)
+                && let Some(&file_id) = ctx.path_to_id.get(canonical.as_path())
+            {
+                return ResolveResult::InternalModule(file_id);
+            }
+        }
+        return ResolveResult::Unresolvable(specifier.to_string());
+    }
+
     // Bare specifier classification (used for fallback logic below).
     let is_bare = is_bare_specifier(specifier);
     let is_alias = is_path_alias(specifier);

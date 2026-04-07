@@ -16,7 +16,7 @@ Non-obvious implementation details for each detection feature. These are NOT dis
 - **Namespace destructuring**: `const { a, b } = ns` → member accesses. Rest patterns (`const { foo, ...rest } = ns`) → conservative whole-object use. Works with static/dynamic imports and require.
 - **Unused import bindings**: via `oxc_semantic` scope-aware symbol analysis. Dead imports don't count as references, improving unused-export precision.
 - **TypeScript overload dedup**: `export function foo(): void; export function foo(x: string): string;` treated as single export
-- **Class instance members**: `const svc = new MyService(); svc.greet()` tracks `greet` as used. Scope-unaware — false matches produce false negatives, not false positives.
+- **Class instance members**: `const svc = new MyService(); svc.greet()` and `this.service = new MyService(); this.service.doWork()` track the method as used. Chained `this.field` access uses synthetic `"this.field"` keys in `instance_binding_names`. Scope-unaware — false matches produce false negatives, not false positives.
 - **Type-level member access**: `TSQualifiedName` (e.g., `type X = Status.Active`) tracked as member access. Mapped type constraints (`{ [K in Enum]: ... }`, `{ [K in keyof typeof Enum]: ... }`) and `Record<Enum, T>` mark all enum members as used via whole-object use.
 - **TypeScript namespace exports**: `export namespace Foo { export function bar() {} }` extracts `Foo` as a single export with inner declarations as `NamespaceMember` entries, not as separate top-level exports. Runtime namespaces (no `declare`) are NOT type-only. `declare namespace`/`declare module` remain type-only. Nested namespaces flatten members into the outermost namespace.
 

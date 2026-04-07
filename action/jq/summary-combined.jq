@@ -1,9 +1,14 @@
 def count(obj; key): obj | if . then .[key] // 0 else 0 end;
 def pct(n): n | . * 10 | round / 10;
+def signed(n): if n > 0 then "+\(pct(n))" elif n < 0 then "\(pct(n))" else "0" end;
 def rel_path: split("/") | if length > 3 then .[-3:] | join("/") else join("/") end;
-def docs(anchor): "https://docs.fallow.tools/explanations/dead-code#" + anchor;
+def dead_code_docs: "https://docs.fallow.tools/explanations/dead-code";
+def docs(anchor): dead_code_docs + "#" + anchor;
 def health_docs: "https://docs.fallow.tools/explanations/health";
 def dupes_docs: "https://docs.fallow.tools/explanations/duplication";
+def suppression_docs: "https://docs.fallow.tools/configuration/suppression";
+def metric_delta(name):
+  (.health.health_trend.metrics // []) | map(select(.name == name)) | first // null;
 
 (count(.check; "total_issues")) as $check |
 (count(.dupes.stats; "clone_groups")) as $dupes |
@@ -13,13 +18,32 @@ def dupes_docs: "https://docs.fallow.tools/explanations/duplication";
 (.health.summary // {}) as $summary |
 (.dupes.stats // {}) as $dupes_stats |
 
+# Health delta header (only when --score is present)
+(if .health.health_score then
+  (metric_delta("score")) as $score_delta |
+  (metric_delta("dead_export_pct")) as $dead_delta |
+  (metric_delta("avg_cyclomatic")) as $cx_delta |
+  "> **Health: \(.health.health_score.grade) (\(pct(.health.health_score.score)))**" +
+  (if $score_delta then
+    " \u00b7 \(signed($score_delta.delta)) pts vs previous (\(.health.health_trend.compared_to.grade) \(pct(.health.health_trend.compared_to.score)))" +
+    (if $dead_delta and $dead_delta.delta != 0 then
+      " \u00b7 dead exports \(pct($dead_delta.current))% (\(signed($dead_delta.delta))%)" +
+      (if $dead_delta.delta > 0 then " [suppress?](\(suppression_docs))" else "" end)
+    else "" end) +
+    (if $cx_delta and $cx_delta.delta != 0 then
+      " \u00b7 complexity \(pct($cx_delta.current)) (\(signed($cx_delta.delta)))"
+    else "" end)
+  else "" end) +
+  "\n\n"
+else "" end) +
+
 if $total == 0 then
   "# \ud83c\udf3f Fallow\n\n" +
   "> [!NOTE]\n> **No issues found**\n\n" +
   ":white_check_mark: No code issues \u00b7 :white_check_mark: No duplication \u00b7 :white_check_mark: No complex functions" +
   (if $vitals.maintainability_avg then
     "\n\n| Metric | Value |\n|:-------|------:|\n" +
-    "| [Maintainability](\(health_docs)) | **\(pct($vitals.maintainability_avg))** / 100 |\n"
+    "| [Maintainability](\(health_docs)#maintainability-index-mi) | **\(pct($vitals.maintainability_avg))** / 100 |\n"
   else "" end)
 else
   "# \ud83c\udf3f Fallow\n\n" +
@@ -39,7 +63,7 @@ else
 
   # Code issues breakdown
   (if $check > 0 then
-    "<details>\n<summary><strong>Code issues (\($check))</strong></summary>\n\n" +
+    "<details>\n<summary><strong><a href=\"\(dead_code_docs)\">Code issues</a> (\($check))</strong></summary>\n\n" +
     "| Category | Count |\n|:---------|------:|\n" +
     ([
       (if (.check.unused_files | length) > 0 then "| [Unused files](\(docs("unused-files"))) | \(.check.unused_files | length) |" else null end),
@@ -65,16 +89,16 @@ else
   (if $dupes > 0 then
     "<details>\n<summary><strong><a href=\"\(dupes_docs)\">Duplication</a> (\($dupes) clone groups, \(pct($dupes_stats.duplication_percentage))%)</strong></summary>\n\n" +
     "| Metric | Value |\n|:-------|------:|\n" +
-    "| Duplicated lines | \($dupes_stats.duplicated_lines) |\n" +
-    "| Clone instances | \($dupes_stats.clone_instances) |\n" +
+    "| [Duplicated lines](\(dupes_docs)#duplication-percentage) | \($dupes_stats.duplicated_lines) |\n" +
+    "| [Clone instances](\(dupes_docs)#instance-count) | \($dupes_stats.clone_instances) |\n" +
     "| Files with clones | \($dupes_stats.files_with_clones) |\n" +
     "\n</details>\n\n"
   else "" end) +
 
   # Complexity breakdown
   (if $health > 0 then
-    "<details>\n<summary><strong>Complexity (\($health) functions above threshold)</strong></summary>\n\n" +
-    "| File | Function | Cyclomatic | Cognitive |\n|:-----|:---------|----------:|---------:|\n" +
+    "<details>\n<summary><strong><a href=\"\(health_docs)#complexity-metrics\">Complexity</a> (\($health) functions above threshold)</strong></summary>\n\n" +
+    "| File | Function | [Cyclomatic](\(health_docs)#cyclomatic-complexity) | [Cognitive](\(health_docs)#cognitive-complexity) |\n|:-----|:---------|----------:|---------:|\n" +
     ([.health.findings[:5][] |
       "| `\(.path | rel_path):\(.line)` | `\(.name)` | \(.cyclomatic) | \(.cognitive) |"
     ] | join("\n")) +
@@ -85,13 +109,13 @@ else
   (if $vitals | length > 0 then
     # Compute scoped maintainability from filtered file_scores (differs from codebase avg when --changed-since is active)
     ((.health.file_scores // []) | if length > 0 then (map(.maintainability_index) | add / length | . * 10 | round / 10) else null end) as $scoped_maint |
-    "#### Codebase health\n\n" +
+    "#### [Codebase health](\(health_docs))\n\n" +
     "| Metric | Value |\n|:-------|------:|\n" +
-    (if $vitals.maintainability_avg then "| [Maintainability](\(health_docs)) | **\(pct($vitals.maintainability_avg))** / 100 |\n" else "" end) +
+    (if $vitals.maintainability_avg then "| [Maintainability](\(health_docs)#maintainability-index-mi) | **\(pct($vitals.maintainability_avg))** / 100 |\n" else "" end) +
     (if $scoped_maint != null and $scoped_maint != pct($vitals.maintainability_avg // 0) then
-      "| [Maintainability](\(health_docs)) (changed files) | **\($scoped_maint)** / 100 |\n"
+      "| [Maintainability](\(health_docs)#maintainability-index-mi) (changed files) | **\($scoped_maint)** / 100 |\n"
     else "" end) +
-    (if $vitals.avg_cyclomatic then "| Avg complexity | \(pct($vitals.avg_cyclomatic)) |\n" else "" end) +
+    (if $vitals.avg_cyclomatic then "| [Avg complexity](\(health_docs)#cyclomatic-complexity) | \(pct($vitals.avg_cyclomatic)) |\n" else "" end) +
     "\n"
   else "" end) +
 

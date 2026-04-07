@@ -37,6 +37,7 @@ jobs:
           filters: |
             rust:
               - 'crates/**'
+              - 'tests/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'deny.toml'

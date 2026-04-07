@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.1] - 2026-04-07
+
+### Changed
+
+- **Cache serialization switched to bitcode** -- replaced bincode with bitcode for incremental cache serialization, yielding smaller cache files and faster round-trips.
+- **Supply chain hardening** -- added OpenSSF Scorecard workflow, zizmor static analysis for GitHub Actions, Dependabot auto-merge for patch/minor dependency bumps, and pinned all CI action SHAs.
+- **Miri moved into CI workflow** -- consolidated the standalone Miri workflow into the main CI pipeline for simpler maintenance.
+
+### Fixed
+
+- **Chained member access through class field assignments** -- `this.field.method()` chains where `this.field` is assigned a class instance are now correctly resolved, preventing false positive unused-export reports on the assigned class's methods. ([#63](https://github.com/fallow-rs/fallow/pull/63))
+- **Workspace symlink setup idempotent** -- test workspace symlink creation no longer fails when the symlink already exists.
+
 ## [2.18.0] - 2026-04-07
 
 ### Added
@@ -961,7 +974,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.18.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.18.1...HEAD
+[2.18.1]: https://github.com/fallow-rs/fallow/compare/v2.18.0...v2.18.1
 [2.18.0]: https://github.com/fallow-rs/fallow/compare/v2.17.1...v2.18.0
 [2.17.1]: https://github.com/fallow-rs/fallow/compare/v2.17.0...v2.17.1
 [2.17.0]: https://github.com/fallow-rs/fallow/compare/v2.16.0...v2.17.0

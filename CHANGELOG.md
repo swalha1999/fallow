@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.1] - 2026-04-07
+
+### Added
+
+- **GitHub Action `score` input** -- new `score: true` input enables the `--score` flag on the health command, adding a health delta header to PR summaries showing grade, score change, dead export drift, and complexity trends.
+- **Health delta header in CI summaries** -- when `--score` is used, both GitHub Action and GitLab CI summaries display a one-line health score comparison against the previous snapshot.
+
+### Fixed
+
+- **Summary section links** -- all section headers (Code issues, Duplication, Complexity, Codebase health) and table metrics now link to their respective docs pages. Fixes broken markdown link in the Duplication `<summary>` tag.
+
 ## [2.17.0] - 2026-04-07
 
 ### Added
@@ -934,7 +945,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.17.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.17.1...HEAD
+[2.17.1]: https://github.com/fallow-rs/fallow/compare/v2.17.0...v2.17.1
 [2.17.0]: https://github.com/fallow-rs/fallow/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/fallow-rs/fallow/compare/v2.15.0...v2.16.0
 [2.15.0]: https://github.com/fallow-rs/fallow/compare/v2.14.2...v2.15.0
